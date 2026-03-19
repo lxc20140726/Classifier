@@ -1,31 +1,31 @@
-# Emby Thumbnail Specifications
+# Emby 缩略图规范
 
-## Naming Conventions
+## 命名约定
 
-- Primary thumb: `{name}-thumb.jpg`
-- Landscape image: `landscape.jpg`
-- Backdrop image: `backdrop.jpg`
+- 主缩略图：`{name}-thumb.jpg`
+- 横向图像：`landscape.jpg`
+- 背景图像：`backdrop.jpg`
 
-## Formats
+## 格式
 
-- Preferred format: `JPEG`
-- Use `PNG` only for assets that require transparency.
+- 首选格式：`JPEG`
+- 仅对需要透明度的资源使用 `PNG`。
 
-## Recommended Dimensions
+## 推荐尺寸
 
-- Thumb: `16:9`, commonly `1280x720`
-- Backdrop: `1920x1080`
+- 缩略图：`16:9`，通常为 `1280x720`
+- 背景：`1920x1080`
 
-## FFmpeg Example
+## FFmpeg 示例
 
 ```bash
 ffmpeg -i input.mp4 -ss 00:00:10 -frames:v 1 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" output-thumb.jpg
 ```
 
-This example extracts a frame at 10 seconds and normalizes it to a 16:9 thumbnail size suitable for Emby-style media artwork.
+此示例在 10 秒处提取一帧，并将其标准化为适合 Emby 风格媒体封面的 16:9 缩略图尺寸。
 
-## Folder Structure Guidance
+## 文件夹结构指南
 
-- Movies: one movie per folder.
-- TV series: organize by show, then by season subfolders.
-- Keep artwork files next to the media files whenever possible so Emby can detect them automatically.
+- 电影：每部电影一个文件夹。
+- 电视剧：按剧集组织，然后按季划分子文件夹。
+- 尽可能将封面文件与媒体文件放在一起，以便 Emby 可以自动检测它们。
