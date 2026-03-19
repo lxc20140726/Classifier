@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 42 33% 97%;
+    --foreground: 220 28% 12%;
+    --border: 28 16% 86%;
+    --primary: 198 55% 22%;
+    --primary-foreground: 42 33% 98%;
+    --muted: 36 26% 92%;
+    --muted-foreground: 215 14% 42%;
+    --accent: 28 65% 92%;
+    --accent-foreground: 220 28% 12%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply m-0 bg-background text-foreground antialiased;
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+}

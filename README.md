@@ -35,6 +35,7 @@ Classifier is a web-based media folder organizer designed for NAS Docker deploym
 
 ### Deployment
 - [Docker Deployment Guide](docs/DEPLOYMENT.md)
+- [极空间 Deployment Guide](docs/ZSPACE_DEPLOYMENT.md)
 
 ### Planning
 - [Development Roadmap](docs/ROADMAP.md)
