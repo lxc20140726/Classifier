@@ -843,3 +843,494 @@ MEMORY_LIMIT=1G
 | 压缩 | archive/zip | zstd, 7z | 标准库，兼容性最好 |
 | 视频处理 | FFmpeg exec | ffmpeg-go | 无 CGO 依赖，更易 Docker 化 |
 | 组件库 | shadcn/ui | Ant Design, MUI | 无运行时，构建产物小 |
+
+---
+
+## 10. 可视化工作流系统设计
+
+### 10.1 核心概念
+
+每种文件夹分类（photo/video/mixed/manga）对应一个独立的**工作流管道**，由有序的处理步骤组成。用户可通过拖拽界面自由增删、排序步骤。
+
+```
+工作流 = 分类触发器 + 有序步骤列表
+
+示例：photo 工作流
+  Step 1: 重命名（规则 A）
+  Step 2: 压缩为 ZIP
+  Step 3: 移动到 /data/target/photos
+
+示例：video 工作流
+  Step 1: 生成 Emby 缩略图
+  Step 2: 重命名（规则 B）
+  Step 3: 移动到 /data/target/videos
+```
+
+### 10.2 数据模型
+
+```go
+// 工作流定义
+type Workflow struct {
+    ID        string         `json:"id" db:"id"`
+    Category  Category       `json:"category" db:"category"` // photo|video|mixed|manga|custom
+    Name      string         `json:"name" db:"name"`
+    Steps     []WorkflowStep `json:"steps" db:"-"`           // 从 workflow_steps 表 JOIN
+    CreatedAt time.Time      `json:"created_at" db:"created_at"`
+    UpdatedAt time.Time      `json:"updated_at" db:"updated_at"`
+}
+
+// 工作流步骤
+type WorkflowStep struct {
+    ID         string          `json:"id" db:"id"`
+    WorkflowID string          `json:"workflow_id" db:"workflow_id"`
+    Order      int             `json:"order" db:"order"`
+    StepType   WorkflowStepType `json:"step_type" db:"step_type"`
+    Config     json.RawMessage `json:"config" db:"config"` // 步骤专属参数 JSON
+    Enabled    bool            `json:"enabled" db:"enabled"`
+}
+
+type WorkflowStepType string
+const (
+    StepRename    WorkflowStepType = "rename"
+    StepCompress  WorkflowStepType = "compress"
+    StepThumbnail WorkflowStepType = "thumbnail"
+    StepMove      WorkflowStepType = "move"
+    StepWait      WorkflowStepType = "wait"   // 暂停等待用户确认
+)
+
+// 各步骤 Config 结构示例
+type RenameStepConfig struct {
+    RuleID string `json:"rule_id"`
+}
+type CompressStepConfig struct {
+    OutputDir   string `json:"output_dir"`   // 留空=原地
+    DeleteAfter bool   `json:"delete_after"` // 压缩后删除源文件
+}
+type MoveStepConfig struct {
+    TargetDir string `json:"target_dir"` // 留空=全局配置
+}
+type ThumbnailStepConfig struct {
+    SeekOffset string `json:"seek_offset"` // 默认 "00:10:00"
+    Overwrite  bool   `json:"overwrite"`
+}
+```
+
+### 10.3 SQLite Schema
+
+```sql
+CREATE TABLE workflows (
+    id         TEXT PRIMARY KEY,
+    category   TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE workflow_steps (
+    id          TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+    "order"     INTEGER NOT NULL,
+    step_type   TEXT NOT NULL,
+    config      TEXT NOT NULL DEFAULT '{}',
+    enabled     INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX idx_workflow_steps_workflow_id ON workflow_steps(workflow_id, "order");
+```
+
+### 10.4 API 设计
+
+```
+GET    /api/workflows                     # 所有工作流列表
+GET    /api/workflows/:id                 # 单个工作流（含 steps）
+POST   /api/workflows                     # 创建工作流
+PUT    /api/workflows/:id                 # 更新工作流（含 steps 全量替换）
+DELETE /api/workflows/:id                 # 删除工作流
+
+POST   /api/jobs/run-workflow             # 对指定 folder_ids 运行工作流
+```
+
+### 10.5 前端组件设计
+
+```
+RulesPage（/rules 路由扩展为 /workflows）
+├── WorkflowList                    # 左侧：按分类列出工作流卡片
+│   └── WorkflowCard（category badge + step count + 编辑按钮）
+│
+└── WorkflowEditor（右侧面板）
+    ├── CategorySelector            # 关联分类（photo/video/mixed/manga）
+    ├── StepList                    # 拖拽排序（dnd-kit）
+    │   └── StepCard
+    │       ├── StepTypeIcon
+    │       ├── StepConfigSummary   # 一行摘要："重命名: {规则名}"
+    │       ├── EnableToggle
+    │       └── ConfigExpandPanel   # 展开详细配置
+    ├── AddStepButton               # 下拉选择步骤类型
+    └── SaveButton
+```
+
+**拖拽排序**：使用 `@dnd-kit/core` + `@dnd-kit/sortable`，无需额外依赖。
+
+---
+
+## 11. 可回退操作（Undo / Snapshot）设计
+
+### 11.1 设计原则
+
+- **操作前快照**：所有破坏性操作（重命名、移动、删除）执行前，记录原始状态
+- **快照粒度**：以单个文件夹为单位，记录操作前的文件列表和路径
+- **回退范围**：支持回退到任意历史操作节点
+- **不可回退操作**：压缩（ZIP 生成是追加操作，原文件不变，无需回退）
+
+### 11.2 Snapshot 数据模型
+
+```go
+type SnapshotStatus string
+const (
+    SnapshotPending   SnapshotStatus = "pending"   // 操作进行中
+    SnapshotCommitted SnapshotStatus = "committed" // 操作完成，可回退
+    SnapshotReverted  SnapshotStatus = "reverted"  // 已回退
+)
+
+type Snapshot struct {
+    ID          string         `json:"id" db:"id"`
+    JobID       string         `json:"job_id" db:"job_id"`
+    FolderID    string         `json:"folder_id" db:"folder_id"`
+    OperationType string       `json:"operation_type" db:"operation_type"` // rename|move
+    Before      json.RawMessage `json:"before" db:"before"` // 操作前文件路径列表
+    After       json.RawMessage `json:"after" db:"after"`   // 操作后文件路径列表
+    Status      SnapshotStatus `json:"status" db:"status"`
+    CreatedAt   time.Time      `json:"created_at" db:"created_at"`
+}
+
+// Before / After 结构
+type FileSnapshot struct {
+    Files []FileRecord `json:"files"`
+}
+
+type FileRecord struct {
+    OriginalPath string `json:"original_path"`
+    CurrentPath  string `json:"current_path"`
+}
+```
+
+### 11.3 SQLite Schema
+
+```sql
+CREATE TABLE snapshots (
+    id             TEXT PRIMARY KEY,
+    job_id         TEXT NOT NULL,
+    folder_id      TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    before         TEXT NOT NULL, -- JSON
+    after          TEXT,          -- NULL 直到操作完成
+    status         TEXT NOT NULL DEFAULT 'pending',
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_snapshots_job_id ON snapshots(job_id);
+CREATE INDEX idx_snapshots_folder_id ON snapshots(folder_id);
+```
+
+### 11.4 回退流程
+
+```
+用户触发 Revert(snapshot_id)
+  ├── 查询 snapshot.after（当前路径列表）
+  ├── 对每个文件：os.Rename(current_path, original_path)
+  ├── 全部成功 → 更新 snapshot.status = "reverted"
+  │            → 更新 folder 记录恢复原始状态
+  └── 任意失败 → 回滚已重命名的文件，返回错误
+```
+
+### 11.5 API 设计
+
+```
+GET    /api/snapshots?folder_id=&job_id=   # 查询快照列表
+GET    /api/snapshots/:id                  # 快照详情（before/after diff）
+POST   /api/snapshots/:id/revert           # 执行回退
+```
+
+### 11.6 前端设计
+
+- **JobsPage** 每个已完成任务旁显示「撤销」按钮（仅 rename/move 类型）
+- 点击撤销 → 弹出确认 Dialog，展示 before/after 文件路径对比
+- 确认后调用 `/api/snapshots/:id/revert`，实时显示回退进度
+- 已撤销的任务显示「已撤销」badge，不可重复撤销
+
+---
+
+## 12. 审计日志系统设计
+
+### 12.1 设计原则
+
+- **全量记录**：所有文件操作（分类、重命名、压缩、移动）均写入日志
+- **不可篡改**：日志只追加，不修改，不删除
+- **结构化存储**：JSON 格式，方便查询和导出
+- **轻量实现**：写入 SQLite，同时可导出为 CSV/JSON 文件
+
+### 12.2 日志数据模型
+
+```go
+type AuditLevel string
+const (
+    AuditInfo  AuditLevel = "info"
+    AuditWarn  AuditLevel = "warn"
+    AuditError AuditLevel = "error"
+)
+
+type AuditAction string
+const (
+    ActionScan      AuditAction = "scan"      // 扫描目录
+    ActionClassify  AuditAction = "classify"  // 分类文件夹
+    ActionRename    AuditAction = "rename"    // 重命名文件
+    ActionCompress  AuditAction = "compress"  // 压缩为 ZIP
+    ActionThumbnail AuditAction = "thumbnail" // 生成缩略图
+    ActionMove      AuditAction = "move"      // 移动文件夹
+    ActionRevert    AuditAction = "revert"    // 回退操作
+)
+
+type AuditLog struct {
+    ID         string          `json:"id" db:"id"`
+    JobID      string          `json:"job_id" db:"job_id"`
+    FolderID   string          `json:"folder_id" db:"folder_id"`
+    FolderPath string          `json:"folder_path" db:"folder_path"`
+    Action     AuditAction     `json:"action" db:"action"`
+    Level      AuditLevel      `json:"level" db:"level"`
+    Detail     json.RawMessage `json:"detail" db:"detail"` // 操作具体参数
+    Result     string          `json:"result" db:"result"` // success|failure
+    Error      string          `json:"error,omitempty" db:"error"`
+    DurationMs int64           `json:"duration_ms" db:"duration_ms"`
+    CreatedAt  time.Time       `json:"created_at" db:"created_at"`
+}
+
+// Detail 示例（rename）
+type RenameDetail struct {
+    RuleID   string            `json:"rule_id"`
+    RuleName string            `json:"rule_name"`
+    Files    []RenameFileLog   `json:"files"`
+}
+type RenameFileLog struct {
+    From string `json:"from"`
+    To   string `json:"to"`
+}
+
+// Detail 示例（move）
+type MoveDetail struct {
+    From string `json:"from"`
+    To   string `json:"to"`
+}
+
+// Detail 示例（compress）
+type CompressDetail struct {
+    OutputFile   string `json:"output_file"`
+    FilesCount   int    `json:"files_count"`
+    OriginalSize int64  `json:"original_size_bytes"`
+    ZipSize      int64  `json:"zip_size_bytes"`
+}
+```
+
+### 12.3 SQLite Schema
+
+```sql
+CREATE TABLE audit_logs (
+    id          TEXT PRIMARY KEY,
+    job_id      TEXT,
+    folder_id   TEXT,
+    folder_path TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    level       TEXT NOT NULL DEFAULT 'info',
+    detail      TEXT,          -- JSON
+    result      TEXT NOT NULL, -- success|failure
+    error       TEXT,
+    duration_ms INTEGER,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_audit_logs_folder_id ON audit_logs(folder_id);
+CREATE INDEX idx_audit_logs_action    ON audit_logs(action);
+CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
+```
+
+### 12.4 日志写入时机
+
+| 操作 | 写入时机 | 记录内容 |
+|------|----------|----------|
+| 扫描 | 完成后 | 扫描目录、发现文件夹数量 |
+| 分类 | 每个文件夹分类后 | 分类结果、依据（auto/manual） |
+| 重命名 | 每个文件操作后 | from/to 路径、使用的规则 |
+| 压缩 | 完成后 | 输出文件、原始大小、压缩大小 |
+| 缩略图 | 每个视频完成后 | 输出路径、耗时 |
+| 移动 | 每个文件夹完成后 | from/to 路径 |
+| 回退 | 完成后 | 关联的原始操作 snapshot_id |
+
+### 12.5 API 设计
+
+```
+GET  /api/logs?action=&result=&folder_id=&from=&to=&page=&limit=  # 查询日志
+GET  /api/logs/:id                                                 # 单条详情
+GET  /api/logs/export?format=json|csv&from=&to=                   # 导出日志
+```
+
+### 12.6 前端设计
+
+- **专属日志页面**（路由 `/logs`）：
+  - 表格展示：时间、操作类型、文件夹路径、结果、耗时
+  - 筛选：操作类型、结果（成功/失败）、时间范围
+  - 点击展开 Detail 面板，展示完整操作信息
+  - 导出按钮：下载 JSON 或 CSV 文件
+- **错误日志高亮**：level=error 行红色标注
+- **关联跳转**：点击文件夹路径跳转到 FolderListPage 对应文件夹
+
+---
+
+## 13. 可视化重命名规则编辑器
+
+### 13.1 设计原则
+
+**目标用户**：不懂正则表达式的普通用户也能快速上手。
+
+- **无正则**：所有规则通过变量插槽（Token）组合，无需手写正则
+- **所见即所得**：实时预览重命名结果
+- **预设模板**：内置常用命名脚本，一键套用
+- **安全预览**：执行前必须预览，避免误操作
+
+### 13.2 Token（变量）体系
+
+```go
+// 可插入的变量 Token
+type Token struct {
+    Key         string `json:"key"`          // 变量标识，如 {index}
+    Label       string `json:"label"`         // 中文显示名，如 "序号"
+    Description string `json:"description"`  // 说明，如 "从1开始的递增序号"
+    Example     string `json:"example"`       // 示例输出，如 "001"
+    Config      map[string]any `json:"config"` // 可选配置项
+}
+
+// 内置 Token 列表
+var BuiltinTokens = []Token{
+    {Key: "{index}",      Label: "序号",     Description: "从起始值递增的序号",    Example: "001", Config: {"start": 1, "padding": 3}},
+    {Key: "{filename}",   Label: "原文件名",  Description: "文件的原始名称（不含扩展名）", Example: "IMG_1234"},
+    {Key: "{ext}",        Label: "扩展名",   Description: "文件扩展名（含点）",     Example: ".jpg"},
+    {Key: "{foldername}", Label: "文件夹名",  Description: "所在文件夹的名称",      Example: "MyAlbum"},
+    {Key: "{date}",       Label: "日期",     Description: "文件修改日期",          Example: "20240315", Config: {"format": "YYYYMMDD"}},
+    {Key: "{year}",       Label: "年份",     Description: "文件修改年份",          Example: "2024"},
+    {Key: "{month}",      Label: "月份",     Description: "文件修改月份",          Example: "03"},
+    {Key: "{day}",        Label: "日",       Description: "文件修改日",            Example: "15"},
+    {Key: "{random}",     Label: "随机码",   Description: "随机字母数字串",        Example: "a3f9", Config: {"length": 4}},
+}
+```
+
+### 13.3 规则数据模型
+
+```go
+type RenameRule struct {
+    ID          string          `json:"id" db:"id"`
+    Name        string          `json:"name" db:"name"`
+    Description string          `json:"description" db:"description"`
+    IsPreset    bool            `json:"is_preset" db:"is_preset"`     // 内置预设不可删除
+    Template    string          `json:"template" db:"template"`       // 如 "{foldername}_{index}{ext}"
+    Config      json.RawMessage `json:"config" db:"config"`           // Token 配置参数
+    ScopeType   string          `json:"scope_type" db:"scope_type"`   // files|folder
+    CreatedAt   time.Time       `json:"created_at" db:"created_at"`
+}
+```
+
+### 13.4 内置预设脚本
+
+| 预设名称 | 模板 | 适用场景 |
+|----------|------|----------|
+| 序号重命名 | `{index}{ext}` | 批量序号化 |
+| 文件夹名+序号 | `{foldername}_{index}{ext}` | 写真集 |
+| 日期+序号 | `{date}_{index}{ext}` | 按日期归档 |
+| 保留原名+序号 | `{filename}_{index}{ext}` | 防重名 |
+| 文件夹名（整个文件夹重命名）| `{foldername}` | 文件夹本身重命名 |
+
+### 13.5 前端编辑器 UI 设计
+
+```
+┌─────────────────────────────────────────────────────┐
+│ 规则名称: [写真集默认命名            ]               │
+│                                                     │
+│ 命名模板:                                           │
+│ ┌─────────────────────────────────────────────┐    │
+│ │ [文件夹名] _ [序号] [扩展名]  + 添加变量 ▼  │    │
+│ └─────────────────────────────────────────────┘    │
+│   (Token 以 Badge 形式展示，可拖拽排序，可删除)      │
+│                                                     │
+│ 变量配置:                                           │
+│   序号起始值: [1    ]  补零位数: [3  ]              │
+│                                                     │
+│ 实时预览:                                           │
+│ ┌─────────────────────────────────────────────┐    │
+│ │ IMG_001.jpg  →  MyAlbum_001.jpg             │    │
+│ │ IMG_002.jpg  →  MyAlbum_002.jpg             │    │
+│ │ IMG_003.jpg  →  MyAlbum_003.jpg             │    │
+│ └─────────────────────────────────────────────┘    │
+│                                              保存   │
+└─────────────────────────────────────────────────────┘
+```
+
+### 13.6 后端渲染逻辑
+
+```go
+// 渲染模板，将 Token 替换为实际值
+func RenderTemplate(template string, ctx RenameContext) string {
+    result := template
+    result = strings.ReplaceAll(result, "{filename}",   ctx.OriginalName)
+    result = strings.ReplaceAll(result, "{ext}",        ctx.Ext)
+    result = strings.ReplaceAll(result, "{foldername}", ctx.FolderName)
+    result = strings.ReplaceAll(result, "{date}",       ctx.ModTime.Format("20060102"))
+    result = strings.ReplaceAll(result, "{year}",       ctx.ModTime.Format("2006"))
+    result = strings.ReplaceAll(result, "{month}",      ctx.ModTime.Format("01"))
+    result = strings.ReplaceAll(result, "{day}",        ctx.ModTime.Format("02"))
+    index := fmt.Sprintf("%0*d", ctx.Config.Padding, ctx.Index+ctx.Config.Start)
+    result = strings.ReplaceAll(result, "{index}", index)
+    return result
+}
+
+type RenameContext struct {
+    OriginalName string
+    Ext          string
+    FolderName   string
+    ModTime      time.Time
+    Index        int
+    Config       RenameConfig
+}
+
+type RenameConfig struct {
+    Start   int `json:"start"`    // 序号起始值，默认 1
+    Padding int `json:"padding"`  // 序号补零位数，默认 3
+}
+```
+
+### 13.7 预览 API
+
+```
+POST /api/rules/preview
+{
+    "rule_id": "xxx",
+    "folder_id": "yyy"   // 用真实文件列表生成预览
+}
+
+响应:
+{
+    "previews": [
+        {"from": "IMG_001.jpg", "to": "MyAlbum_001.jpg"},
+        {"from": "IMG_002.jpg", "to": "MyAlbum_002.jpg"}
+    ],
+    "conflicts": []  // 检测命名冲突
+}
+```
+
+---
+
+## 附录（补充）：新增技术决策
+
+| 决策 | 选择 | 放弃 | 理由 |
+|------|------|------|------|
+| 工作流引擎 | 自研简单步骤链 | Temporal, Airflow | 轻量场景，无需分布式调度 |
+| 回退机制 | Snapshot 表记录原始路径/内容 | 文件副本备份 | 省磁盘空间，rename/move 只需记录路径 |
+| 审计日志 | SQLite append-only 表 | 文件日志 | 可查询、可导出、随容器持久化 |
+| 重命名 UX | Token 变量组合（无正则）| 正则表达式 | 面向普通用户，降低学习门槛 |
+| 工作流存储 | SQLite JSON 字段 | 独立 workflow 服务 | 单机场景够用，无需额外服务 |
