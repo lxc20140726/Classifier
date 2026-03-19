@@ -88,37 +88,59 @@
 
 ```
 # Folder 管理
-GET    /api/folders                    # 列表（?status=&category=&page=&limit=）
-POST   /api/folders/scan               # 触发扫描 /data/source
-GET    /api/folders/:id                # 单个详情
-PATCH  /api/folders/:id/category       # 手动修正分类
-PATCH  /api/folders/:id/status         # 标记状态（pending/done/skip）
-DELETE /api/folders/:id                # 从 DB 移除记录（不删文件）
+GET    /api/folders                        # 列表（?status=&category=&page=&limit=）
+POST   /api/folders/scan                   # 触发扫描 /data/source
+GET    /api/folders/:id                    # 单个详情
+PATCH  /api/folders/:id/category           # 手动修正分类
+PATCH  /api/folders/:id/status             # 标记状态（pending/done/skip）
+DELETE /api/folders/:id                    # 从 DB 移除记录（不删文件）
 
 # 批量操作（提交 Job）
-POST   /api/jobs/rename                # 批量重命名
-POST   /api/jobs/compress              # 批量压缩
-POST   /api/jobs/thumbnail             # 批量生成缩略图
-POST   /api/jobs/move                  # 批量移动
+POST   /api/jobs/rename                    # 批量重命名
+POST   /api/jobs/compress                  # 批量压缩
+POST   /api/jobs/thumbnail                 # 批量生成缩略图
+POST   /api/jobs/move                      # 批量移动
+POST   /api/jobs/run-workflow              # 运行工作流（指定 folder_ids + workflow_id）
 
 # Job 管理
-GET    /api/jobs                       # 任务列表（?status=running|done|failed）
-GET    /api/jobs/:id                   # 任务详情
-DELETE /api/jobs/:id                   # 取消/删除任务
+GET    /api/jobs                           # 任务列表（?status=running|done|failed）
+GET    /api/jobs/:id                       # 任务详情
+DELETE /api/jobs/:id                       # 取消/删除任务
 
 # 重命名规则
-GET    /api/rename-rules               # 规则列表
-POST   /api/rename-rules               # 创建规则
-PUT    /api/rename-rules/:id           # 更新规则
-DELETE /api/rename-rules/:id           # 删除规则
-POST   /api/rename-rules/:id/preview   # 预览重命名结果
+GET    /api/rename-rules                   # 规则列表
+POST   /api/rename-rules                   # 创建规则
+PUT    /api/rename-rules/:id               # 更新规则
+DELETE /api/rename-rules/:id               # 删除规则
+POST   /api/rules/preview                  # 预览重命名结果（rule_id + folder_id）
+GET    /api/rename-rules/tokens            # 获取可用 Token 列表
+
+# 工作流
+GET    /api/workflows                      # 所有工作流列表
+GET    /api/workflows/:id                  # 单个工作流（含 steps）
+POST   /api/workflows                      # 创建工作流
+PUT    /api/workflows/:id                  # 更新工作流（steps 全量替换）
+DELETE /api/workflows/:id                  # 删除工作流
+
+# 快照 / 回退
+GET    /api/snapshots                      # 快照列表（?folder_id=&job_id=）
+GET    /api/snapshots/:id                  # 快照详情（before/after diff）
+POST   /api/snapshots/:id/revert           # 执行回退操作
+
+# 审计日志
+GET    /api/logs                           # 日志列表（?action=&result=&folder_id=&from=&to=）
+GET    /api/logs/:id                       # 单条日志详情
+GET    /api/logs/export                    # 导出日志（?format=json|csv&from=&to=）
 
 # 配置
-GET    /api/config                     # 读取配置
-PUT    /api/config                     # 更新配置
+GET    /api/config                         # 读取配置
+PUT    /api/config                         # 更新配置
 
 # SSE
-GET    /api/events                     # SSE 事件流
+GET    /api/events                         # SSE 事件流
+
+# 健康检查
+GET    /health                             # 健康检查端点
 ```
 
 ### 3.2 SSE 事件格式
@@ -195,6 +217,8 @@ type PagedResponse[T any] struct {
 ```
 /           → FolderListPage    主页，文件夹列表+批量操作
 /jobs       → JobsPage          任务队列监控
+/workflows  → WorkflowsPage     可视化工作流配置 [NEW]
+/logs       → LogsPage          审计日志 [NEW]
 /rules      → RulesPage         重命名规则管理
 /settings   → SettingsPage      全局配置
 ```
@@ -564,7 +588,7 @@ classifier/
 │   │       └── main.go             # 入口：初始化 DB、路由、启动服务
 │   ├── internal/
 │   │   ├── api/
-│   │   │   ├── router.go           # Gin 路由注册
+│   │   │   ├── router.go           # Gin 路由注册（包含所有端点）
 │   │   │   ├── middleware/
 │   │   │   │   ├── cors.go
 │   │   │   │   └── logger.go
@@ -573,14 +597,20 @@ classifier/
 │   │   │       ├── job.go          # Job 提交/查询 handler
 │   │   │       ├── rule.go         # RenameRule handler
 │   │   │       ├── config.go       # Config handler
-│   │   │       └── events.go       # SSE handler
+│   │   │       ├── events.go       # SSE handler
+│   │   │       ├── workflow.go     # 工作流 CRUD + 执行 handler  [NEW]
+│   │   │       ├── snapshot.go     # Snapshot 查询 + 回退 handler  [NEW]
+│   │   │       └── auditlog.go     # 审计日志查询 + 导出 handler  [NEW]
 │   │   ├── service/
 │   │   │   ├── scanner.go          # 扫描目录，写入 Folder 记录
 │   │   │   ├── classifier.go       # 分类算法
-│   │   │   ├── renamer.go          # 重命名逻辑 + 模板解析
+│   │   │   ├── renamer.go          # 重命名逻辑 + Token 模板解析
 │   │   │   ├── compressor.go       # ZIP 压缩（archive/zip）
 │   │   │   ├── thumbnail.go        # FFmpeg 缩略图生成
-│   │   │   └── mover.go            # 文件夹移动
+│   │   │   ├── mover.go            # 文件夹移动
+│   │   │   ├── workflow.go         # 工作流执行引擎（按步骤调度各 service）  [NEW]
+│   │   │   ├── snapshot.go         # 操作前快照 + 回退逻辑  [NEW]
+│   │   │   └── auditlog.go         # 审计日志写入逻辑  [NEW]
 │   │   ├── worker/
 │   │   │   ├── pool.go             # 有界 goroutine 池（semaphore）
 │   │   │   └── scheduler.go        # Job 队列调度，分发到 pool
@@ -589,12 +619,18 @@ classifier/
 │   │   │   ├── folder.go           # Folder CRUD
 │   │   │   ├── job.go              # Job CRUD
 │   │   │   ├── rule.go             # RenameRule CRUD
-│   │   │   └── config.go           # Config KV 读写
+│   │   │   ├── config.go           # Config KV 读写
+│   │   │   ├── workflow.go         # Workflow CRUD  [NEW]
+│   │   │   ├── snapshot.go         # Snapshot CRUD  [NEW]
+│   │   │   └── auditlog.go         # AuditLog append + 查询  [NEW]
 │   │   ├── model/
 │   │   │   ├── folder.go           # Folder struct + 常量
 │   │   │   ├── job.go              # Job struct + 常量
 │   │   │   ├── rule.go             # RenameRule struct
-│   │   │   └── config.go           # AppConfig struct
+│   │   │   ├── config.go           # AppConfig struct
+│   │   │   ├── workflow.go         # Workflow + WorkflowStep struct  [NEW]
+│   │   │   ├── snapshot.go         # Snapshot struct  [NEW]
+│   │   │   └── auditlog.go         # AuditLog struct  [NEW]
 │   │   └── sse/
 │   │       └── broker.go           # SSE 事件广播（channel-based）
 │   ├── go.mod
@@ -627,6 +663,8 @@ classifier/
 │       ├── pages/
 │       │   ├── FolderListPage.tsx
 │       │   ├── JobsPage.tsx
+│       │   ├── WorkflowsPage.tsx    # 工作流管理 [NEW]
+│       │   ├── LogsPage.tsx         # 审计日志 [NEW]
 │       │   ├── RulesPage.tsx
 │       │   └── SettingsPage.tsx
 │       └── components/
@@ -643,7 +681,23 @@ classifier/
 │           ├── job/
 │           │   ├── JobCard.tsx
 │           │   ├── JobList.tsx
-│           │   └── JobDetailDrawer.tsx
+│           │   ├── JobDetailDrawer.tsx
+│           │   └── UndoButton.tsx       # 快照回退 [NEW]
+│           ├── workflow/              # 工作流组件 [NEW]
+│           │   ├── WorkflowList.tsx
+│           │   ├── WorkflowCard.tsx
+│           │   ├── WorkflowEditor.tsx
+│           │   ├── StepCard.tsx
+│           │   └── StepConfigPanel.tsx
+│           ├── rename-editor/         # Token 重命名编辑器 [NEW]
+│           │   ├── RenameEditor.tsx
+│           │   ├── TokenBadge.tsx
+│           │   ├── TokenPicker.tsx
+│           │   └── RenamePreview.tsx
+│           ├── log/                   # 日志组件 [NEW]
+│           │   ├── LogTable.tsx
+│           │   ├── LogDetailDrawer.tsx
+│           │   └── LogExportButton.tsx
 │           └── rule/
 │               ├── RuleCard.tsx
 │               ├── RuleFormDialog.tsx
@@ -774,61 +828,88 @@ MEMORY_LIMIT=1G
 
 ## 9. 开发路线图
 
-### Phase 1 — MVP（核心扫描 + 分类 + 移动）
+### Phase 1 — MVP（核心扫描 + 分类 + 移动 + 安全基础）
 
-目标：能扫描目录、自动分类、手动修正、移动文件夹
+目标：能扫描目录、自动分类、手动修正、移动文件夹，并建立安全操作基础
 
+**后端：**
 - [ ] 后端项目初始化（Go module、Gin、SQLite）
 - [ ] Docker 多阶段构建配置
-- [ ] 数据库 schema + migration
+- [ ] 数据库 schema + migration（folders / snapshots / audit_logs）
 - [ ] Scanner Service：递归扫描 /data/source
-- [ ] Classifier Service：扩展名 + 比例判断
+- [ ] Classifier Service：扩展名 + 比例判断分类
 - [ ] Folder CRUD API（GET/PATCH/DELETE）
 - [ ] SSE Broker 基础实现
 - [ ] Move Service：移动文件夹到 /data/target
+- [ ] Snapshot Service：移动前自动创建快照（记录原始路径）
+- [ ] Snapshot API（GET /api/snapshots、POST /api/snapshots/:id/revert）
+- [ ] AuditLog Service：写入扫描、分类、移动操作日志
+- [ ] 健康检查端点（/health）
+
+**前端：**
 - [ ] 前端项目初始化（Vite + React + TypeScript + Tailwind + shadcn/ui）
 - [ ] FolderListPage：列表、筛选、分类修正
 - [ ] SettingsPage：source/target 目录配置
-- [ ] SSE hook：连接 /api/events，更新 store
+- [ ] SSE hook：连接 /api/events，更新 Zustand store
+- [ ] SnapshotDrawer：查看操作快照、一键回退
 
-**验收标准：** 能扫描 → 看到分类结果 → 手动修正 → 移动到目标目录
+**验收标准：** 能扫描 → 看到分类结果 → 手动修正 → 移动到目标目录 → 出错可回退
 
 ---
 
-### Phase 2 — 批量操作（重命名 + 压缩 + 缩略图）
+### Phase 2 — 批量操作（重命名 + 压缩 + 缩略图 + 工作流）
 
-目标：完整的批量处理能力
+目标：完整的批量处理能力 + 可视化工作流配置
 
+**后端：**
 - [ ] Job Scheduler：队列 + 有界并发 goroutine pool
-- [ ] Rename Service：模板解析 + 批量重命名
-- [ ] 预设重命名规则（4个内置模板）
+- [ ] Rename Service：Token 模板解析 + 批量重命名
+- [ ] Token 系统：{index} {date} {name} {category} {ext} 等内置变量
+- [ ] 预设重命名规则（4 个内置模板）
 - [ ] Compress Service：archive/zip 快速压缩图片目录
 - [ ] Thumbnail Service：FFmpeg 生成 Emby 规范缩略图
-- [ ] Job API（POST/GET/DELETE）
-- [ ] RenameRule API（CRUD + preview）
-- [ ] JobsPage：任务列表 + 实时进度
-- [ ] RulesPage：规则管理 + 预览
-- [ ] FolderToolbar：批量操作按钮
+- [ ] Job API（POST/GET/DELETE /api/jobs/*）
+- [ ] RenameRule API（CRUD + POST /api/rename-rules/:id/preview）
+- [ ] Workflow Service：按分类加载并执行步骤链
+- [ ] Workflow API（GET/POST/PUT/DELETE /api/workflows）
+- [ ] Snapshot：重命名/压缩前自动快照
+- [ ] AuditLog：写入重命名、压缩、缩略图操作
 
-**验收标准：** 能批量重命名、压缩图片目录、生成视频缩略图，任务进度实时可见
+**前端：**
+- [ ] JobsPage：任务列表 + 实时进度条
+- [ ] RulesPage：Token 重命名编辑器（拖拽 Token、实时预览）
+- [ ] WorkflowsPage：每种分类配置步骤链（拖拽排序）
+- [ ] LogsPage：审计日志列表 + 筛选 + CSV 导出
+- [ ] FolderToolbar：批量操作按钮（重命名/压缩/缩略图/移动）
+
+**验收标准：** 能配置工作流 → 批量重命名（预览正确）→ 压缩图片目录 → 生成 Emby 缩略图 → 审计日志可查
 
 ---
 
-### Phase 3 — 并发优化 + 体验打磨
+### Phase 3 — 并发优化 + 体验打磨 + 高级功能
 
-目标：生产可用，流畅体验
+目标：生产可用，流畅体验，支持大规模文件夹处理
 
+**性能：**
 - [ ] 并发扫描（多目录同时扫描）
 - [ ] 扫描增量更新（只扫描新增/变更文件夹）
 - [ ] Magic bytes 检测（处理无扩展名文件）
+- [ ] 前端虚拟列表（react-window，大量文件夹时性能优化）
 - [ ] 任务取消（cancel running job）
-- [ ] 错误重试机制
-- [ ] 前端虚拟列表（大量文件夹时性能优化）
-- [ ] 操作历史记录
-- [ ] 配置导入/导出
-- [ ] 健康检查端点（/health）
+- [ ] 错误重试机制（失败 Job 自动重试 3 次）
 
-**验收标准：** 处理 1000+ 文件夹流畅，任务可取消，错误可恢复
+**工作流增强：**
+- [ ] 工作流条件步骤（如：仅当文件数 > N 时执行压缩）
+- [ ] 工作流执行历史（每次执行记录到审计日志）
+- [ ] 自定义分类规则（用户可添加新的扩展名映射）
+
+**运维：**
+- [ ] 审计日志自动清理（保留最近 N 天）
+- [ ] 配置导入/导出（JSON 格式）
+- [ ] 快照自动过期清理（保留最近 30 天）
+- [ ] Docker 健康检查完善
+
+**验收标准：** 处理 1000+ 文件夹流畅，任务可取消，错误可恢复，审计日志完整
 
 ---
 
