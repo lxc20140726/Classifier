@@ -9,7 +9,7 @@ import {
   updateFolderStatus,
   type FolderQueryParams,
 } from '@/api/folders'
-import type { Category, Folder, FolderStatus } from '@/types'
+import type { Category, Folder, FolderStatus, ScanStartResponse, ScanProgressEvent } from '@/types'
 
 export interface FolderFilters {
   status?: FolderStatus
@@ -18,9 +18,15 @@ export interface FolderFilters {
 }
 
 interface ScanProgressState {
+  jobId: string
   scanned: number
   total: number
+  failed: number
+  currentFolderName: string | null
+  sourceDirs: string[]
 }
+
+type FolderViewMode = 'grid' | 'list'
 
 interface FolderStore {
   folders: Folder[]
@@ -32,11 +38,15 @@ interface FolderStore {
   filters: FolderFilters
   scanProgress: ScanProgressState | null
   isScanning: boolean
+  viewMode: FolderViewMode
   fetchFolders: () => Promise<void>
   setFilters: (filters: FolderFilters) => void
   setPage: (page: number) => void
+  setViewMode: (mode: FolderViewMode) => void
   triggerScan: () => Promise<void>
-  handleScanProgress: (progress: ScanProgressState) => void
+  handleScanStarted: (payload: ScanStartResponse) => void
+  handleScanProgress: (progress: ScanProgressEvent) => void
+  handleScanError: (progress: ScanProgressEvent) => void
   handleScanDone: () => void
   updateFolderCategory: (id: string, category: Category) => Promise<void>
   updateFolderStatus: (id: string, status: FolderStatus) => Promise<void>
@@ -62,6 +72,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   filters: {},
   scanProgress: null,
   isScanning: false,
+  viewMode: 'list',
   async fetchFolders() {
     const { filters, page, limit } = get()
     set({ isLoading: true, error: null })
@@ -78,7 +89,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : 'Failed to load folders',
+        error: error instanceof Error ? error.message : '加载目录失败',
       })
     }
   },
@@ -88,19 +99,60 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   setPage(page) {
     set({ page })
   },
+  setViewMode(mode) {
+    set({ viewMode: mode })
+  },
   async triggerScan() {
-    set({ isScanning: true, error: null, scanProgress: { scanned: 0, total: 0 } })
+    set({ isScanning: true, error: null })
     try {
-      await scanFolders()
+      const response = await scanFolders()
+      get().handleScanStarted(response)
     } catch (error) {
       set({
         isScanning: false,
-        error: error instanceof Error ? error.message : 'Failed to start scan',
+        error: error instanceof Error ? error.message : '启动扫描失败',
       })
     }
   },
+  handleScanStarted(payload) {
+    set({
+      isScanning: true,
+      scanProgress: {
+        jobId: payload.job_id,
+        scanned: 0,
+        total: 0,
+        failed: 0,
+        currentFolderName: null,
+        sourceDirs: payload.source_dirs,
+      },
+    })
+  },
   handleScanProgress(progress) {
-    set({ isScanning: true, scanProgress: progress })
+    set((state) => ({
+      isScanning: true,
+      scanProgress: {
+        jobId: progress.job_id,
+        scanned: progress.done,
+        total: progress.total,
+        failed: state.scanProgress?.failed ?? 0,
+        currentFolderName: progress.folder_name ?? null,
+        sourceDirs: state.scanProgress?.sourceDirs ?? [],
+      },
+    }))
+  },
+  handleScanError(progress) {
+    set((state) => ({
+      isScanning: true,
+      error: progress.error ?? '扫描过程中出现错误',
+      scanProgress: {
+        jobId: progress.job_id,
+        scanned: progress.done,
+        total: progress.total,
+        failed: (state.scanProgress?.failed ?? 0) + 1,
+        currentFolderName: progress.folder_name ?? null,
+        sourceDirs: state.scanProgress?.sourceDirs ?? [],
+      },
+    }))
   },
   handleScanDone() {
     set({ isScanning: false, scanProgress: null })
@@ -112,7 +164,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
         folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
       }))
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to update category' })
+      set({ error: error instanceof Error ? error.message : '更新分类失败' })
     }
   },
   async updateFolderStatus(id, status) {
@@ -122,7 +174,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
         folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
       }))
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to update status' })
+      set({ error: error instanceof Error ? error.message : '更新状态失败' })
     }
   },
   async removeFolder(id) {
@@ -133,7 +185,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
         total: Math.max(0, state.total - 1),
       }))
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to remove folder' })
+      set({ error: error instanceof Error ? error.message : '删除目录记录失败' })
     }
   },
   async restoreFolder(id) {
@@ -143,7 +195,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
         folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
       }))
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to restore folder' })
+      set({ error: error instanceof Error ? error.message : '恢复目录失败' })
     }
   },
 }))

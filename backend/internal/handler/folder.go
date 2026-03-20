@@ -2,14 +2,17 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	internalfs "github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
+	"github.com/liqiye/classifier/internal/service"
 )
 
 var validCategories = map[string]struct{}{
@@ -27,23 +30,27 @@ var validStatuses = map[string]struct{}{
 }
 
 type FolderScanService interface {
-	Scan(ctx context.Context, sourceDir string) (int, error)
+	Scan(ctx context.Context, input service.ScanInput) (int, error)
 }
 
 type FolderHandler struct {
 	folders          repository.FolderRepository
+	jobs             repository.JobRepository
+	config           repository.ConfigRepository
 	scanner          FolderScanService
 	fs               internalfs.FSAdapter
-	sourceDir        string
+	defaultSourceDir string
 	deleteStagingDir string
 }
 
-func NewFolderHandler(folderRepo repository.FolderRepository, scanner FolderScanService, fsAdapter internalfs.FSAdapter, sourceDir, deleteStagingDir string) *FolderHandler {
+func NewFolderHandler(folderRepo repository.FolderRepository, jobRepo repository.JobRepository, configRepo repository.ConfigRepository, scanner FolderScanService, fsAdapter internalfs.FSAdapter, sourceDir, deleteStagingDir string) *FolderHandler {
 	return &FolderHandler{
 		folders:          folderRepo,
+		jobs:             jobRepo,
+		config:           configRepo,
 		scanner:          scanner,
 		fs:               fsAdapter,
-		sourceDir:        sourceDir,
+		defaultSourceDir: sourceDir,
 		deleteStagingDir: deleteStagingDir,
 	}
 }
@@ -111,13 +118,72 @@ func (h *FolderHandler) Get(c *gin.Context) {
 }
 
 func (h *FolderHandler) Scan(c *gin.Context) {
-	if h.scanner != nil {
-		go func() {
-			_, _ = h.scanner.Scan(context.Background(), h.sourceDir)
-		}()
+	sourceDirs, err := h.loadScanSourceDirs(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(sourceDirs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no scan directories configured"})
+		return
 	}
 
-	c.JSON(http.StatusAccepted, gin.H{"started": true})
+	jobID := uuid.NewString()
+	if h.jobs != nil {
+		folderIDsJSON, marshalErr := json.Marshal([]string{})
+		if marshalErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode folder_ids"})
+			return
+		}
+		if err := h.jobs.Create(c.Request.Context(), &repository.Job{
+			ID:        jobID,
+			Type:      "scan",
+			Status:    "pending",
+			FolderIDs: string(folderIDsJSON),
+			Total:     0,
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create scan job"})
+			return
+		}
+	}
+
+	if h.scanner != nil {
+		go func(dirs []string, currentJobID string) {
+			_, _ = h.scanner.Scan(context.Background(), service.ScanInput{
+				JobID:      currentJobID,
+				SourceDirs: dirs,
+			})
+		}(append([]string(nil), sourceDirs...), jobID)
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"started": true, "job_id": jobID, "source_dirs": sourceDirs})
+}
+
+func (h *FolderHandler) loadScanSourceDirs(ctx context.Context) ([]string, error) {
+	if h.config != nil {
+		if raw, err := h.config.Get(ctx, "scan_input_dirs"); err == nil {
+			var dirs []string
+			if unmarshalErr := json.Unmarshal([]byte(raw), &dirs); unmarshalErr != nil {
+				return nil, errors.New("invalid config value for scan_input_dirs")
+			}
+			if len(dirs) > 0 {
+				return dirs, nil
+			}
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return nil, err
+		}
+
+		if raw, err := h.config.Get(ctx, "source_dir"); err == nil && raw != "" {
+			return []string{raw}, nil
+		} else if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return nil, err
+		}
+	}
+
+	if h.defaultSourceDir == "" {
+		return nil, nil
+	}
+	return []string{h.defaultSourceDir}, nil
 }
 
 func (h *FolderHandler) UpdateCategory(c *gin.Context) {

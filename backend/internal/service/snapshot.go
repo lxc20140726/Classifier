@@ -69,6 +69,14 @@ func (s *SnapshotService) CommitAfter(ctx context.Context, snapshotID string, af
 	return nil
 }
 
+func (s *SnapshotService) UpdateDetail(ctx context.Context, snapshotID string, detail json.RawMessage) error {
+	if err := s.snapshots.UpdateDetail(ctx, snapshotID, detail); err != nil {
+		return fmt.Errorf("snapshot.UpdateDetail persist detail: %w", err)
+	}
+
+	return nil
+}
+
 func (s *SnapshotService) Revert(ctx context.Context, snapshotID string) error {
 	snapshot, err := s.snapshots.GetByID(ctx, snapshotID)
 	if err != nil {

@@ -6,6 +6,8 @@ export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partia
 export interface Folder {
   id: string
   path: string
+  source_dir: string
+  relative_path: string
   name: string
   category: Category
   category_source: CategorySource
@@ -16,6 +18,7 @@ export interface Folder {
   total_size: number
   marked_for_move: boolean
   deleted_at: string | null
+  delete_staging_path?: string | null
   scanned_at: string
   updated_at: string
 }
@@ -29,16 +32,18 @@ export interface Snapshot {
   id: string
   job_id: string
   folder_id: string
-  operation_type: 'rename' | 'move'
+  operation_type: string
   before: FileRecord[]
   after: FileRecord[] | null
+  detail: Record<string, unknown> | null
   status: 'pending' | 'committed' | 'reverted'
   created_at: string
 }
 
 export interface AppConfig {
-  source_dir: string
-  target_dir: string
+  source_dir?: string
+  target_dir?: string
+  scan_input_dirs?: string[]
 }
 
 export interface ApiError {
@@ -74,4 +79,45 @@ export interface JobProgress {
   total: number
   failed: number
   updated_at: string
+}
+
+export interface ScanStartResponse {
+  started: boolean
+  job_id: string
+  source_dirs: string[]
+}
+
+export interface ScanProgressEvent {
+  job_id: string
+  folder_id?: string
+  folder_name?: string
+  folder_path?: string
+  source_dir?: string
+  relative_path?: string
+  category?: string
+  done: number
+  total: number
+  error?: string
+}
+
+export interface JobDoneEvent {
+  job_id: string
+  status: JobStatus
+  processed?: number
+  failed?: number
+  total: number
+}
+
+export interface AuditLog {
+  id: string
+  job_id: string
+  folder_id: string
+  folder_path: string
+  action: string
+  level: string
+  detail: Record<string, unknown> | null
+  result: string
+  error_msg: string
+  duration_ms: number
+  created_at: string
 }

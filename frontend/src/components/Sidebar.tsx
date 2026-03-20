@@ -4,9 +4,9 @@ import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 
 const navItems = [
-  { to: '/', label: 'Folders', icon: FolderKanban, end: true },
-  { to: '/jobs', label: 'Jobs', icon: Briefcase },
-  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/', label: '文件夹', icon: FolderKanban, end: true },
+  { to: '/jobs', label: '任务', icon: Briefcase },
+  { to: '/settings', label: '设置', icon: Settings },
 ]
 
 export function Sidebar() {
@@ -14,9 +14,9 @@ export function Sidebar() {
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-muted/30">
       <div className="border-b border-border px-6 py-5">
         <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
-          Classifier
+          CLASSIFIER
         </p>
-        <h1 className="mt-2 text-xl font-semibold">Phase 1 MVP</h1>
+        <h1 className="mt-2 text-xl font-semibold">媒体整理工具</h1>
       </div>
       <nav className="flex flex-1 flex-col gap-2 p-4">
         {navItems.map((item) => {

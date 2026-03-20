@@ -7,12 +7,13 @@
 已实现：
 
 - 媒体分类：写真、视频、混合、漫画自动识别（扩展名 + 比例分析）
-- 文件夹扫描与列表管理
+- 文件夹扫描与列表管理（扫描任务持久化 + 实时进度）
 - 文件夹移动任务（Job 持久化 + SSE 实时进度）
-- Snapshot 快照：创建、查询、回滚
-- AuditLog 审计日志：记录所有文件操作
-- Config 配置读取与保存
+- Snapshot 快照：创建、查询、回滚、时间线 detail 元数据
+- AuditLog 审计日志：记录所有文件操作并提供 HTTP 查询接口
+- Config 配置读取与保存（支持多扫描目录）
 - Folder 软删除与恢复
+- 中文前端仪表盘：目录网格/列表、最近任务、最近日志、通知提示
 - 前端 Job 历史查看与轮询
 - NAS 友好的 Docker / docker-compose 部署
 
@@ -106,14 +107,14 @@ Vite 已配置将 `/api` 代理到 `http://localhost:8080`。
 
 ### 4. 本地验证流程
 
-1. 打开 `http://localhost:5173`
-2. 进入 `Settings`，确认 source 和 target 路径
-3. 返回 `Folders`
-4. 点击 `Scan source directory`
-5. 查看表格中的文件夹分类结果
-6. 尝试修改分类和状态
-7. 选中文件夹，点击 Move 移动到 target
-8. 进入 `Jobs` 查看任务进度
+1. 打开 `http://localhost:5173/settings`
+2. 配置一个或多个扫描目录并保存
+3. 返回 `http://localhost:5173`
+4. 点击“扫描”，观察扫描进度条、任务面板和最近日志
+5. 查看目录卡片/列表中的分类结果与来源目录信息
+6. 点击“快照时间线”检查分类快照 detail
+7. 选中文件夹，点击“移动所选”验证 move job
+8. 进入 `http://localhost:5173/jobs` 查看任务历史
 9. 软删除后可通过 Restore 恢复
 
 ### 5. 构建命令
@@ -137,4 +138,4 @@ npm run build
 
 ## 开发进度
 
-Phase 1 MVP + Phase 1.5 前后端均已完成。后端核心、Move 链路、Snapshot、软删除/恢复、Jobs 管理、前端 Job 历史视图、Docker / 极空间部署均已落地。Phase 2 起开始实现通用工作流引擎。详见 [开发路线图](docs/ROADMAP.md)。
+Phase 1 MVP + Phase 1.5 前后端均已完成。当前仓库已具备扫描任务持久化、扫描/移动实时反馈、审计日志查询、中文仪表盘、快照时间线和多扫描目录配置。下一阶段重点仍然是通用工作流引擎与节点级输出目录配置。详见 `docs/ROADMAP.md`。

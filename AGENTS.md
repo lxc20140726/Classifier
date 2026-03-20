@@ -204,6 +204,7 @@ Use repository interfaces instead of reaching into SQL from handlers or services
 
 - Strict TypeScript only; no `any`, no suppression comments
 - Tailwind classes only
+- All user-facing frontend copy is hardcoded Chinese unless the user explicitly requests another language
 - Use `cn()` from `src/lib/utils.ts` for conditional classes
 - Shared fetch helper lives in `src/api/client.ts`
 - Domain APIs live in `src/api/`

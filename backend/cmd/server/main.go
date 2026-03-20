@@ -43,14 +43,15 @@ func main() {
 
 	auditSvc := service.NewAuditService(auditRepo)
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
-	scannerSvc := service.NewScannerService(fsAdapter, folderRepo)
+	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
 	moveSvc := service.NewMoveService(fsAdapter, jobRepo, folderRepo, snapshotSvc, auditSvc, broker)
 
-	folderHandler := handler.NewFolderHandler(folderRepo, scannerSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
+	folderHandler := handler.NewFolderHandler(folderRepo, jobRepo, configRepo, scannerSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
 	moveHandler := handler.NewMoveHandler(moveSvc, jobRepo)
 	jobHandler := handler.NewJobHandler(jobRepo)
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
 	configHandler := handler.NewConfigHandler(configRepo)
+	auditHandler := handler.NewAuditHandler(auditRepo)
 
 	r := gin.New()
 	r.Use(gin.Logger())
@@ -91,6 +92,7 @@ func main() {
 
 		api.GET("/config", configHandler.Get)
 		api.PUT("/config", configHandler.Put)
+		api.GET("/audit-logs", auditHandler.List)
 	}
 
 	distFS, err := fs.Sub(webDist, "web/dist")

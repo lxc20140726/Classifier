@@ -119,6 +119,25 @@ func (s *MoveService) moveOne(ctx context.Context, input MoveFolderInput, i, tot
 		return fmt.Errorf("moveService.MoveFolders create snapshot for folder %q: %w", folder.ID, err)
 	}
 
+	if detailRecorder, ok := s.snapshots.(interface {
+		UpdateDetail(context.Context, string, json.RawMessage) error
+	}); ok {
+		detailJSON, marshalErr := json.Marshal(map[string]any{
+			"source_path": folder.Path,
+			"target_dir":  input.TargetDir,
+			"folder_name": folder.Name,
+			"category":    folder.Category,
+		})
+		if marshalErr != nil {
+			s.writeFailureAudit(ctx, input.JobID, folder.ID, folder.Path, marshalErr)
+			return fmt.Errorf("moveService.MoveFolders marshal snapshot detail for folder %q: %w", folder.ID, marshalErr)
+		}
+		if err := detailRecorder.UpdateDetail(ctx, snapshotID, detailJSON); err != nil {
+			s.writeFailureAudit(ctx, input.JobID, folder.ID, folder.Path, err)
+			return fmt.Errorf("moveService.MoveFolders update snapshot detail for folder %q: %w", folder.ID, err)
+		}
+	}
+
 	if err := s.fs.MkdirAll(ctx, input.TargetDir, 0o755); err != nil {
 		s.writeFailureAudit(ctx, input.JobID, folder.ID, folder.Path, err)
 		return fmt.Errorf("moveService.MoveFolders create target dir %q: %w", input.TargetDir, err)
@@ -170,6 +189,7 @@ func (s *MoveService) moveOne(ctx context.Context, input MoveFolderInput, i, tot
 		FolderPath: dst,
 		Action:     "move",
 		Level:      "info",
+		Detail:     json.RawMessage(fmt.Sprintf(`{"source_path":%q,"target_dir":%q,"category":%q}`, folder.Path, input.TargetDir, folder.Category)),
 		Result:     "success",
 	}); err != nil {
 		return fmt.Errorf("moveService.MoveFolders write success audit for folder %q: %w", folder.ID, err)

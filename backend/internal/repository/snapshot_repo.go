@@ -19,14 +19,15 @@ func NewSnapshotRepository(db *sql.DB) SnapshotRepository {
 func (r *SQLiteSnapshotRepository) Create(ctx context.Context, s *Snapshot) error {
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO snapshots (id, job_id, folder_id, operation_type, before_state, after_state, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO snapshots (id, job_id, folder_id, operation_type, before_state, after_state, detail, status, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		s.ID,
 		s.JobID,
 		s.FolderID,
 		s.OperationType,
 		string(s.Before),
 		nullableJSON(s.After),
+		nullableJSON(s.Detail),
 		s.Status,
 	)
 	if err != nil {
@@ -39,7 +40,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 func (r *SQLiteSnapshotRepository) GetByID(ctx context.Context, id string) (*Snapshot, error) {
 	snapshot, err := scanSnapshot(
 		r.db.QueryRowContext(ctx, `
-SELECT id, job_id, folder_id, operation_type, before_state, after_state, status, created_at
+SELECT id, job_id, folder_id, operation_type, before_state, after_state, detail, status, created_at
 FROM snapshots
 WHERE id = ?`, id),
 	)
@@ -52,7 +53,7 @@ WHERE id = ?`, id),
 
 func (r *SQLiteSnapshotRepository) ListByFolderID(ctx context.Context, folderID string) ([]*Snapshot, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, job_id, folder_id, operation_type, before_state, after_state, status, created_at
+SELECT id, job_id, folder_id, operation_type, before_state, after_state, detail, status, created_at
 FROM snapshots
 WHERE folder_id = ?
 ORDER BY created_at DESC`, folderID)
@@ -66,7 +67,7 @@ ORDER BY created_at DESC`, folderID)
 
 func (r *SQLiteSnapshotRepository) ListByJobID(ctx context.Context, jobID string) ([]*Snapshot, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, job_id, folder_id, operation_type, before_state, after_state, status, created_at
+SELECT id, job_id, folder_id, operation_type, before_state, after_state, detail, status, created_at
 FROM snapshots
 WHERE job_id = ?
 ORDER BY created_at DESC`, jobID)
@@ -91,6 +92,24 @@ func (r *SQLiteSnapshotRepository) CommitAfter(ctx context.Context, id string, a
 
 	if err := assertRowsAffected(res); err != nil {
 		return fmt.Errorf("snapshotRepo.CommitAfter: %w", err)
+	}
+
+	return nil
+}
+
+func (r *SQLiteSnapshotRepository) UpdateDetail(ctx context.Context, id string, detail json.RawMessage) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		"UPDATE snapshots SET detail = ? WHERE id = ?",
+		nullableJSON(detail),
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("snapshotRepo.UpdateDetail: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("snapshotRepo.UpdateDetail: %w", err)
 	}
 
 	return nil
@@ -135,6 +154,7 @@ func scanSnapshot(scanner interface{ Scan(dest ...any) error }) (*Snapshot, erro
 	snapshot := &Snapshot{}
 	var before string
 	var after sql.NullString
+	var detail sql.NullString
 	var createdAt any
 
 	err := scanner.Scan(
@@ -144,6 +164,7 @@ func scanSnapshot(scanner interface{ Scan(dest ...any) error }) (*Snapshot, erro
 		&snapshot.OperationType,
 		&before,
 		&after,
+		&detail,
 		&snapshot.Status,
 		&createdAt,
 	)
@@ -158,6 +179,10 @@ func scanSnapshot(scanner interface{ Scan(dest ...any) error }) (*Snapshot, erro
 
 	if after.Valid {
 		snapshot.After = json.RawMessage(after.String)
+	}
+
+	if detail.Valid {
+		snapshot.Detail = json.RawMessage(detail.String)
 	}
 
 	snapshot.CreatedAt, err = parseDBTime(createdAt)

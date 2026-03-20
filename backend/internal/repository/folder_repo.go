@@ -19,12 +19,14 @@ func NewFolderRepository(db *sql.DB) FolderRepository {
 func (r *SQLiteFolderRepository) Upsert(ctx context.Context, f *Folder) error {
 	query := `
 INSERT INTO folders (
-	id, path, name, category, category_source, status,
+	id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, scanned_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET
 	path = excluded.path,
+	source_dir = excluded.source_dir,
+	relative_path = excluded.relative_path,
 	name = excluded.name,
 	category = excluded.category,
 	category_source = excluded.category_source,
@@ -44,6 +46,8 @@ ON CONFLICT(id) DO UPDATE SET
 		query,
 		f.ID,
 		f.Path,
+		f.SourceDir,
+		f.RelativePath,
 		f.Name,
 		f.Category,
 		f.CategorySource,
@@ -66,7 +70,7 @@ ON CONFLICT(id) DO UPDATE SET
 func (r *SQLiteFolderRepository) GetByID(ctx context.Context, id string) (*Folder, error) {
 	folder, err := scanFolder(
 		r.db.QueryRowContext(ctx, `
-SELECT id, path, name, category, category_source, status,
+SELECT id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, scanned_at, updated_at
 FROM folders
@@ -83,7 +87,7 @@ WHERE id = ?
 func (r *SQLiteFolderRepository) GetByPath(ctx context.Context, path string) (*Folder, error) {
 	folder, err := scanFolder(
 		r.db.QueryRowContext(ctx, `
-SELECT id, path, name, category, category_source, status,
+SELECT id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, scanned_at, updated_at
 FROM folders
@@ -149,7 +153,7 @@ func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilt
 
 	rows, err := r.db.QueryContext(
 		ctx,
-		`SELECT id, path, name, category, category_source, status,
+		`SELECT id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, scanned_at, updated_at
 FROM folders`+whereClause+`
@@ -293,6 +297,8 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	err := scanner.Scan(
 		&folder.ID,
 		&folder.Path,
+		&folder.SourceDir,
+		&folder.RelativePath,
 		&folder.Name,
 		&folder.Category,
 		&folder.CategorySource,

@@ -8,7 +8,7 @@ import type { Job, JobStatus } from '@/types'
 
 function formatDate(dateStr: string | null) {
   if (!dateStr) return '—'
-  return new Date(dateStr).toLocaleString()
+  return new Date(dateStr).toLocaleString('zh-CN')
 }
 
 function formatDuration(startedAt: string | null, finishedAt: string | null) {
@@ -16,9 +16,18 @@ function formatDuration(startedAt: string | null, finishedAt: string | null) {
   const end = finishedAt ? new Date(finishedAt) : new Date()
   const start = new Date(startedAt)
   const secs = Math.floor((end.getTime() - start.getTime()) / 1000)
-  if (secs < 60) return `${secs}s`
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`
-  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`
+  if (secs < 60) return `${secs} 秒`
+  if (secs < 3600) return `${Math.floor(secs / 60)} 分 ${secs % 60} 秒`
+  return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
+}
+
+const STATUS_LABELS: Record<JobStatus, string> = {
+  pending: '等待中',
+  running: '进行中',
+  succeeded: '已完成',
+  failed: '失败',
+  partial: '部分完成',
+  cancelled: '已取消',
 }
 
 const STATUS_STYLES: Record<JobStatus, string> = {
@@ -38,7 +47,7 @@ function StatusBadge({ status }: { status: JobStatus }) {
         STATUS_STYLES[status],
       )}
     >
-      {status}
+      {STATUS_LABELS[status]}
     </span>
   )
 }
@@ -73,7 +82,7 @@ function JobRow({ job }: { job: Job }) {
           <button
             type="button"
             className="flex items-center text-muted-foreground"
-            aria-label={expanded ? 'Collapse' : 'Expand'}
+            aria-label={expanded ? '收起' : '展开'}
           >
             {expanded ? (
               <ChevronDown className="h-4 w-4" />
@@ -102,52 +111,52 @@ function JobRow({ job }: { job: Job }) {
             <div className="grid gap-3 text-sm">
               {job.error && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
-                  <p className="font-medium text-destructive">Error</p>
+                   <p className="font-medium text-destructive">错误信息</p>
                   <p className="mt-0.5 text-destructive/80">{job.error}</p>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 sm:grid-cols-3">
                 <div>
-                  <p className="text-xs text-muted-foreground">Job ID</p>
+                   <p className="text-xs text-muted-foreground">任务 ID</p>
                   <p className="font-mono text-xs">{job.id}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Type</p>
-                  <p>{job.type}</p>
+                   <p className="text-xs text-muted-foreground">任务类型</p>
+                   <p>{job.type === 'scan' ? '扫描' : job.type === 'move' ? '移动' : job.type}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Status</p>
+                   <p className="text-xs text-muted-foreground">状态</p>
                   <StatusBadge status={job.status} />
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Folders</p>
-                  <p>{job.folder_ids.length} selected</p>
+                   <p className="text-xs text-muted-foreground">目录数量</p>
+                   <p>{job.folder_ids.length} 个</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Done / Total</p>
+                   <p className="text-xs text-muted-foreground">完成 / 总数</p>
                   <p>
                     {job.done} / {job.total}
                     {job.failed > 0 && (
-                      <span className="ml-1 text-destructive">({job.failed} failed)</span>
+                       <span className="ml-1 text-destructive">（{job.failed} 失败）</span>
                     )}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Started</p>
+                   <p className="text-xs text-muted-foreground">开始时间</p>
                   <p>{formatDate(job.started_at)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Finished</p>
+                   <p className="text-xs text-muted-foreground">结束时间</p>
                   <p>{formatDate(job.finished_at)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Created</p>
+                   <p className="text-xs text-muted-foreground">创建时间</p>
                   <p>{formatDate(job.created_at)}</p>
                 </div>
               </div>
               {job.folder_ids.length > 0 && (
                 <div>
-                  <p className="text-xs text-muted-foreground">Folder IDs</p>
+                   <p className="text-xs text-muted-foreground">目录 ID</p>
                   <ul className="mt-1 space-y-0.5">
                     {job.folder_ids.map((fid) => (
                       <li key={fid} className="font-mono text-xs">
@@ -169,16 +178,16 @@ export default function JobsPage() {
   const { jobs, total, isLoading, error, fetchJobs } = useJobStore()
 
   useEffect(() => {
-  void fetchJobs()
+    void fetchJobs()
   }, [fetchJobs])
 
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">任务历史</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            {total} job{total !== 1 ? 's' : ''} total
+            共 {total} 条任务记录
           </p>
         </div>
         <button
@@ -188,7 +197,7 @@ export default function JobsPage() {
           className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium shadow-sm transition-colors hover:bg-accent disabled:opacity-50"
         >
           <RefreshCw className={cn('h-3.5 w-3.5', isLoading && 'animate-spin')} />
-          Refresh
+           刷新
         </button>
       </div>
 
@@ -204,25 +213,25 @@ export default function JobsPage() {
             <tr className="border-b border-border bg-muted/50">
               <th className="w-10 px-4 py-3" />
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                ID
+                 ID
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Type
+                 类型
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Status
+                 状态
               </th>
               <th className="w-48 px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Progress
+                 进度
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Folders
+                 目录数
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Created
+                 创建时间
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Duration
+                 耗时
               </th>
             </tr>
           </thead>
@@ -230,13 +239,13 @@ export default function JobsPage() {
             {isLoading && jobs.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                  Loading jobs…
+                   正在加载任务...
                 </td>
               </tr>
             ) : jobs.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                  No jobs yet. Move operations will appear here.
+                   暂无任务记录，扫描和移动后会显示在这里。
                 </td>
               </tr>
             ) : (

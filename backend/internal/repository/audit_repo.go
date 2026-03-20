@@ -50,6 +50,11 @@ func (r *SQLiteAuditRepository) List(ctx context.Context, filter AuditListFilter
 		args = append(args, filter.Action)
 	}
 
+	if filter.JobID != "" {
+		where = append(where, "job_id = ?")
+		args = append(args, filter.JobID)
+	}
+
 	if filter.Result != "" {
 		where = append(where, "result = ?")
 		args = append(args, filter.Result)

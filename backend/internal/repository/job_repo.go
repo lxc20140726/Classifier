@@ -108,6 +108,26 @@ LIMIT ? OFFSET ?`, listArgs...)
 	return jobs, total, nil
 }
 
+func (r *SQLiteJobRepository) UpdateTotal(ctx context.Context, id string, total int) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		`UPDATE jobs
+SET total = ?, updated_at = CURRENT_TIMESTAMP
+WHERE id = ?`,
+		total,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("jobRepo.UpdateTotal: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("jobRepo.UpdateTotal: %w", err)
+	}
+
+	return nil
+}
+
 func (r *SQLiteJobRepository) UpdateStatus(ctx context.Context, id, status, errMsg string) error {
 	query := `UPDATE jobs SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP`
 	args := []any{status, nullableString(errMsg)}

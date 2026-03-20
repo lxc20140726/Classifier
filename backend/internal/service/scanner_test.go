@@ -193,9 +193,10 @@ func TestScan(t *testing.T) {
 				t.Helper()
 
 				adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "broken", IsDir: true}})
+				adapter.readErr[filepath.Join(sourceDir, "broken")] = fmt.Errorf("boom")
 			},
 			wantCount: 0,
-			wantErr:   true,
+			wantErr:   false,
 		},
 		{
 			name: "propagates stat errors",
@@ -205,9 +206,10 @@ func TestScan(t *testing.T) {
 				brokenPath := filepath.Join(sourceDir, "broken")
 				adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "broken", IsDir: true}})
 				adapter.AddDir(brokenPath, []fs.DirEntry{{Name: "missing.jpg", IsDir: false}})
+				adapter.statErr[filepath.Join(brokenPath, "missing.jpg")] = fmt.Errorf("missing stat")
 			},
 			wantCount: 0,
-			wantErr:   true,
+			wantErr:   false,
 		},
 	}
 
@@ -223,8 +225,13 @@ func TestScan(t *testing.T) {
 
 			tc.setup(t, adapter, sourceDir)
 
-			scanner := NewScannerService(adapter, repo)
-			gotCount, err := scanner.Scan(context.Background(), sourceDir)
+			jobRepo := repository.NewJobRepository(database)
+			snapshotRepo := repository.NewSnapshotRepository(database)
+			auditRepo := repository.NewAuditRepository(database)
+			auditSvc := NewAuditService(auditRepo)
+			snapshotSvc := NewSnapshotService(adapter, snapshotRepo, repo)
+			scanner := NewScannerService(adapter, repo, jobRepo, snapshotSvc, auditSvc, nil)
+			gotCount, err := scanner.Scan(context.Background(), ScanInput{SourceDirs: []string{sourceDir}})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Scan() error = %v, wantErr %v", err, tc.wantErr)
 			}

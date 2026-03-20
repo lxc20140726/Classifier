@@ -8,6 +8,8 @@ import (
 type Folder struct {
 	ID                string     `db:"id"`
 	Path              string     `db:"path"`
+	SourceDir         string     `db:"source_dir"`
+	RelativePath      string     `db:"relative_path"`
 	Name              string     `db:"name"`
 	Category          string     `db:"category"`
 	CategorySource    string     `db:"category_source"`
@@ -45,6 +47,7 @@ type Snapshot struct {
 	OperationType string          `db:"operation_type"`
 	Before        json.RawMessage `db:"before_state"`
 	After         json.RawMessage `db:"after_state"`
+	Detail        json.RawMessage `db:"detail"`
 	Status        string          `db:"status"`
 	CreatedAt     time.Time       `db:"created_at"`
 }
@@ -80,6 +83,7 @@ type JobListFilter struct {
 }
 
 type AuditListFilter struct {
+	JobID    string
 	Action   string
 	Result   string
 	FolderID string

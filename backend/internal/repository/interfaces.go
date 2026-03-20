@@ -22,6 +22,7 @@ type JobRepository interface {
 	Create(ctx context.Context, job *Job) error
 	GetByID(ctx context.Context, id string) (*Job, error)
 	List(ctx context.Context, filter JobListFilter) ([]*Job, int, error)
+	UpdateTotal(ctx context.Context, id string, total int) error
 	UpdateStatus(ctx context.Context, id, status, errMsg string) error
 	IncrementProgress(ctx context.Context, id string, successDelta, failedDelta int) error
 }
@@ -32,6 +33,7 @@ type SnapshotRepository interface {
 	ListByFolderID(ctx context.Context, folderID string) ([]*Snapshot, error)
 	ListByJobID(ctx context.Context, jobID string) ([]*Snapshot, error)
 	CommitAfter(ctx context.Context, id string, after json.RawMessage) error
+	UpdateDetail(ctx context.Context, id string, detail json.RawMessage) error
 	UpdateStatus(ctx context.Context, id, status string) error
 }
 

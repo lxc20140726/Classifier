@@ -14,6 +14,10 @@
   - [ ] `app_config`
 - [x] 实现 Job 查询与进度轮询接口
 - [x] 实现 Folder 软删除与恢复
+- [x] 扫描动作持久化为 `scan` Job
+- [x] 扫描链路 SSE 反馈（started / progress / error / done）
+- [x] `GET /api/audit-logs`
+- [x] `snapshots.detail` 元数据
 
 ## Phase 2 - 工作流引擎
 
@@ -34,5 +38,10 @@
 
 - [ ] JobsPage 三层展开视图
 - [ ] WorkflowDefsPage 节点编辑器升级
-- [ ] SettingsPage 重构为结构化配置编辑
-- [ ] SSE + Poll fallback 上线
+- [~] SettingsPage 重构为结构化配置编辑
+  - [x] 多扫描目录配置
+  - [ ] 节点输出目录配置
+- [~] SSE + Poll fallback 上线
+  - [x] Scan / Move 实时状态联动
+  - [ ] WorkflowRun / NodeRun 状态恢复
+- [x] 首页仪表盘支持目录网格/列表、最近任务、最近日志、通知与快照时间线

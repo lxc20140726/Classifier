@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 import { getJobProgress, listJobs, type JobQueryParams } from '@/api/jobs'
-import type { Job, JobProgress } from '@/types'
+import type { Job, JobDoneEvent, JobProgress } from '@/types'
 
 interface JobStore {
   jobs: Job[]
@@ -16,7 +16,7 @@ interface JobStore {
   addJob: (job: Job) => void
   updateJob: (jobId: string, updates: Partial<Job>) => void
   handleJobProgress: (progress: JobProgress) => void
-  handleJobDone: (jobId: string) => void
+  handleJobDone: (payload: JobDoneEvent) => void
   handleJobError: (jobId: string, error: string) => void
   startPolling: (jobId: string) => void
   stopPolling: (jobId: string) => void
@@ -43,7 +43,7 @@ export const useJobStore = create<JobStore>((set, get) => ({
         total: response.total,
         page: response.page,
         limit: response.limit,
-    isLoading: false,
+        isLoading: false,
       })
 
       response.data.forEach((job) => {
@@ -66,13 +66,13 @@ export const useJobStore = create<JobStore>((set, get) => ({
     }))
 
     if (job.status === 'running') {
-    get().startPolling(job.id)
+      get().startPolling(job.id)
     }
   },
 
   updateJob(jobId, updates) {
     set((state) => ({
-   jobs: state.jobs.map((job) => (job.id === jobId ? { ...job, ...updates } : job)),
+      jobs: state.jobs.map((job) => (job.id === jobId ? { ...job, ...updates } : job)),
     }))
 
     const job = get().jobs.find((j) => j.id === jobId)
@@ -82,6 +82,25 @@ export const useJobStore = create<JobStore>((set, get) => ({
   },
 
   handleJobProgress(progress) {
+    const existing = get().jobs.find((job) => job.id === progress.job_id)
+    if (!existing) {
+      get().addJob({
+        id: progress.job_id,
+        type: 'scan',
+        status: progress.status,
+        folder_ids: [],
+        total: progress.total,
+        done: progress.done,
+        failed: progress.failed,
+        error: '',
+        started_at: progress.updated_at,
+        finished_at: null,
+        created_at: progress.updated_at,
+        updated_at: progress.updated_at,
+      })
+      return
+    }
+
     get().updateJob(progress.job_id, {
       status: progress.status,
       done: progress.done,
@@ -91,9 +110,35 @@ export const useJobStore = create<JobStore>((set, get) => ({
     })
   },
 
-  handleJobDone(jobId) {
-    get().updateJob(jobId, { status: 'succeeded' })
-    get().stopPolling(jobId)
+  handleJobDone(payload) {
+    const now = new Date().toISOString()
+    const existing = get().jobs.find((job) => job.id === payload.job_id)
+    if (!existing) {
+      get().addJob({
+        id: payload.job_id,
+        type: 'scan',
+        status: payload.status,
+        folder_ids: [],
+        total: payload.total,
+        done: payload.processed ?? payload.total,
+        failed: payload.failed ?? 0,
+        error: '',
+        started_at: now,
+        finished_at: now,
+        created_at: now,
+        updated_at: now,
+      })
+    } else {
+      get().updateJob(payload.job_id, {
+        status: payload.status,
+        done: payload.processed ?? existing.done,
+        failed: payload.failed ?? existing.failed,
+        total: payload.total,
+        finished_at: now,
+        updated_at: now,
+      })
+    }
+    get().stopPolling(payload.job_id)
   },
 
   handleJobError(jobId, error) {
@@ -121,7 +166,7 @@ export const useJobStore = create<JobStore>((set, get) => ({
           const timer = window.setTimeout(poll, 2000)
           pollingTimers.set(jobId, timer)
         }
-    } catch (error) {
+      } catch (error) {
         console.error(`Failed to poll job ${jobId}:`, error)
         get().stopPolling(jobId)
       }

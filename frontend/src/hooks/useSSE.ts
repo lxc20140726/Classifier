@@ -1,25 +1,16 @@
 import { useEffect } from 'react'
 
+import { useActivityStore } from '@/store/activityStore'
 import { useFolderStore } from '@/store/folderStore'
 import { useJobStore } from '@/store/jobStore'
+import { useNotificationStore } from '@/store/notificationStore'
+import type { JobDoneEvent, ScanProgressEvent } from '@/types'
 
-interface ScanProgressEvent {
-  scanned: number
-  total: number
+interface JobProgressEvent extends ScanProgressEvent {
+  failed?: number
 }
 
-interface JobProgressEvent {
-  job_id: string
-  done: number
-  total: number
-}
-
-interface JobDoneEvent {
-  job_id: string
-}
-
-interface JobErrorEvent {
-  job_id: string
+interface JobErrorEvent extends ScanProgressEvent {
   error: string
 }
 
@@ -31,15 +22,33 @@ export function useSSE() {
     const connect = () => {
       eventSource = new EventSource('/api/events')
 
+      eventSource.addEventListener('scan.started', (event) => {
+        const payload = JSON.parse(event.data) as {
+          job_id: string
+          source_dirs: string[]
+        }
+        useFolderStore.getState().handleScanStarted({
+          started: true,
+          job_id: payload.job_id,
+          source_dirs: payload.source_dirs,
+        })
+      })
+
       eventSource.addEventListener('scan.progress', (event) => {
         const payload = JSON.parse(event.data) as ScanProgressEvent
         useFolderStore.getState().handleScanProgress(payload)
+      })
+
+      eventSource.addEventListener('scan.error', (event) => {
+        const payload = JSON.parse(event.data) as JobErrorEvent
+        useFolderStore.getState().handleScanError(payload)
       })
 
       eventSource.addEventListener('scan.done', () => {
         const store = useFolderStore.getState()
         store.handleScanDone()
         void store.fetchFolders()
+        void useActivityStore.getState().fetchLogs({ limit: 20 })
       })
 
       eventSource.addEventListener('job.progress', (event) => {
@@ -49,20 +58,37 @@ export function useSSE() {
           status: 'running',
           done: payload.done,
           total: payload.total,
-          failed: 0,
+          failed: payload.failed ?? 0,
           updated_at: new Date().toISOString(),
         })
       })
 
       eventSource.addEventListener('job.done', (event) => {
         const payload = JSON.parse(event.data) as JobDoneEvent
-        useJobStore.getState().handleJobDone(payload.job_id)
+        useJobStore.getState().handleJobDone(payload)
+        useNotificationStore.getState().pushNotification({
+          level: payload.status === 'partial' ? 'info' : 'success',
+          title: payload.status === 'partial' ? '任务部分完成' : '任务完成',
+          message:
+            payload.status === 'partial'
+              ? `任务 ${payload.job_id} 已完成，但有 ${payload.failed ?? 0} 个目录失败。`
+              : `任务 ${payload.job_id} 已完成，共处理 ${payload.total} 个目录。`,
+          jobId: payload.job_id,
+        })
         void useFolderStore.getState().fetchFolders()
+        void useActivityStore.getState().fetchLogs({ limit: 20 })
       })
 
       eventSource.addEventListener('job.error', (event) => {
         const payload = JSON.parse(event.data) as JobErrorEvent
         useJobStore.getState().handleJobError(payload.job_id, payload.error)
+        useNotificationStore.getState().pushNotification({
+          level: 'error',
+          title: '任务报错',
+          message: payload.error,
+          jobId: payload.job_id,
+        })
+        void useActivityStore.getState().fetchLogs({ limit: 20 })
       })
 
       eventSource.onerror = () => {
