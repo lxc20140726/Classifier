@@ -56,3 +56,9 @@ export function moveFolders(folderIds: string[], targetDir: string) {
     body: JSON.stringify({ folder_ids: folderIds, target_dir: targetDir }),
   })
 }
+
+export function restoreFolder(id: string) {
+  return request<{ data: Folder }>(`/folders/${id}/restore`, {
+    method: 'POST',
+  })
+}

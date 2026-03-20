@@ -1,10 +1,11 @@
-import { FolderKanban, Settings } from 'lucide-react'
+import { Briefcase, FolderKanban, Settings } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
 
 const navItems = [
   { to: '/', label: 'Folders', icon: FolderKanban, end: true },
+  { to: '/jobs', label: 'Jobs', icon: Briefcase },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 

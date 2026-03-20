@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import {
   deleteFolder,
   listFolders,
+  restoreFolder,
   scanFolders,
   updateFolderCategory,
   updateFolderStatus,
@@ -40,6 +41,7 @@ interface FolderStore {
   updateFolderCategory: (id: string, category: Category) => Promise<void>
   updateFolderStatus: (id: string, status: FolderStatus) => Promise<void>
   removeFolder: (id: string) => Promise<void>
+  restoreFolder: (id: string) => Promise<void>
 }
 
 function buildQuery(filters: FolderFilters, page: number, limit: number): FolderQueryParams {
@@ -132,6 +134,16 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
       }))
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Failed to remove folder' })
+    }
+  },
+  async restoreFolder(id) {
+    try {
+      const response = await restoreFolder(id)
+      set((state) => ({
+        folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
+      }))
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to restore folder' })
     }
   },
 }))
