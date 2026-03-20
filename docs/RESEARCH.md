@@ -1,28 +1,28 @@
-# Technical Research / 技术研究
+# 技术研究
 
-## Compression Findings
+## 压缩方案调研
 
-- `zstd` delivers the highest throughput in the current comparison at about `510 MB/s`.
-- `zip` offers broad compatibility and balanced performance at about `105 MB/s`.
-- `7z` achieves stronger compression ratios, but the trade-off is much slower execution.
+- `zstd` 在当前对比中吞吐量最高，约 `510 MB/s`。
+- `zip` 兼容性最广、性能均衡，约 `105 MB/s`。
+- `7z` 压缩率更高，但执行速度明显更慢。
 
-## Classification Strategy
+## 分类策略
 
-- Recommended pipeline: metadata-first, then content-based fallback.
-- Metadata-first stage should inspect file extensions and magic bytes to avoid unnecessary deep scans.
-- Content-based analysis can be reserved for ambiguous folders that need deeper inspection.
+- 推荐流水线：优先元数据，元数据不足时回退到内容分析。
+- 元数据阶段应检查文件扩展名与 magic bytes，避免不必要的深度扫描。
+- 内容分析保留给元数据无法判断的模糊目录。
 
-## Batch Processing Model
+## 批处理模型
 
-- Use a task queue to isolate folder-level jobs.
-- Apply bounded concurrency to prevent NAS resource spikes.
-- Emit structured progress events so the web UI can track state changes clearly.
+- 使用任务队列隔离各文件夹级别的 Job。
+- 通过有界并发防止 NAS 资源峰值过高。
+- 发出结构化进度事件，让 Web UI 能清晰跟踪状态变化。
 
-## Reference Projects
+## 参考项目
 
-- `filebrowser` - about `33k` GitHub stars, built with Go, strong reference for file management UX and deployment simplicity.
-- `spacedrive` - about `37k` GitHub stars, built with Rust, useful reference for indexing, performance, and modern desktop-grade architecture.
+- `filebrowser` — 约 `33k` GitHub Stars，Go 实现，文件管理 UX 与部署简洁性的良好参考。
+- `spacedrive` — 约 `37k` GitHub Stars，Rust 实现，索引性能与现代桌面级架构的有益参考。
 
-## Recommendation
+## 结论
 
-For this project, favor compatibility and operational simplicity first, then add deeper analysis only where metadata-based classification is not enough.
+本项目优先保证兼容性与运维简洁性，仅在元数据分类不足时才引入更深层的内容分析。
