@@ -21,8 +21,8 @@ func (r *SQLiteFolderRepository) Upsert(ctx context.Context, f *Folder) error {
 INSERT INTO folders (
 	id, path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	scanned_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	deleted_at, delete_staging_path, scanned_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET
 	path = excluded.path,
 	name = excluded.name,
@@ -34,6 +34,8 @@ ON CONFLICT(id) DO UPDATE SET
 	total_files = excluded.total_files,
 	total_size = excluded.total_size,
 	marked_for_move = excluded.marked_for_move,
+	deleted_at = excluded.deleted_at,
+	delete_staging_path = excluded.delete_staging_path,
 	updated_at = CURRENT_TIMESTAMP
 `
 
@@ -51,6 +53,8 @@ ON CONFLICT(id) DO UPDATE SET
 		f.TotalFiles,
 		f.TotalSize,
 		boolToInt(f.MarkedForMove),
+		nullableTime(f.DeletedAt),
+		nullableString(f.DeleteStagingPath),
 	)
 	if err != nil {
 		return fmt.Errorf("folderRepo.Upsert: %w", err)
@@ -64,7 +68,7 @@ func (r *SQLiteFolderRepository) GetByID(ctx context.Context, id string) (*Folde
 		r.db.QueryRowContext(ctx, `
 SELECT id, path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	scanned_at, updated_at
+	deleted_at, delete_staging_path, scanned_at, updated_at
 FROM folders
 WHERE id = ?
 `, id),
@@ -81,9 +85,9 @@ func (r *SQLiteFolderRepository) GetByPath(ctx context.Context, path string) (*F
 		r.db.QueryRowContext(ctx, `
 SELECT id, path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	scanned_at, updated_at
+	deleted_at, delete_staging_path, scanned_at, updated_at
 FROM folders
-WHERE path = ?
+WHERE path = ? AND deleted_at IS NULL
 `, path),
 	)
 	if err != nil {
@@ -94,8 +98,14 @@ WHERE path = ?
 }
 
 func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilter) ([]*Folder, int, error) {
-	where := make([]string, 0, 3)
-	args := make([]any, 0, 3)
+	where := make([]string, 0, 4)
+	args := make([]any, 0, 4)
+
+	if filter.OnlyDeleted {
+		where = append(where, "deleted_at IS NOT NULL")
+	} else if !filter.IncludeDeleted {
+		where = append(where, "deleted_at IS NULL")
+	}
 
 	if filter.Status != "" {
 		where = append(where, "status = ?")
@@ -141,7 +151,7 @@ func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilt
 		ctx,
 		`SELECT id, path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	scanned_at, updated_at
+	deleted_at, delete_staging_path, scanned_at, updated_at
 FROM folders`+whereClause+`
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?`,
@@ -223,6 +233,42 @@ func (r *SQLiteFolderRepository) UpdatePath(ctx context.Context, id, newPath str
 	return nil
 }
 
+func (r *SQLiteFolderRepository) SoftDelete(ctx context.Context, id, currentPath, originalPath string) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		"UPDATE folders SET path = ?, deleted_at = CURRENT_TIMESTAMP, delete_staging_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
+		currentPath,
+		originalPath,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("folderRepo.SoftDelete: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("folderRepo.SoftDelete: %w", err)
+	}
+
+	return nil
+}
+
+func (r *SQLiteFolderRepository) Restore(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		"UPDATE folders SET path = delete_staging_path, deleted_at = NULL, delete_staging_path = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NOT NULL",
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("folderRepo.Restore: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("folderRepo.Restore: %w", err)
+	}
+
+	return nil
+}
+
 func (r *SQLiteFolderRepository) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, "DELETE FROM folders WHERE id = ?", id)
 	if err != nil {
@@ -239,6 +285,8 @@ func (r *SQLiteFolderRepository) Delete(ctx context.Context, id string) error {
 func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	folder := &Folder{}
 	var markedForMove int
+	var deletedAt any
+	var deleteStagingPath sql.NullString
 	var scannedAt any
 	var updatedAt any
 
@@ -254,6 +302,8 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 		&folder.TotalFiles,
 		&folder.TotalSize,
 		&markedForMove,
+		&deletedAt,
+		&deleteStagingPath,
 		&scannedAt,
 		&updatedAt,
 	)
@@ -265,6 +315,12 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	}
 
 	folder.MarkedForMove = intToBool(markedForMove)
+	if folder.DeletedAt, err = parseNullableTime(deletedAt); err != nil {
+		return nil, fmt.Errorf("scanFolder parse deleted_at: %w", err)
+	}
+	if deleteStagingPath.Valid {
+		folder.DeleteStagingPath = deleteStagingPath.String
+	}
 
 	folder.ScannedAt, err = parseDBTime(scannedAt)
 	if err != nil {

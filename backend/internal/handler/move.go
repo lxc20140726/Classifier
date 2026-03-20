@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/liqiye/classifier/internal/repository"
 	"github.com/liqiye/classifier/internal/service"
 )
 
@@ -15,10 +17,11 @@ type MoveExecutor interface {
 
 type MoveHandler struct {
 	mover MoveExecutor
+	jobs  repository.JobRepository
 }
 
-func NewMoveHandler(mover MoveExecutor) *MoveHandler {
-	return &MoveHandler{mover: mover}
+func NewMoveHandler(mover MoveExecutor, jobs repository.JobRepository) *MoveHandler {
+	return &MoveHandler{mover: mover, jobs: jobs}
 }
 
 func (h *MoveHandler) Start(c *gin.Context) {
@@ -42,19 +45,38 @@ func (h *MoveHandler) Start(c *gin.Context) {
 		return
 	}
 
-	operationID := uuid.NewString()
+	jobID := uuid.NewString()
+	folderIDsJSON, err := json.Marshal(req.FolderIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode folder_ids"})
+		return
+	}
 
-	go func(folderIDs []string, targetDir, opID string) {
+	if h.jobs != nil {
+		err = h.jobs.Create(c.Request.Context(), &repository.Job{
+			ID:        jobID,
+			Type:      "move",
+			Status:    "pending",
+			FolderIDs: string(folderIDsJSON),
+			Total:     len(req.FolderIDs),
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create job"})
+			return
+		}
+	}
+
+	go func(folderIDs []string, targetDir, currentJobID string) {
 		if h.mover == nil {
 			return
 		}
 
 		_ = h.mover.MoveFolders(context.Background(), service.MoveFolderInput{
-			FolderIDs:   folderIDs,
-			TargetDir:   targetDir,
-			OperationID: opID,
+			FolderIDs: folderIDs,
+			TargetDir: targetDir,
+			JobID:     currentJobID,
 		})
-	}(append([]string(nil), req.FolderIDs...), req.TargetDir, operationID)
+	}(append([]string(nil), req.FolderIDs...), req.TargetDir, jobID)
 
-	c.JSON(http.StatusAccepted, gin.H{"operation_id": operationID})
+	c.JSON(http.StatusAccepted, gin.H{"job_id": jobID})
 }

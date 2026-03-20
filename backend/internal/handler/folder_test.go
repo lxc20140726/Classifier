@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	dbpkg "github.com/liqiye/classifier/internal/db"
+	"github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
 )
 
@@ -56,13 +57,14 @@ func seedFolder(t *testing.T, repo repository.FolderRepository, folder *reposito
 	}
 }
 
-func setupRouter(folderRepo repository.FolderRepository, scanner FolderScanService) *gin.Engine {
+func setupRouter(folderRepo repository.FolderRepository, scanner FolderScanService, fsAdapter fs.FSAdapter) *gin.Engine {
 	g := gin.New()
-	h := NewFolderHandler(folderRepo, scanner, "/test/source")
+	h := NewFolderHandler(folderRepo, scanner, fsAdapter, "/test/source", "/test/delete-staging")
 
 	g.GET("/folders", h.List)
 	g.GET("/folders/:id", h.Get)
 	g.POST("/folders/scan", h.Scan)
+	g.POST("/folders/:id/restore", h.Restore)
 	g.PATCH("/folders/:id/category", h.UpdateCategory)
 	g.PATCH("/folders/:id/status", h.UpdateStatus)
 	g.DELETE("/folders/:id", h.Delete)
@@ -75,7 +77,8 @@ func TestFolderHandler(t *testing.T) {
 
 	repo := newHandlerTestDB(t)
 	scanner := &stubScanner{called: make(chan scannerCall, 1)}
-	router := setupRouter(repo, scanner)
+	fsAdapter := fs.NewMockAdapter()
+	router := setupRouter(repo, scanner, fsAdapter)
 
 	seedFolder(t, repo, &repository.Folder{
 		ID:             "f1",
@@ -93,6 +96,7 @@ func TestFolderHandler(t *testing.T) {
 		CategorySource: "auto",
 		Status:         "done",
 	})
+	fsAdapter.AddDir("/media/f2", []fs.DirEntry{{Name: "a.txt", IsDir: false}})
 
 	t.Run("list folders", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/folders?page=1&limit=10", nil)
@@ -247,9 +251,12 @@ func TestFolderHandler(t *testing.T) {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 		}
 
-		_, err := repo.GetByID(context.Background(), "f2")
-		if err == nil {
-			t.Fatalf("expected deleted record to be missing")
+		folder, err := repo.GetByID(context.Background(), "f2")
+		if err != nil {
+			t.Fatalf("repo.GetByID() error = %v", err)
+		}
+		if folder.DeletedAt == nil {
+			t.Fatalf("expected folder to be soft-deleted")
 		}
 	})
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	internalfs "github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
 )
 
@@ -29,16 +31,20 @@ type FolderScanService interface {
 }
 
 type FolderHandler struct {
-	folders   repository.FolderRepository
-	scanner   FolderScanService
-	sourceDir string
+	folders          repository.FolderRepository
+	scanner          FolderScanService
+	fs               internalfs.FSAdapter
+	sourceDir        string
+	deleteStagingDir string
 }
 
-func NewFolderHandler(folderRepo repository.FolderRepository, scanner FolderScanService, sourceDir string) *FolderHandler {
+func NewFolderHandler(folderRepo repository.FolderRepository, scanner FolderScanService, fsAdapter internalfs.FSAdapter, sourceDir, deleteStagingDir string) *FolderHandler {
 	return &FolderHandler{
-		folders:   folderRepo,
-		scanner:   scanner,
-		sourceDir: sourceDir,
+		folders:          folderRepo,
+		scanner:          scanner,
+		fs:               fsAdapter,
+		sourceDir:        sourceDir,
+		deleteStagingDir: deleteStagingDir,
 	}
 }
 
@@ -64,11 +70,13 @@ func (h *FolderHandler) List(c *gin.Context) {
 	}
 
 	filter := repository.FolderListFilter{
-		Status:   c.Query("status"),
-		Category: c.Query("category"),
-		Q:        c.Query("q"),
-		Page:     page,
-		Limit:    limit,
+		Status:         c.Query("status"),
+		Category:       c.Query("category"),
+		Q:              c.Query("q"),
+		Page:           page,
+		Limit:          limit,
+		IncludeDeleted: c.Query("include_deleted") == "true",
+		OnlyDeleted:    c.Query("only_deleted") == "true",
 	}
 
 	items, total, err := h.folders.List(c.Request.Context(), filter)
@@ -198,8 +206,35 @@ func (h *FolderHandler) UpdateStatus(c *gin.Context) {
 
 func (h *FolderHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
+	folder, err := h.folders.GetByID(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "folder not found"})
+			return
+		}
 
-	err := h.folders.Delete(c.Request.Context(), id)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get folder"})
+		return
+	}
+
+	if folder.DeletedAt != nil {
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
+		return
+	}
+
+	stagingPath := filepath.Join(h.deleteStagingDir, folder.ID+"-"+folder.Name)
+	if h.fs != nil {
+		if err := h.fs.MkdirAll(c.Request.Context(), h.deleteStagingDir, 0o755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prepare delete staging dir"})
+			return
+		}
+		if err := h.fs.MoveDir(c.Request.Context(), folder.Path, stagingPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to move folder to delete staging"})
+			return
+		}
+	}
+
+	err = h.folders.SoftDelete(c.Request.Context(), id, stagingPath, folder.Path)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "folder not found"})
@@ -211,4 +246,37 @@ func (h *FolderHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
+}
+
+func (h *FolderHandler) Restore(c *gin.Context) {
+	id := c.Param("id")
+	folder, err := h.folders.GetByID(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "folder not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get folder"})
+		return
+	}
+	if folder.DeletedAt == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "folder is not deleted"})
+		return
+	}
+	if h.fs != nil && folder.DeleteStagingPath != "" {
+		if err := h.fs.MoveDir(c.Request.Context(), folder.Path, folder.DeleteStagingPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restore folder"})
+			return
+		}
+	}
+	if err := h.folders.Restore(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restore folder"})
+		return
+	}
+	restored, err := h.folders.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get folder"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": restored})
 }

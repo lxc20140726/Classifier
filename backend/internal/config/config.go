@@ -7,12 +7,13 @@ import (
 
 // Config holds all runtime configuration loaded from environment variables.
 type Config struct {
-	SourceDir      string
-	TargetDir      string
-	ConfigDir      string
-	Port           string
-	TZ             string
-	MaxConcurrency int
+	SourceDir        string
+	TargetDir        string
+	DeleteStagingDir string
+	ConfigDir        string
+	Port             string
+	TZ               string
+	MaxConcurrency   int
 }
 
 // Load reads configuration from environment variables with sane defaults.
@@ -25,12 +26,13 @@ func Load() *Config {
 	}
 
 	return &Config{
-		SourceDir:      getEnv("SOURCE_DIR", "/data/source"),
-		TargetDir:      getEnv("TARGET_DIR", "/data/target"),
-		ConfigDir:      getEnv("CONFIG_DIR", "/data/config"),
-		Port:           getEnv("PORT", "8080"),
-		TZ:             getEnv("TZ", "Asia/Shanghai"),
-		MaxConcurrency: maxConcurrency,
+		SourceDir:        getEnv("SOURCE_DIR", "/data/source"),
+		TargetDir:        getEnv("TARGET_DIR", "/data/target"),
+		DeleteStagingDir: getEnv("DELETE_STAGING_DIR", "/data/delete_staging"),
+		ConfigDir:        getEnv("CONFIG_DIR", "/data/config"),
+		Port:             getEnv("PORT", "8080"),
+		TZ:               getEnv("TZ", "Asia/Shanghai"),
+		MaxConcurrency:   maxConcurrency,
 	}
 }
 

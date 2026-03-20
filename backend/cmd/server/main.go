@@ -33,6 +33,7 @@ func main() {
 	defer sqlDB.Close()
 
 	folderRepo := repository.NewFolderRepository(sqlDB)
+	jobRepo := repository.NewJobRepository(sqlDB)
 	snapshotRepo := repository.NewSnapshotRepository(sqlDB)
 	configRepo := repository.NewConfigRepository(sqlDB)
 	auditRepo := repository.NewAuditRepository(sqlDB)
@@ -43,10 +44,11 @@ func main() {
 	auditSvc := service.NewAuditService(auditRepo)
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo)
-	moveSvc := service.NewMoveService(fsAdapter, folderRepo, snapshotSvc, auditSvc, broker)
+	moveSvc := service.NewMoveService(fsAdapter, jobRepo, folderRepo, snapshotSvc, auditSvc, broker)
 
-	folderHandler := handler.NewFolderHandler(folderRepo, scannerSvc, cfg.SourceDir)
-	moveHandler := handler.NewMoveHandler(moveSvc)
+	folderHandler := handler.NewFolderHandler(folderRepo, scannerSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
+	moveHandler := handler.NewMoveHandler(moveSvc, jobRepo)
+	jobHandler := handler.NewJobHandler(jobRepo)
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
 	configHandler := handler.NewConfigHandler(configRepo)
 
@@ -66,13 +68,20 @@ func main() {
 		{
 			folders.GET("", folderHandler.List)
 			folders.GET("/:id", folderHandler.Get)
+			folders.POST("/:id/restore", folderHandler.Restore)
 			folders.PATCH("/:id/category", folderHandler.UpdateCategory)
 			folders.PATCH("/:id/status", folderHandler.UpdateStatus)
 			folders.DELETE("/:id", folderHandler.Delete)
 			folders.POST("/scan", folderHandler.Scan)
 		}
 
-		api.POST("/jobs/move", moveHandler.Start)
+		jobs := api.Group("/jobs")
+		{
+			jobs.GET("", jobHandler.List)
+			jobs.GET("/:id", jobHandler.Get)
+			jobs.GET("/:id/progress", jobHandler.Progress)
+			jobs.POST("/move", moveHandler.Start)
+		}
 
 		snapshots := api.Group("/snapshots")
 		{

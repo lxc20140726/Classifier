@@ -1,5 +1,7 @@
 # API 设计
 
+> 更新说明：若查看最新的 Job / WorkflowRun / NodeRun API，请优先阅读 [API_V3.md](API_V3.md)。
+
 > 版本：v2.0 | 日期：2026-03-19
 
 ## RESTful 端点

@@ -91,6 +91,7 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 
 		ctx := context.Background()
 		database := newServiceTestDB(t)
+		jobRepo := repository.NewJobRepository(database)
 		folderRepo := repository.NewFolderRepository(database)
 		adapter := fs.NewMockAdapter()
 		broker := sse.NewBroker()
@@ -115,11 +116,15 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 
 		adapter.AddDir(sourcePath, []fs.DirEntry{{Name: "x.jpg", IsDir: false}})
 
-		svc := NewMoveService(adapter, folderRepo, snapshots, audit, broker)
+		if err := jobRepo.Create(ctx, &repository.Job{ID: "op-1", Type: "move", Status: "pending", FolderIDs: "[\"folder-a\"]", Total: 1}); err != nil {
+			t.Fatalf("jobRepo.Create() error = %v", err)
+		}
+
+		svc := NewMoveService(adapter, jobRepo, folderRepo, snapshots, audit, broker)
 		input := MoveFolderInput{
-			FolderIDs:   []string{folder.ID},
-			TargetDir:   "/target",
-			OperationID: "op-1",
+			FolderIDs: []string{folder.ID},
+			TargetDir: "/target",
+			JobID:     "op-1",
 		}
 
 		if err := svc.MoveFolders(ctx, input); err != nil {
@@ -141,8 +146,8 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 		}
 
 		createCall := snapshots.createCalls[0]
-		if createCall.jobID != input.OperationID || createCall.folderID != folder.ID || createCall.operationType != "move" {
-			t.Fatalf("CreateBefore call = %+v, want job=%q folder=%q op=move", createCall, input.OperationID, folder.ID)
+		if createCall.jobID != input.JobID || createCall.folderID != folder.ID || createCall.operationType != "move" {
+			t.Fatalf("CreateBefore call = %+v, want job=%q folder=%q op=move", createCall, input.JobID, folder.ID)
 		}
 
 		afterJSON, ok := snapshots.commitCalls["snapshot-"+folder.ID]
@@ -175,11 +180,19 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 		}
 
 		progressPayload := decodeEventPayload(t, received[0])
-		if progressPayload["operation_id"] != input.OperationID || progressPayload["folder_id"] != folder.ID {
+		if progressPayload["job_id"] != input.JobID || progressPayload["folder_id"] != folder.ID {
 			t.Fatalf("progress payload ids = %+v", progressPayload)
 		}
 		if progressPayload["done"] != float64(1) || progressPayload["total"] != float64(1) {
 			t.Fatalf("progress done/total = %+v", progressPayload)
+		}
+
+		job, err := jobRepo.GetByID(ctx, input.JobID)
+		if err != nil {
+			t.Fatalf("jobRepo.GetByID() error = %v", err)
+		}
+		if job.Status != "succeeded" || job.Done != 1 || job.Failed != 0 {
+			t.Fatalf("job state = %+v", *job)
 		}
 	})
 
@@ -188,6 +201,7 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 
 		ctx := context.Background()
 		database := newServiceTestDB(t)
+		jobRepo := repository.NewJobRepository(database)
 		folderRepo := repository.NewFolderRepository(database)
 		adapter := fs.NewMockAdapter()
 		broker := sse.NewBroker()
@@ -209,11 +223,15 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 
 		adapter.AddDir(successFolder.Path, []fs.DirEntry{{Name: "item.txt", IsDir: false}})
 
-		svc := NewMoveService(adapter, folderRepo, snapshots, audit, broker)
+		if err := jobRepo.Create(ctx, &repository.Job{ID: "op-2", Type: "move", Status: "pending", FolderIDs: "[\"f1\",\"f2\"]", Total: 2}); err != nil {
+			t.Fatalf("jobRepo.Create() error = %v", err)
+		}
+
+		svc := NewMoveService(adapter, jobRepo, folderRepo, snapshots, audit, broker)
 		input := MoveFolderInput{
-			FolderIDs:   []string{failedFolder.ID, successFolder.ID},
-			TargetDir:   "/target",
-			OperationID: "op-2",
+			FolderIDs: []string{failedFolder.ID, successFolder.ID},
+			TargetDir: "/target",
+			JobID:     "op-2",
 		}
 
 		if err := svc.MoveFolders(ctx, input); err != nil {
@@ -296,6 +314,14 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 				t.Fatalf("job.error folder_id = %v, want %q", errorPayload["folder_id"], failedFolder.ID)
 			}
 		}
+
+		job, err := jobRepo.GetByID(ctx, input.JobID)
+		if err != nil {
+			t.Fatalf("jobRepo.GetByID() error = %v", err)
+		}
+		if job.Status != "partial" || job.Done != 1 || job.Failed != 1 {
+			t.Fatalf("job state = %+v", *job)
+		}
 	})
 
 	t.Run("empty target dir returns error immediately", func(t *testing.T) {
@@ -303,6 +329,7 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 
 		ctx := context.Background()
 		database := newServiceTestDB(t)
+		jobRepo := repository.NewJobRepository(database)
 		folderRepo := repository.NewFolderRepository(database)
 		adapter := fs.NewMockAdapter()
 		broker := sse.NewBroker()
@@ -312,11 +339,11 @@ func TestMoveServiceMoveFolders(t *testing.T) {
 		snapshots := newFakeSnapshotRecorder()
 		audit := &fakeAuditWriter{}
 
-		svc := NewMoveService(adapter, folderRepo, snapshots, audit, broker)
+		svc := NewMoveService(adapter, jobRepo, folderRepo, snapshots, audit, broker)
 		err := svc.MoveFolders(ctx, MoveFolderInput{
-			FolderIDs:   []string{"f1"},
-			TargetDir:   "",
-			OperationID: "op-invalid",
+			FolderIDs: []string{"f1"},
+			TargetDir: "",
+			JobID:     "op-invalid",
 		})
 		if err == nil {
 			t.Fatal("MoveFolders() error = nil, want non-nil")

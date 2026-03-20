@@ -1,5 +1,7 @@
 # 节点式工作流系统设计
 
+> 更新说明：若查看最新的 Job-WorkflowRun-NodeRun 模型和分类器节点设计，请优先阅读 [WORKFLOW_V3.md](WORKFLOW_V3.md)。
+
 > 版本：v2.0 | 日期：2026-03-19
 > 设计参考：ComfyUI 节点图模式
 

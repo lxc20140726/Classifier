@@ -1,85 +1,71 @@
 # 开发路线图
 
-> 版本：v2.0 | 日期：2026-03-19
+> 版本：v3.1 | 日期：2026-03-20
+> 当前以 v3 架构为准，详细设计见 [ROADMAP_V3.md](ROADMAP_V3.md)。本文件用于跟踪“已完成 / 进行中 / 下一步”的实际状态。
 
-## Phase 1 — MVP（核心扫描 + 分类 + 移动 + 安全基础）
+## 已完成
 
-目标：能扫描目录、自动分类、手动修正、移动文件夹，建立安全操作基础
+### Phase 1 — MVP 基础能力
 
-**后端：**
-- [ ] 后端项目初始化（Go module、Gin、SQLite）
-- [ ] Docker 多阶段构建配置
-- [ ] 数据库 schema + migration（folders / snapshots / audit_logs）
-- [ ] Scanner Service：递归扫描 /data/source
-- [ ] Classifier Service：扩展名 + 比例判断分类
-- [ ] Folder CRUD API（GET/PATCH/DELETE）
-- [ ] SSE Broker 基础实现
-- [ ] Move Service：移动文件夹到 /data/target
-- [ ] Snapshot Service：移动前自动创建快照
-- [ ] Snapshot API（GET + POST revert）
-- [ ] AuditLog Service：写入扫描、分类、移动操作
-- [ ] 健康检查端点（/health）
+- [x] Go + Gin + SQLite 基础工程
+- [x] Folder 扫描、分类、列表、状态修改
+- [x] Move + Snapshot + Audit 基础链路
+- [x] SSE 基础推送
+- [x] 前端 FolderList / Settings / SnapshotDrawer
 
-**前端：**
-- [ ] 前端项目初始化（Vite + React + TypeScript + Tailwind + shadcn/ui）
-- [ ] FolderListPage：列表、筛选、分类修正
-- [ ] SettingsPage：source/target 目录配置
-- [ ] SSE hook：连接 /api/events，更新 Zustand store
-- [ ] SnapshotDrawer：查看操作快照、一键回退
+### Phase 1.5 — v3 基础设施已落地
 
-**验收标准：** 能扫描 → 看到分类结果 → 手动修正 → 移动到目标目录 → 出错可回退
+- [x] 新增 `jobs` 表与 JobRepository
+- [x] `POST /api/jobs/move` 返回 `job_id`，不再只是临时 `operation_id`
+- [x] 新增 `GET /api/jobs`
+- [x] 新增 `GET /api/jobs/:id`
+- [x] 新增 `GET /api/jobs/:id/progress`
+- [x] MoveService 会持久化 Job 状态与进度
+- [x] Folder 删除改为软删除
+- [x] 新增 `POST /api/folders/:id/restore`
+- [x] `folders` 查询默认过滤已删除记录
+- [x] v3 设计文档集补齐
 
----
+## 进行中
 
-## Phase 2 — 批量操作 + 节点式工作流
+### Phase 2 — 工作流执行模型
 
-目标：完整批量处理能力 + 可视化节点工作流配置
+- [ ] 新增 `workflow_runs`
+- [ ] 新增 `node_runs`
+- [ ] 新增 `node_snapshots`
+- [ ] 新增 `workflow_definitions`
+- [ ] 实现 WorkflowRunner
+- [ ] 将 `MoveService` 下沉为 `move` 节点执行器
+- [ ] 实现 WorkflowRun resume / rollback
 
-**后端：**
-- [ ] Job Scheduler：队列 + 有界并发 goroutine pool
-- [ ] Rename Service：Token 模板解析 + 批量重命名
-- [ ] Token 系统：{index} {date} {filename} {foldername} {ext} 等
-- [ ] 预设重命名规则（4 个内置模板）
-- [ ] Compress Service：archive/zip 快速压缩图片目录
-- [ ] Thumbnail Service：FFmpeg 生成 Emby 规范缩略图
-- [ ] Job API（POST/GET/DELETE）
-- [ ] RenameRule API（CRUD + preview）
-- [ ] Workflow Service：DAG 执行引擎（拓扑排序 + 节点执行）
-- [ ] Workflow API（CRUD + validate + run）
-- [ ] Snapshot：重命名/移动前自动快照
-- [ ] AuditLog：写入重命名、压缩、缩略图操作
+## 下一步
 
-**前端：**
-- [ ] JobsPage：任务列表 + 实时进度条
-- [ ] RulesPage：Token 重命名编辑器（拖拽 Token、实时预览）
-- [ ] WorkflowsPage：React Flow 节点图编辑器
-- [ ] LogsPage：审计日志列表 + 筛选 + CSV 导出
-- [ ] FolderToolbar：批量操作按钮
+### Phase 3 — 节点能力补齐
 
-**验收标准：** 能配置节点工作流 → 批量重命名（预览正确）→ 压缩图片目录 → 生成 Emby 缩略图 → 审计日志可查
+- [ ] Rename 节点（文件 + 文件夹）
+- [ ] Compress 节点
+- [ ] Thumbnail 节点
+- [ ] 节点级 snapshot 与补偿
+- [ ] 条件节点与等待节点
 
----
+### Phase 4 — 分类器节点化
 
-## Phase 3 — 并发优化 + 体验打磨
+- [ ] `name-keyword-classifier`
+- [ ] `file-tree-classifier`
+- [ ] `ext-ratio-classifier`
+- [ ] `manual-classifier`
 
-目标：生产可用，流畅体验，支持大规模处理
+### Phase 5 — 前端与配置系统
 
-**性能：**
-- [ ] 并发扫描（多目录同时扫描）
-- [ ] 扫描增量更新（只扫描新增/变更文件夹）
-- [ ] Magic bytes 检测（处理无扩展名文件）
-- [ ] 前端虚拟列表（react-window）
-- [ ] 任务取消（cancel running job）
-- [ ] 错误重试机制（失败 Job 自动重试 3 次）
+- [ ] JobsPage 三层结构（Job / WorkflowRun / NodeRun）
+- [ ] WorkflowsPage 节点编辑器
+- [ ] SSE + HTTP polling fallback
+- [ ] `app_config` 结构化配置与迁移
+- [ ] SettingsPage 重构为强类型配置表单
 
-**工作流增强：**
-- [ ] 条件节点（如：仅当文件数 > N 时执行压缩）
-- [ ] 工作流执行历史记录
-- [ ] 自定义分类规则（用户扩展扩展名映射）
+## 风险与约束
 
-**运维：**
-- [ ] 审计日志自动清理（保留最近 N 天）
-- [ ] 配置导入/导出（JSON）
-- [ ] 快照自动过期清理（保留最近 30 天）
-
-**验收标准：** 处理 1000+ 文件夹流畅，任务可取消，审计日志完整
+- 当前仍未实现真正的 WorkflowRunner，现有 Job 仅覆盖 move 任务
+- 当前配置系统仍是简单 KV + env，尚未迁移到 `app_config`
+- 当前 Snapshot 仍是 operation/folder 粒度，尚未切换到 node 粒度
+- 前端尚未接入新的 Job 查询接口

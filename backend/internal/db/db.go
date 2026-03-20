@@ -57,8 +57,18 @@ func runMigrations(database *sql.DB) error {
 			continue
 		}
 
-		if _, err := database.Exec(sqlText); err != nil {
-			return fmt.Errorf("runMigrations exec %s: %w", path, err)
+		for _, stmt := range strings.Split(sqlText, ";") {
+			stmt = strings.TrimSpace(stmt)
+			if stmt == "" {
+				continue
+			}
+
+			if _, err := database.Exec(stmt); err != nil {
+				if strings.Contains(err.Error(), "duplicate column name") {
+					continue
+				}
+				return fmt.Errorf("runMigrations exec %s: %w", path, err)
+			}
 		}
 	}
 

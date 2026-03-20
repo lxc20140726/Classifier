@@ -13,7 +13,17 @@ type FolderRepository interface {
 	UpdateCategory(ctx context.Context, id, category, source string) error
 	UpdateStatus(ctx context.Context, id, status string) error
 	UpdatePath(ctx context.Context, id, newPath string) error
+	SoftDelete(ctx context.Context, id, currentPath, originalPath string) error
+	Restore(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
+}
+
+type JobRepository interface {
+	Create(ctx context.Context, job *Job) error
+	GetByID(ctx context.Context, id string) (*Job, error)
+	List(ctx context.Context, filter JobListFilter) ([]*Job, int, error)
+	UpdateStatus(ctx context.Context, id, status, errMsg string) error
+	IncrementProgress(ctx context.Context, id string, successDelta, failedDelta int) error
 }
 
 type SnapshotRepository interface {

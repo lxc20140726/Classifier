@@ -1,5 +1,7 @@
 # Classifier — 系统架构
 
+> 更新说明：若查看最新的 Job-Workflow-Node 三层设计、节点级快照、SSE+轮询混合方案，请优先阅读 [ARCHITECTURE_V3.md](ARCHITECTURE_V3.md)。
+
 > 版本：v2.0 | 日期：2026-03-19
 
 ## 概述

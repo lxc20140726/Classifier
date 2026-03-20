@@ -4,16 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	dbpkg "github.com/liqiye/classifier/internal/db"
+	"github.com/liqiye/classifier/internal/repository"
 	"github.com/liqiye/classifier/internal/service"
 )
+
+var moveHandlerDBCounter uint64
 
 type moveCall struct {
 	input service.MoveFolderInput
@@ -39,9 +45,23 @@ func (s *stubMover) MoveFolders(_ context.Context, input service.MoveFolderInput
 	return nil
 }
 
-func setupMoveRouter(mover MoveExecutor) *gin.Engine {
+func newMoveHandlerTestDB(t *testing.T) repository.JobRepository {
+	t.Helper()
+
+	id := atomic.AddUint64(&moveHandlerDBCounter, 1)
+	dsn := fmt.Sprintf("file:classifier_move_handler_%d?cache=shared&mode=memory", id)
+	database, err := dbpkg.Open(dsn)
+	if err != nil {
+		t.Fatalf("db.Open(%q) error = %v", dsn, err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	return repository.NewJobRepository(database)
+}
+
+func setupMoveRouter(mover MoveExecutor, jobs repository.JobRepository) *gin.Engine {
 	g := gin.New()
-	h := NewMoveHandler(mover)
+	h := NewMoveHandler(mover, jobs)
 	g.POST("/move", h.Start)
 	return g
 }
@@ -49,9 +69,10 @@ func setupMoveRouter(mover MoveExecutor) *gin.Engine {
 func TestMoveHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	t.Run("valid request returns 202 and operation_id", func(t *testing.T) {
+	t.Run("valid request returns 202 and job_id", func(t *testing.T) {
 		mover := newStubMover()
-		router := setupMoveRouter(mover)
+		jobs := newMoveHandlerTestDB(t)
+		router := setupMoveRouter(mover, jobs)
 
 		req := httptest.NewRequest(http.MethodPost, "/move", bytes.NewBufferString(`{"folder_ids":["f1"],"target_dir":"/data/target"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -64,20 +85,21 @@ func TestMoveHandler(t *testing.T) {
 		}
 
 		var payload struct {
-			OperationID string `json:"operation_id"`
+			JobID string `json:"job_id"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
 			t.Fatalf("json.Unmarshal() error = %v", err)
 		}
 
-		if payload.OperationID == "" {
-			t.Fatalf("operation_id = %q, want non-empty", payload.OperationID)
+		if payload.JobID == "" {
+			t.Fatalf("job_id = %q, want non-empty", payload.JobID)
 		}
 	})
 
 	t.Run("invalid JSON returns 400", func(t *testing.T) {
 		mover := newStubMover()
-		router := setupMoveRouter(mover)
+		jobs := newMoveHandlerTestDB(t)
+		router := setupMoveRouter(mover, jobs)
 
 		req := httptest.NewRequest(http.MethodPost, "/move", bytes.NewBufferString(`{"folder_ids":["f1"],"target_dir":`))
 		req.Header.Set("Content-Type", "application/json")
@@ -101,7 +123,8 @@ func TestMoveHandler(t *testing.T) {
 
 	t.Run("empty folder_ids returns 400", func(t *testing.T) {
 		mover := newStubMover()
-		router := setupMoveRouter(mover)
+		jobs := newMoveHandlerTestDB(t)
+		router := setupMoveRouter(mover, jobs)
 
 		req := httptest.NewRequest(http.MethodPost, "/move", bytes.NewBufferString(`{"folder_ids":[],"target_dir":"/data/target"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -116,7 +139,8 @@ func TestMoveHandler(t *testing.T) {
 
 	t.Run("empty target_dir returns 400", func(t *testing.T) {
 		mover := newStubMover()
-		router := setupMoveRouter(mover)
+		jobs := newMoveHandlerTestDB(t)
+		router := setupMoveRouter(mover, jobs)
 
 		req := httptest.NewRequest(http.MethodPost, "/move", bytes.NewBufferString(`{"folder_ids":["f1"],"target_dir":""}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -131,7 +155,8 @@ func TestMoveHandler(t *testing.T) {
 
 	t.Run("background call receives exact folder_ids and target_dir", func(t *testing.T) {
 		mover := newStubMover()
-		router := setupMoveRouter(mover)
+		jobs := newMoveHandlerTestDB(t)
+		router := setupMoveRouter(mover, jobs)
 
 		folderIDs := []string{"f1", "f2", "f3"}
 		targetDir := "/data/target"
@@ -154,8 +179,8 @@ func TestMoveHandler(t *testing.T) {
 			if call.input.TargetDir != targetDir {
 				t.Fatalf("TargetDir = %q, want %q", call.input.TargetDir, targetDir)
 			}
-			if call.input.OperationID == "" {
-				t.Fatalf("OperationID = %q, want non-empty", call.input.OperationID)
+			if call.input.JobID == "" {
+				t.Fatalf("JobID = %q, want non-empty", call.input.JobID)
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timeout waiting for MoveFolders call")
