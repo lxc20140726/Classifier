@@ -1,6 +1,6 @@
 # 开发路线图
 
-> 版本：v3.3 | 日期：2026-03-20
+> 版本：v3.4 | 日期：2026-03-23
 > 当前实现以仓库实际代码为准，v3 目标设计见 [ROADMAP_V3.md](ROADMAP_V3.md)。本文件只跟踪当前仓库里的"已完成 / 进行中 / 下一步"。
 
 ## 已完成
@@ -52,8 +52,12 @@
 - [x] 主界面升级为中文仪表盘：目录列表 / 网格切换 / 最近任务 / 最近日志 / 扫描进度
 - [x] 通知系统：任务完成 / 失败 toast
 - [x] SnapshotDrawer 升级为时间线展示
-- [x] SettingsPage 改为多扫描目录配置
+- [x] SettingsPage 改为多扫描目录配置（图形 DirPicker 选择器）
 - [x] 前端用户可见文案统一为中文
+- [x] `GET /api/fs/dirs` 目录浏览 API
+- [x] Snapshot 回退 preflight 安全检查 + 结构化 RevertResult
+- [x] SnapshotDrawer 回退失败详情面板
+- [x] `dev.sh` 一键本地启动脚本
 
 ## 进行中
 

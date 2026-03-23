@@ -1,211 +1,171 @@
-# Classifier — 系统架构 v3.0
+# Classifier — 系统架构 v3.1
 
-> 版本：v3.0 | 日期：2026-03-20
-> **重大变更**：引入 Job-Workflow-Node 三层模型，节点粒度快照，分类器节点化，SSE+轮询混合方案
+> 版本：v3.1 | 日期：2026-03-23
+> 本文描述仓库当前**已实现**的架构。v3 长期目标（WorkflowRunner / NodeExecutor）仍在规划中，见 [ROADMAP_V3.md](ROADMAP_V3.md)。
 
 ## 概述
 
 Classifier 是一个部署在 NAS 上的媒体文件整理 Web 应用。单 Docker 容器内包含 Go 后端、React 前端静态文件和 FFmpeg，通过 bind mount 访问宿主机文件系统。
 
-## 核心架构变更
-
-### 三层执行模型
+## 已实现架构图
 
 ```
-Job (用户提交的顶层任务)
- └── WorkflowRun (每个文件夹对应一个工作流执行实例)
-      └── NodeRun (工作流中每个节点的执行记录)
-           └── NodeSnapshot (节点执行前后的文件系统快照)
+┌──────────────────────────────────────────────────────────────┐
+│                      Docker Container                         │
+│                                                               │
+│  ┌──────────────┐   HTTP/SSE   ┌───────────────────────────┐ │
+│  │  React SPA   │ ◄──────────► │  Gin HTTP Server :8080    │ │
+│  │  (静态文件)   │              └─────────────┬─────────────┘ │
+│  └──────────────┘                            │               │
+│                                              │               │
+│                          ┌───────────────────┤               │
+│                          │                   │               │
+│  ┌───────────────┐  ┌────▼────┐  ┌──────────▼────────────┐  │
+│  │ SSE Broker    │  │ Config  │  │ FS Handler             │  │
+│  │ (扫描/移动    │  │ Handler │  │ /api/fs/dirs           │  │
+│  │  进度推送)    │  └─────────┘  └───────────────────────┘  │
+│  └───────┬───────┘                                           │
+│          │                                                    │
+│  ┌───────▼──────────────────────────────────────────────┐    │
+│  │                    Service Layer                      │    │
+│  │  ScannerService │ MoveService │ SnapshotService       │    │
+│  │  AuditService   │ ClassifyService                     │    │
+│  └───────────────────────────┬───────────────────────────┘    │
+│                              │                                │
+│  ┌───────────────────────────▼───────────────────────────┐    │
+│  │                 Repository Layer (SQLite)              │    │
+│  │  FolderRepository │ JobRepository │ SnapshotRepository │    │
+│  │  AuditRepository  │ ConfigRepository                   │    │
+│  └───────────────────────────┬───────────────────────────┘    │
+│                              │                                │
+│  ┌───────────────────────────▼───────────────────────────┐    │
+│  │                   FS Adapter Layer                     │    │
+│  │  ReadDir │ Stat │ MoveDir │ MkdirAll │ Remove │ Exists │    │
+│  │  /data/source  │  /data/target  │  /data/delete_staging│    │
+│  └───────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**关键设计决策**：
-- 用户提交一次操作 → 创建一个 `Job`
-- 每个文件夹执行其对应分类的工作流 → 创建 `WorkflowRun`
-- 工作流中每个步骤 → 创建 `NodeRun`
-- 每个节点执行前后 → 创建 `NodeSnapshot`（pre/post）
-- 支持节点级断点续传和部分回退
+## 核心服务边界
 
-## 系统架构图
+| 服务 | 职责 |
+|------|------|
+| `ScannerService` | 遍历用户配置的多个 sourceDir 的直接子目录，逐目录分类并落库，每目录立即触发 SSE 进度事件 |
+| `MoveService` | 将文件夹从 source 移动到 target，含 Snapshot 记录、audit 写入、SSE 进度推送 |
+| `SnapshotService` | 操作前创建 before 状态，操作后 CommitAfter，Revert 含 preflight 检查防止数据丢失 |
+| `AuditService` | 薄封装，将所有操作记录写入 `audit_logs` 表 |
+| `ClassifyService` | 基于文件名关键词 + 文件扩展名比例对目录进行分类（photo/video/mixed/manga/other）|
+| `FSHandler` | 提供 `GET /api/fs/dirs?path=` 给前端目录浏览器使用 |
 
-```
-┌─────────────────────┐
-│                    Docker Container                  │
-│              │
-│  ┌──────────────┐    HTTP/SSE+Poll   ┌──────────────────────┐  │
-│  │  React SPA   │ ◄───────────► │  Gin HTTP Server     │  │
-│  │  (静态文件)   │           │  :8080               │  │
-│  └──────────────┘                     └──────┬───────────┘  │
-│                   │        │
-│       ┌─────────────┤              │
-│      │                      │          │
-│  ┌──────▼──────┐   ┌──────────┐   ┌─────────▼────────┐  │
-│  │ Workflow    │   │ SSE      │   │ Config Service        │  │
-│  │ Runner      │   │ Broker   │   │ (版本化+热更新)         │  │
-│  │ (DAG执行)   │   │          │   └────────────┘  │
-│  └──────┬──────┘   └──────────┘                  │
-│         │             │
-│  ┌──────▼───────────────┐ │
-│  │              Service Layer                   │ │
-│  │  NodeExecutor │ Classifier │ Rename │ Compress │ Move     │ │
-│  │  Snapshot │ AuditLog │ SoftDelete              │ │
-│  └───────────────┬────────────────────┘ │
-│             │                         │
-│  ┌────────────────▼────────────────────────────┐   │
-│  │        Repository Layer (SQLite)             │   │
-│  │  jobs │ workflow_runs │ node_runs │ node_snapshots      │   │
-│  │  folders │ workflow_definitions │ audit_logs │ config   │   │
-│  └──────────────────────┬──────────────────────┘   │
-│              │                  │
-│  ┌──────────────────────▼─────────────────┐   │
-│  │              FS Adapter Layer                │   │
-│  │  /data/source (ro) │ /data/target (rw)              │   │
-│  │  /data/delete_staging │ /config (named vol)             │   │
-│  └───────────────────────────┘   │
-└────────────────────┘
-```
-
-## 分层说明
-
-| 层次 | 职责 | 变更说明 |
-|------|------|---------|
-| Transport | Gin router、SSE hub、静态文件服务 | 新增 Job 状态查询 API |
-| Handler | 请求解析、参数校验、响应序列化 | 新增 Job/WorkflowRun/NodeRun handlers |
-| Service | 业务逻辑 | 新增 WorkflowRunner、NodeExecutor、ConfigService |
-| Repository | SQLite CRUD | 新增 Job/WorkflowRun/NodeRun/NodeSnapshot repositories |
-| FS Adapter | 文件系统操作 | 新增软删除目录支持 |
-
-## 模块依赖关系
+## 执行模型（当前实现）
 
 ```
-Handler
-  └─► Service
-      ├─► Repository (SQLite)
-        ├─► FS Adapter
-        ├─► SSE Broker (实时推送)
-        └─► WorkflowRunner (DAG 执行)
-
-WorkflowRunner
-  └─► NodeExecutor (节点执行器)
-        ├─► NodeSnapshot (节点快照)
-        ├─► AuditLog (审计日志)
-     └─► SSE Broker (进度推送)
+Job（顶层持久化任务）
+  ├── type=scan  → ScannerService.Scan()  逐目录处理，实时 SSE 反馈
+  └── type=move  → MoveService.MoveFolders()  批量移动，含 Snapshot
 ```
 
-## 数据流
+> v3 目标的 WorkflowRun / NodeRun / NodeExecutor 三层模型尚未实现，见 ROADMAP_V3.md。
 
-### 用户提交工作流任务
-
-```
-用户选择文件夹 + 点击"运行工作流"
-  │
-  ├─► POST /api/jobs/run-workflow
-  │     └─► Handler 创建 Job 记录
-  │        └─► 异步启动 WorkflowRunner
-  │             │
-  │                 ├─► 为每个文件夹创建 WorkflowRun
-  │              │     └─► 按 DAG 拓扑排序执行节点
-  │                 │         │
-  │             │           ├─► 创建 NodeRun (pending)
-  │             │    ├─► 创建 NodeSnapshot (pre)
-  │             │           ├─► 执行节点逻辑
-  │                 │           ├─► 创建 NodeSnapshot (post)
-  │                 │           ├─► 更新 NodeRun (succeeded)
-  │                 │           ├─► 写入 AuditLog
-  │                 │           └─► 发送 SSE (job.progress)
-  │                 │
-  │         └─► 更新 Job 状态 (done/failed/partial)
-  │
-  └─► 返回 {"job_id": "uuid"}
-```
-
-### 客户端获取进度
+## 扫描流程
 
 ```
-客户端策略：
-  1. 建立 SSE 连接 (/api/events)
-  2. 监听 job.progress 事件
-  3. SSE 断开时切换为 HTTP 轮询
-  4. 轮询 GET /api/jobs/:id/progress
-  5. SSE 重连后先 poll 一次同步状态
+POST /api/folders/scan
+  1. 从 config 表读取 scan_input_dirs（多目录 JSON 数组）
+  2. 创建 Job(type=scan, status=pending)
+  3. 返回 {job_id, source_dirs, started: true}
+  4. 后台 goroutine:
+     a. 遍历每个 sourceDir 的直接子目录
+     b. 每发现一个目录：
+        - ReadDir 获取文件列表
+        - 计算 image_count / video_count / total_files / total_size
+        - Classify() 自动分类
+        - Upsert 到 folders 表（含 source_dir / relative_path）
+        - 创建 classify 类型 Snapshot（含 detail 元数据）
+        - 写入 AuditLog
+        - publish scan.progress / job.progress SSE 事件
+     c. 全部完成后 publish scan.done / job.done
 ```
 
-## 断点续传机制
+## Snapshot 回退安全设计
 
 ```
-WorkflowRun 失败后：
-  1. 记录 last_node_id (最后成功节点)
-  2. 记录 resume_node_id (下次从哪开始)
-  3. 用户点击"重试"
-  4. WorkflowRunner 从 resume_node_id 开始执行
-  5. 跳过已成功节点（sequence < resume_seq）
-  6. 继续执行后续节点
-```
+SnapshotService.Revert(snapshotID)
+  1. Preflight 检查（不触及文件系统）：
+     - 验证 current_path 存在
+     - 验证 original_path 未被占用
+     - 任何一项失败 → 返回 RevertResult{ok:false, preflight_error, current_state}
+  2. 通过后执行 MoveDir
+  3. 更新 folders.path
+  4. 更新 snapshot.status = "reverted"
+  5. 返回 RevertResult{ok:true, current_state}
 
-## 节点回退机制
-
-```
-NodeRun 失败后触发回退：
-  1. 找到该 WorkflowRun 的所有已成功节点
-  2. 按逆序执行补偿操作：
-     - rename: 用 pre-snapshot 路径重命名回去
-     - compress: 删除压缩包
-     - thumbnail: 删除缩略图目录
-     - move: 移回原路径
-  3. 更新 NodeRun.rollback_status = succeeded
-  4. 更新 WorkflowRun.status = partial
+失败不造成任何文件系统变更（preflight 阶段）或文件丢失（move 失败后 current_state 仍可查）。
 ```
 
 ## 软删除机制
 
 ```
-用户删除文件夹：
-  1. 移动到 /data/delete_staging/{folder_name}
-  2. 更新 folders.deleted_at = CURRENT_TIMESTAMP
-  3. 更新 folders.delete_staging_path = 新路径
-  4. 写入 audit_log (action=soft_delete)
+DELETE /api/folders/:id（软删除）
+  1. 移动文件夹到 /data/delete_staging/{folder_name}
+  2. 更新 folders.deleted_at / delete_staging_path
+  3. 写入 audit_log(action=soft_delete)
 
-用户恢复文件夹：
+POST /api/folders/:id/restore
   1. 移回原路径
   2. 更新 folders.deleted_at = NULL
-  3. 写入 audit_log (action=restore)
-
-定时清理任务：
-  1. 查询 deleted_at < now() - 30 days
-  2. 物理删除文件
-  3. 硬删除数据库记录
+  3. 写入 audit_log(action=restore)
 ```
 
-## 配置系统架构
+## 目录浏览器
 
 ```
-配置加载链路：
-  1. 代码默认值 (AppConfig struct)
-  2. 数据库配置 (app_config 表)
-  3. 环境变量覆盖
-  4. 运行时动态更新
-
-配置保存流程：
-  1. 验证 (validator)
-  2. 序列化 JSON
-  3. 计算 checksum
-  4. 保存到数据库
-  5. 触发热更新钩子
-  6. 相关服务重载配置
+GET /api/fs/dirs?path=/some/dir
+  - 使用 FSAdapter.Stat 验证路径存在且为目录
+  - 使用 FSAdapter.ReadDir 列出直接子目录
+  - 过滤隐藏目录（以 . 开头）
+  - 返回 {path, parent, entries:[{name, path}]}
 ```
+
+## 层间依赖约束
+
+```
+Handler
+  └─► Service
+        ├─► Repository (SQLite)
+        ├─► FS Adapter（唯一可调用 os.* 的层）
+        ├─► SSE Broker
+        └─► （AuditWriter / SnapshotRecorder 接口注入）
+```
+
+- Handler 和 Service 不得直接调用 `os.*`
+- Service 之间通过接口注入依赖，避免循环
+- 所有阻塞/IO 操作需传入 `context.Context`
+
+## 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 后端语言 | Go 1.23 |
+| HTTP 框架 | Gin |
+| 数据库 | SQLite（`modernc.org/sqlite`，CGO_ENABLED=0）|
+| 实时推送 | SSE（Server-Sent Events）|
+| 前端框架 | React 18 + TypeScript + Vite |
+| 状态管理 | Zustand |
+| 样式 | Tailwind CSS |
+| 容器 | Docker multi-stage + Alpine |
 
 ## 文档索引
 
 | 文档 | 内容 |
 |------|------|
-| [TECH_STACK.md](TECH_STACK.md) | 技术栈选型与决策记录 |
-| [API_V3.md](API_V3.md) | 完整 REST API + SSE 事件设计 (v3) |
-| [DATA_MODELS_V3.md](DATA_MODELS_V3.md) | 数据模型与 SQLite Schema (v3) |
-| [FRONTEND.md](FRONTEND.md) | 前端页面、组件树、状态管理 |
-| [CLASSIFICATION_V3.md](CLASSIFICATION_V3.md) | 分类器节点化设计 (v3) |
-| [WORKFLOW_V3.md](WORKFLOW_V3.md) | 节点式工作流系统设计 (v3) |
-| [SNAPSHOT_V3.md](SNAPSHOT_V3.md) | 节点粒度快照与回退设计 (v3) |
-| [AUDIT_LOG.md](AUDIT_LOG.md) | 审计日志系统设计 |
-| [RENAME_EDITOR_V3.md](RENAME_EDITOR_V3.md) | 重命名编辑器（支持文件夹重命名）(v3) |
-| [CONFIG_SYSTEM.md](CONFIG_SYSTEM.md) | 配置系统设计（版本化+热更新）(NEW) |
+| [API_V3.md](API_V3.md) | 完整 REST API + SSE 事件（已实现）|
+| [DATA_MODELS_V3.md](DATA_MODELS_V3.md) | SQLite Schema 与数据模型 |
+| [FRONTEND_V3.md](FRONTEND_V3.md) | 前端页面、组件、状态管理 |
+| [SNAPSHOT_V3.md](SNAPSHOT_V3.md) | Snapshot 回退设计 |
+| [CLASSIFICATION_V3.md](CLASSIFICATION_V3.md) | 文件分类算法 |
+| [WORKFLOW_V3.md](WORKFLOW_V3.md) | 节点式工作流（规划中）|
+| [AUDIT_LOG.md](AUDIT_LOG.md) | 审计日志系统 |
+| [ROADMAP_V3.md](ROADMAP_V3.md) | 开发路线图 |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker 部署配置 |
-| [ROADMAP_V3.md](ROADMAP_V3.md) | 开发路线图 (v3) |
+| [ZSPACE_DEPLOYMENT.md](ZSPACE_DEPLOYMENT.md) | 极空间 NAS 部署 |
