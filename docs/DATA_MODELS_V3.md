@@ -12,7 +12,7 @@
 ```sql
 CREATE TABLE folders (
     id              TEXT PRIMARY KEY,
-    path            TEXT NOT NULL UNIQUE,          -- 绝对路径（仅对 deleted_at IS NULL 唯一）
+    path            TEXT NOT NULL UNIQUE,          -- 绝对路径（active 记录唯一；隐藏记录仍保留原始 path）
     name            TEXT NOT NULL,
     category        TEXT NOT NULL DEFAULT 'other', -- photo|video|mixed|manga|other
     category_source TEXT NOT NULL DEFAULT 'auto',  -- auto|manual
@@ -42,7 +42,7 @@ CREATE TABLE audit_logs (
     job_id      TEXT,
     folder_id   TEXT,
     folder_path TEXT NOT NULL,
-    action      TEXT NOT NULL,   -- scan|move|soft_delete|restore|revert
+    action      TEXT NOT NULL,   -- scan|move|suppress|unsuppress|revert
     level       TEXT NOT NULL DEFAULT 'info',
     detail      TEXT,            -- JSON 元数据
     result      TEXT NOT NULL,   -- success|failed
@@ -57,7 +57,7 @@ CREATE TABLE config (
 );
 ```
 
-### 003_v3_jobs.sql — Jobs 与软删除
+### 003_v3_jobs.sql — Jobs 与记录隐藏状态（复用 deleted_at 字段表示 suppression）
 
 ```sql
 CREATE TABLE jobs (
@@ -79,7 +79,7 @@ CREATE TABLE jobs (
 ALTER TABLE folders ADD COLUMN deleted_at DATETIME;
 ALTER TABLE folders ADD COLUMN delete_staging_path TEXT;
 
--- 唯一约束只约束未删除记录
+-- 当前实现仍复用 deleted_at 表示“已在软件内隐藏/抑制”，并保留 active path 唯一约束
 CREATE UNIQUE INDEX ux_folders_path_active ON folders(path) WHERE deleted_at IS NULL;
 ```
 
@@ -113,8 +113,8 @@ type Folder struct {
     TotalFiles       int        `db:"total_files"`
     TotalSize        int64      `db:"total_size"`
     MarkedForMove    bool       `db:"marked_for_move"`
-    DeletedAt        *time.Time `db:"deleted_at"`
-    DeleteStagingPath string    `db:"delete_staging_path"`
+    DeletedAt        *time.Time `db:"deleted_at"`       // 当前实现中表示“已隐藏/抑制”
+    DeleteStagingPath string    `db:"delete_staging_path"` // 历史遗留字段，当前隐藏语义下不再用于文件系统移动
     ScannedAt        time.Time  `db:"scanned_at"`
     UpdatedAt        time.Time  `db:"updated_at"`
 }
@@ -222,8 +222,8 @@ type FolderRepository interface {
     UpdateCategory(ctx, id, category, source) error
     UpdateStatus(ctx, id, status) error
     UpdatePath(ctx, id, newPath) error
-    SoftDelete(ctx, id, currentPath, originalPath) error
-    Restore(ctx, id) error
+    Suppress(ctx, id, currentPath, originalPath) error
+    Unsuppress(ctx, id) error
     Delete(ctx, id) error
 }
 

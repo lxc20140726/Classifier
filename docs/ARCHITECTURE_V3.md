@@ -41,7 +41,7 @@ Classifier 是一个部署在 NAS 上的媒体文件整理 Web 应用。单 Dock
 │  ┌───────────────────────────▼───────────────────────────┐    │
 │  │                   FS Adapter Layer                     │    │
 │  │  ReadDir │ Stat │ MoveDir │ MkdirAll │ Remove │ Exists │    │
-│  │  /data/source  │  /data/target  │  /data/delete_staging│    │
+│  │  /data/source  │  /data/target                         │    │
 │  └───────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -103,18 +103,17 @@ SnapshotService.Revert(snapshotID)
 失败不造成任何文件系统变更（preflight 阶段）或文件丢失（move 失败后 current_state 仍可查）。
 ```
 
-## 软删除机制
+## 记录隐藏机制
 
 ```
-DELETE /api/folders/:id（软删除）
-  1. 移动文件夹到 /data/delete_staging/{folder_name}
-  2. 更新 folders.deleted_at / delete_staging_path
-  3. 写入 audit_log(action=soft_delete)
+DELETE /api/folders/:id（软件内隐藏记录）
+  1. 仅更新 folders.deleted_at = CURRENT_TIMESTAMP
+  2. 不移动、不删除、不改动真实文件
+  3. ScannerService 在 discoverTargets 阶段检查 suppressed path，并跳过同路径目录
 
-POST /api/folders/:id/restore
-  1. 移回原路径
-  2. 更新 folders.deleted_at = NULL
-  3. 写入 audit_log(action=restore)
+POST /api/folders/:id/restore（恢复扫描）
+  1. 仅更新 folders.deleted_at = NULL
+  2. 后续扫描可再次发现该目录
 ```
 
 ## 目录浏览器

@@ -12,8 +12,8 @@ POST   /api/folders/scan                # 触发扫描，返回 job_id
 GET    /api/folders/:id                 # 单个详情
 PATCH  /api/folders/:id/category        # 手动修正分类
 PATCH  /api/folders/:id/status          # 标记状态（pending/done/skip）
-DELETE /api/folders/:id                 # 软删除
-POST   /api/folders/:id/restore         # 恢复软删除
+DELETE /api/folders/:id                 # 隐藏目录记录（不改动真实文件）
+POST   /api/folders/:id/restore         # 恢复扫描（取消隐藏）
 
 # Job 管理
 GET    /api/jobs                        # 任务列表（?status=&type=&page=&limit=）
