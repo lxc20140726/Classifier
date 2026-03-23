@@ -15,7 +15,7 @@
   - [ ] workflow_definitions
   - [ ] app_config
 - [x] Job 查询与进度轮询接口
-- [x] Folder 软删除与恢复
+- [x] Folder 记录隐藏/恢复扫描（不改动真实文件）
 - [x] 扫描动作持久化为 scan Job
 - [x] 扫描链路 SSE 反馈（started / progress / error / done）
 - [x] GET /api/audit-logs

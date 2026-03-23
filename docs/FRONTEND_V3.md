@@ -65,8 +65,8 @@ interface FolderStore {
   handleScanDone(): void
   updateFolderCategory(id, category): Promise<void>
   updateFolderStatus(id, status): Promise<void>
-  removeFolder(id): Promise<void>
-  restoreFolder(id): Promise<void>
+  suppressFolder(id): Promise<void>
+  unsuppressFolder(id): Promise<void>
 }
 ```
 
@@ -195,7 +195,7 @@ job.error      → useJobStore.handleJobError()
 ## 规划中（未实现）
 
 - `[规划]` `/workflows` WorkflowDefsPage 节点编辑器
-- `[规划]` `/deleted` 软删除文件夹列表页
+- `[规划]` `/hidden` 已隐藏文件夹列表页（应用级隐藏记录）
 - `[规划]` JobsPage 三层展开（Job → WorkflowRun → NodeRun）
 - `[规划]` 工作流节点输出目录配置 UI
 - `[规划]` 独立审计日志页（高级过滤 / 导出）

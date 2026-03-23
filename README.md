@@ -12,7 +12,7 @@
 - Snapshot 快照：创建、查询、回滚、时间线 detail 元数据
 - AuditLog 审计日志：记录所有文件操作并提供 HTTP 查询接口
 - Config 配置读取与保存（支持多扫描目录）
-- Folder 软删除与恢复
+- Folder 记录隐藏与恢复扫描（不改动真实文件）
 - 中文前端仪表盘：目录网格/列表、最近任务、最近日志、通知提示
 - 前端 Job 历史查看与轮询
 - NAS 友好的 Docker / docker-compose 部署
@@ -115,7 +115,7 @@ Vite 已配置将 `/api` 代理到 `http://localhost:8080`。
 6. 点击“快照时间线”检查分类快照 detail
 7. 选中文件夹，点击“移动所选”验证 move job
 8. 进入 `http://localhost:5173/jobs` 查看任务历史
-9. 软删除后可通过 Restore 恢复
+9. 隐藏后可通过 Restore 恢复扫描，不影响真实文件
 
 ### 5. 构建命令
 

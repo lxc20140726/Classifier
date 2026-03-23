@@ -29,13 +29,14 @@
 - [x] MoveService 持久化 Job 状态与进度
 - [x] ScannerService：逐目录扫描、逐目录落库、逐目录立即分类
 - [x] scan.started / scan.progress / scan.error / scan.done SSE 事件
-- [x] Folder 软删除 + POST /api/folders/:id/restore
-- [x] folders 查询默认过滤已删除记录
+- [x] Folder 记录隐藏（不改动真实文件）+ POST /api/folders/:id/restore
+- [x] folders 查询默认过滤已隐藏记录
 - [x] GET /api/audit-logs（支持 job_id / folder_id / action / result 过滤）
 - [x] Snapshot detail 元数据（分类结果 / 源目录 / 相对路径）
 - [x] folders.source_dir / folders.relative_path 持久化（迁移 004）
 - [x] scan_input_dirs 多输入扫描目录配置读取
 - [x] GET /api/fs/dirs：图形目录浏览 API（路径校验 + 过滤隐藏目录）
+- [x] 删除语义调整为“应用内隐藏记录”，不改动真实文件且后续扫描跳过已隐藏路径
 - [x] SnapshotService.Revert preflight 安全检查：移动前验证路径状态，失败返回 RevertResult
 - [x] POST /api/snapshots/:id/revert 返回结构化 revert_result（含 preflight 错误和当前状态）
 
@@ -44,7 +45,7 @@
 - [x] src/api/jobs.ts：listJobs / getJob / getJobProgress
 - [x] src/store/jobStore.ts：Zustand Job 状态管理
 - [x] src/pages/JobsPage.tsx：Job 列表、状态 badge、进度条、可展开详情
-- [x] FolderListPage：多选 + Move 弹窗 + 软删除 + Restore 按钮
+- [x] FolderListPage：多选 + Move 弹窗 + 隐藏记录 + 恢复扫描按钮
 - [x] useSSE.ts：处理 scan.* / job.progress / job.done / job.error 事件
 - [x] 主界面升级为中文仪表盘：目录网格/列表切换 / 最近任务 / 最近日志 / 扫描进度条
 - [x] 通知系统（ToastList）：任务完成 / 失败 toast，6 秒自动消失
