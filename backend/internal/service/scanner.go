@@ -173,9 +173,18 @@ func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []strin
 				continue
 			}
 
+			folderPath := filepath.Join(sourceDir, entry.Name)
+			isSuppressed, err := s.folders.IsSuppressedPath(ctx, folderPath)
+			if err != nil {
+				return nil, fmt.Errorf("scanner.discoverTargets check suppressed path %q: %w", folderPath, err)
+			}
+			if isSuppressed {
+				continue
+			}
+
 			targets = append(targets, scanTarget{
 				sourceDir:    sourceDir,
-				folderPath:   filepath.Join(sourceDir, entry.Name),
+				folderPath:   folderPath,
 				folderName:   entry.Name,
 				relativePath: entry.Name,
 			})

@@ -237,37 +237,52 @@ func (r *SQLiteFolderRepository) UpdatePath(ctx context.Context, id, newPath str
 	return nil
 }
 
-func (r *SQLiteFolderRepository) SoftDelete(ctx context.Context, id, currentPath, originalPath string) error {
+func (r *SQLiteFolderRepository) IsSuppressedPath(ctx context.Context, path string) (bool, error) {
+	var exists int
+	err := r.db.QueryRowContext(
+		ctx,
+		"SELECT 1 FROM folders WHERE path = ? AND deleted_at IS NOT NULL LIMIT 1",
+		path,
+	).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("folderRepo.IsSuppressedPath: %w", err)
+	}
+
+	return true, nil
+}
+
+func (r *SQLiteFolderRepository) Suppress(ctx context.Context, id, currentPath, originalPath string) error {
 	res, err := r.db.ExecContext(
 		ctx,
-		"UPDATE folders SET path = ?, deleted_at = CURRENT_TIMESTAMP, delete_staging_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
-		currentPath,
-		originalPath,
+		"UPDATE folders SET deleted_at = CURRENT_TIMESTAMP, delete_staging_path = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
 		id,
 	)
 	if err != nil {
-		return fmt.Errorf("folderRepo.SoftDelete: %w", err)
+		return fmt.Errorf("folderRepo.Suppress: %w", err)
 	}
 
 	if err := assertRowsAffected(res); err != nil {
-		return fmt.Errorf("folderRepo.SoftDelete: %w", err)
+		return fmt.Errorf("folderRepo.Suppress: %w", err)
 	}
 
 	return nil
 }
 
-func (r *SQLiteFolderRepository) Restore(ctx context.Context, id string) error {
+func (r *SQLiteFolderRepository) Unsuppress(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(
 		ctx,
-		"UPDATE folders SET path = delete_staging_path, deleted_at = NULL, delete_staging_path = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NOT NULL",
+		"UPDATE folders SET deleted_at = NULL, delete_staging_path = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NOT NULL",
 		id,
 	)
 	if err != nil {
-		return fmt.Errorf("folderRepo.Restore: %w", err)
+		return fmt.Errorf("folderRepo.Unsuppress: %w", err)
 	}
 
 	if err := assertRowsAffected(res); err != nil {
-		return fmt.Errorf("folderRepo.Restore: %w", err)
+		return fmt.Errorf("folderRepo.Unsuppress: %w", err)
 	}
 
 	return nil

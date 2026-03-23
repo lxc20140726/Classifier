@@ -13,8 +13,9 @@ type FolderRepository interface {
 	UpdateCategory(ctx context.Context, id, category, source string) error
 	UpdateStatus(ctx context.Context, id, status string) error
 	UpdatePath(ctx context.Context, id, newPath string) error
-	SoftDelete(ctx context.Context, id, currentPath, originalPath string) error
-	Restore(ctx context.Context, id string) error
+	IsSuppressedPath(ctx context.Context, path string) (bool, error)
+	Suppress(ctx context.Context, id, currentPath, originalPath string) error
+	Unsuppress(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 }
 

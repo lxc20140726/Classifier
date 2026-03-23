@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path/filepath"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -284,34 +283,22 @@ func (h *FolderHandler) Delete(c *gin.Context) {
 	}
 
 	if folder.DeletedAt != nil {
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"suppressed": true}})
 		return
 	}
 
-	stagingPath := filepath.Join(h.deleteStagingDir, folder.ID+"-"+folder.Name)
-	if h.fs != nil {
-		if err := h.fs.MkdirAll(c.Request.Context(), h.deleteStagingDir, 0o755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prepare delete staging dir"})
-			return
-		}
-		if err := h.fs.MoveDir(c.Request.Context(), folder.Path, stagingPath); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to move folder to delete staging"})
-			return
-		}
-	}
-
-	err = h.folders.SoftDelete(c.Request.Context(), id, stagingPath, folder.Path)
+	err = h.folders.Suppress(c.Request.Context(), id, "", "")
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "folder not found"})
 			return
 		}
 
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete folder"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to suppress folder record"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"suppressed": true}})
 }
 
 func (h *FolderHandler) Restore(c *gin.Context) {
@@ -326,17 +313,11 @@ func (h *FolderHandler) Restore(c *gin.Context) {
 		return
 	}
 	if folder.DeletedAt == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "folder is not deleted"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "folder is not suppressed"})
 		return
 	}
-	if h.fs != nil && folder.DeleteStagingPath != "" {
-		if err := h.fs.MoveDir(c.Request.Context(), folder.Path, folder.DeleteStagingPath); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restore folder"})
-			return
-		}
-	}
-	if err := h.folders.Restore(c.Request.Context(), id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restore folder"})
+	if err := h.folders.Unsuppress(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restore suppressed folder"})
 		return
 	}
 	restored, err := h.folders.GetByID(c.Request.Context(), id)
