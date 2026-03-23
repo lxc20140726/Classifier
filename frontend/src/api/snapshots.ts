@@ -64,8 +64,25 @@ export async function listSnapshots(params: SnapshotListParams): Promise<Snapsho
   return (response.data ?? []).map(parseSnapshot)
 }
 
-export function revertSnapshot(snapshotId: string): Promise<{ reverted: boolean }> {
-  return request<{ reverted: boolean }>(`/snapshots/${snapshotId}/revert`, {
+export interface RevertPathState {
+  original_path: string
+  current_path: string
+}
+
+export interface RevertResult {
+  ok: boolean
+  error_message?: string
+  preflight_error?: string
+  current_state: RevertPathState[]
+}
+
+export interface RevertResponse {
+  reverted: boolean
+  revert_result: RevertResult
+}
+
+export async function revertSnapshot(snapshotId: string): Promise<RevertResponse> {
+  return request<RevertResponse>(`/snapshots/${snapshotId}/revert`, {
     method: 'POST',
   })
 }

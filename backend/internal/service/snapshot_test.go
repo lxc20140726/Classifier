@@ -146,7 +146,7 @@ func TestSnapshotServiceRevertMovesPathBackUpdatesFolderAndMarksReverted(t *test
 
 	adapter.AddDir("/library/revert-current", []fs.DirEntry{{Name: "file.jpg", IsDir: false, Size: 10}})
 
-	if err := svc.Revert(context.Background(), snapshotID); err != nil {
+	if _, err := svc.Revert(context.Background(), snapshotID); err != nil {
 		t.Fatalf("Revert() error = %v", err)
 	}
 
@@ -217,7 +217,7 @@ func TestSnapshotServiceRevertAlreadyRevertedReturnsError(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	err := svc.Revert(context.Background(), snapshot.ID)
+	_, err := svc.Revert(context.Background(), snapshot.ID)
 	if err == nil {
 		t.Fatalf("Revert() error = nil, want non-nil")
 	}

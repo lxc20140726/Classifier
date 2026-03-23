@@ -7,10 +7,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/liqiye/classifier/internal/repository"
+	"github.com/liqiye/classifier/internal/service"
 )
 
 type SnapshotReverter interface {
-	Revert(ctx context.Context, snapshotID string) error
+	Revert(ctx context.Context, snapshotID string) (*service.RevertResult, error)
 }
 
 type SnapshotHandler struct {
@@ -56,9 +57,20 @@ func (h *SnapshotHandler) List(c *gin.Context) {
 func (h *SnapshotHandler) Revert(c *gin.Context) {
 	id := c.Param("id")
 
-	if err := h.reverter.Revert(c.Request.Context(), id); err != nil {
+	result, err := h.reverter.Revert(c.Request.Context(), id)
+	if err != nil {
 		if strings.Contains(err.Error(), "already reverted") {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Return 422 with full result context so the frontend can display
+		// the current state and reason without data loss.
+		if result != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error":         err.Error(),
+				"revert_result": result,
+			})
 			return
 		}
 
@@ -66,5 +78,5 @@ func (h *SnapshotHandler) Revert(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"reverted": true})
+	c.JSON(http.StatusOK, gin.H{"reverted": true, "revert_result": result})
 }

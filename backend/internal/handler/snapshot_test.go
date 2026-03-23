@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	dbpkg "github.com/liqiye/classifier/internal/db"
 	"github.com/liqiye/classifier/internal/repository"
+	"github.com/liqiye/classifier/internal/service"
 )
 
 var snapshotHandlerDBCounter uint64
@@ -22,9 +23,12 @@ type stubSnapshotReverter struct {
 	err        error
 }
 
-func (s *stubSnapshotReverter) Revert(_ context.Context, snapshotID string) error {
+func (s *stubSnapshotReverter) Revert(_ context.Context, snapshotID string) (*service.RevertResult, error) {
 	s.calledWith = append(s.calledWith, snapshotID)
-	return s.err
+	if s.err != nil {
+		return &service.RevertResult{OK: false, ErrorMessage: s.err.Error()}, s.err
+	}
+	return &service.RevertResult{OK: true}, nil
 }
 
 func newSnapshotHandlerTestRepos(t *testing.T) (repository.SnapshotRepository, repository.FolderRepository) {

@@ -93,6 +93,7 @@ func main() {
 		api.GET("/config", configHandler.Get)
 		api.PUT("/config", configHandler.Put)
 		api.GET("/audit-logs", auditHandler.List)
+		api.GET("/fs/dirs", handler.NewFSHandler(fsAdapter).ListDirs)
 	}
 
 	distFS, err := fs.Sub(webDist, "web/dist")

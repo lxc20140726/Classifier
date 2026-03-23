@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ChevronRight, RotateCcw, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, ChevronRight, RotateCcw, X } from 'lucide-react'
 
-import { revertSnapshot } from '@/api/snapshots'
+import { revertSnapshot, type RevertResult } from '@/api/snapshots'
+import { ApiRequestError } from '@/api/client'
 import { cn } from '@/lib/utils'
 import { useSnapshotStore } from '@/store/snapshotStore'
 import type { Snapshot } from '@/types'
@@ -15,6 +16,7 @@ export interface SnapshotDrawerProps {
 interface DrawerState {
   revertingId: string | null
   localError: string | null
+  failureDetail: RevertResult | null
 }
 
 const OP_LABELS: Record<string, string> = {
@@ -41,9 +43,7 @@ function formatDate(value: string): string {
 }
 
 function renderDetail(detail: Record<string, unknown> | null): Array<[string, string]> {
-  if (detail == null) {
-    return []
-  }
+  if (detail == null) return []
 
   const entries: Array<[string, string]> = []
   const sourceDir = typeof detail.source_dir === 'string' ? detail.source_dir : null
@@ -61,13 +61,65 @@ function renderDetail(detail: Record<string, unknown> | null): Array<[string, st
   return entries
 }
 
+function RevertFailurePanel({ detail }: { detail: RevertResult }) {
+  return (
+    <div className="mt-4 space-y-3 rounded-xl border border-red-200 bg-red-50 p-4">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-red-800">回退失败</p>
+          {detail.preflight_error && (
+            <p className="text-xs text-red-700">{detail.preflight_error}</p>
+          )}
+          {detail.error_message && !detail.preflight_error && (
+            <p className="text-xs text-red-700">{detail.error_message}</p>
+          )}
+        </div>
+      </div>
+
+      {detail.current_state.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-red-800">目前文件状态（未变动）：</p>
+          {detail.current_state.map((s, i) => (
+            <div key={i} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs">
+              <p className="text-muted-foreground">当前位置</p>
+              <p className="break-all font-mono text-foreground">{s.current_path}</p>
+              {s.current_path !== s.original_path && (
+                <>
+                  <p className="mt-1 text-muted-foreground">目标位置（未到达）</p>
+                  <p className="break-all font-mono text-foreground">{s.original_path}</p>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-red-600">✓ 回退失败不会导致文件丢失，所有文件保持在回退前位置。</p>
+    </div>
+  )
+}
+
 export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps) {
   const snapshots = useSnapshotStore((store) => store.snapshots)
   const isLoading = useSnapshotStore((store) => store.isLoading)
   const storeError = useSnapshotStore((store) => store.error)
   const fetchSnapshots = useSnapshotStore((store) => store.fetchSnapshots)
   const handleRevertDone = useSnapshotStore((store) => store.handleRevertDone)
-  const [state, setState] = useState<DrawerState>({ revertingId: null, localError: null })
+  const [state, setState] = useState<DrawerState>({
+    revertingId: null,
+    localError: null,
+    failureDetail: null,
+  })
+
+  const prevKeyRef = useRef<string | null>(null)
+  const openKey = open ? folderId : null
+  if (prevKeyRef.current !== openKey) {
+    prevKeyRef.current = openKey
+    if (openKey !== null) {
+      setState({ revertingId: null, localError: null, failureDetail: null })
+    }
+  }
 
   useEffect(() => {
     if (open && folderId) {
@@ -78,18 +130,28 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
   async function handleRevert(snapshotId: string) {
     if (!folderId) return
 
-    setState({ revertingId: snapshotId, localError: null })
+    setState({ revertingId: snapshotId, localError: null, failureDetail: null })
 
     try {
       await revertSnapshot(snapshotId)
       handleRevertDone(snapshotId)
       await fetchSnapshots(folderId)
-      setState({ revertingId: null, localError: null })
+      setState({ revertingId: null, localError: null, failureDetail: null })
     } catch (error) {
-      setState({
-        revertingId: null,
-        localError: error instanceof Error ? error.message : '回退失败',
-      })
+      if (error instanceof ApiRequestError && error.status === 422 && error.body) {
+        const revertResult = error.body.revert_result as RevertResult | undefined
+        setState({
+          revertingId: null,
+          localError: error.message,
+          failureDetail: revertResult ?? null,
+        })
+      } else {
+        setState({
+          revertingId: null,
+          localError: error instanceof Error ? error.message : '回退失败',
+          failureDetail: null,
+        })
+      }
     }
   }
 
@@ -135,7 +197,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-5">
-          {error && (
+          {error && !state.failureDetail && (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
@@ -154,6 +216,8 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
               {orderedSnapshots.map((snapshot) => {
                 const detailItems = renderDetail(snapshot.detail)
                 const operationLabel = OP_LABELS[snapshot.operation_type] ?? snapshot.operation_type
+                const isReverting = state.revertingId === snapshot.id
+                const hasFailure = state.failureDetail !== null && state.revertingId === null && isReverting
 
                 return (
                   <li key={snapshot.id} className="relative">
@@ -187,10 +251,14 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                             className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <RotateCcw className="h-3.5 w-3.5" />
-                            {state.revertingId === snapshot.id ? '回退中...' : '回退到此节点'}
+                            {isReverting ? '回退中...' : '回退到此节点'}
                           </button>
                         )}
                       </div>
+
+                      {state.failureDetail && state.revertingId === null && snapshot.id === orderedSnapshots.find(s => s.status !== 'reverted' && s.operation_type === 'move')?.id && !hasFailure && (
+                        <RevertFailurePanel detail={state.failureDetail} />
+                      )}
 
                       {detailItems.length > 0 && (
                         <dl className="mt-4 grid gap-2 rounded-xl bg-muted/50 p-3 text-xs sm:grid-cols-2">
