@@ -92,7 +92,7 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
         </div>
 
         {/* Directory listing */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="max-h-72 overflow-y-auto">
           {/* Parent dir navigation */}
           {current && current.path !== '/' && (
             <button

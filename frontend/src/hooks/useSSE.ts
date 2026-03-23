@@ -66,6 +66,7 @@ export function useSSE() {
       eventSource.addEventListener('job.done', (event) => {
         const payload = JSON.parse(event.data) as JobDoneEvent
         useJobStore.getState().handleJobDone(payload)
+        useFolderStore.getState().handleScanDone()
         useNotificationStore.getState().pushNotification({
           level: payload.status === 'partial' ? 'info' : 'success',
           title: payload.status === 'partial' ? '任务部分完成' : '任务完成',

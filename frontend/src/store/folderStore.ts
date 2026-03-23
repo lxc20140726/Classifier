@@ -104,10 +104,17 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
   async triggerScan() {
     set({ isScanning: true, error: null })
+    let fallbackTimer: number | undefined
+    fallbackTimer = window.setTimeout(() => {
+      if (get().isScanning) {
+        set({ isScanning: false, scanProgress: null })
+      }
+    }, 120_000)
     try {
       const response = await scanFolders()
       get().handleScanStarted(response)
     } catch (error) {
+      window.clearTimeout(fallbackTimer)
       set({
         isScanning: false,
         error: error instanceof Error ? error.message : '启动扫描失败',
@@ -155,6 +162,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     }))
   },
   handleScanDone() {
+    if (!get().isScanning) return
     set({ isScanning: false, scanProgress: null })
   },
   async updateFolderCategory(id, category) {
