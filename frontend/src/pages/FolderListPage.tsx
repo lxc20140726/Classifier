@@ -328,7 +328,7 @@ function FolderCard({
           </span>
         </label>
         {isDeleted && (
-          <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700">已删除</span>
+          <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700">已隐藏</span>
         )}
       </div>
 
@@ -366,7 +366,7 @@ function FolderCard({
             onClick={onRestore}
             className="flex-1 rounded-lg border border-border px-2 py-1.5 text-xs font-medium transition hover:bg-accent"
           >
-            恢复记录
+            恢复扫描
           </button>
         ) : (
           <>
@@ -401,7 +401,7 @@ function FolderCard({
             <button
               type="button"
               onClick={onRemove}
-              title="移除记录"
+              title="从软件中隐藏，不改动实际文件"
               className="rounded-lg border border-red-200 p-1.5 text-xs text-red-600 transition hover:bg-red-50"
             >
               <X className="h-3.5 w-3.5" />
@@ -474,7 +474,7 @@ function FolderRow({
               onClick={onRestore}
               className="rounded border border-border px-2 py-1 text-xs transition hover:bg-accent"
             >
-              恢复
+              恢复扫描
             </button>
           ) : (
             <>
@@ -509,7 +509,7 @@ function FolderRow({
               <button
                 type="button"
                 onClick={onRemove}
-                title="移除记录"
+                title="从软件中隐藏，不改动实际文件"
                 className="rounded border border-red-200 p-1 text-xs text-red-600 transition hover:bg-red-50"
               >
                 <X className="h-3.5 w-3.5" />
@@ -539,8 +539,8 @@ export default function FolderListPage() {
   const setViewMode = useFolderStore((s) => s.setViewMode)
   const updateFolderCategory = useFolderStore((s) => s.updateFolderCategory)
   const updateFolderStatus = useFolderStore((s) => s.updateFolderStatus)
-  const removeFolder = useFolderStore((s) => s.removeFolder)
-  const restoreFolder = useFolderStore((s) => s.restoreFolder)
+  const suppressFolder = useFolderStore((s) => s.suppressFolder)
+  const unsuppressFolder = useFolderStore((s) => s.unsuppressFolder)
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null)
@@ -712,8 +712,8 @@ export default function FolderListPage() {
                   onSnapshot={() => setActiveFolderId(folder.id)}
                   onUpdateCategory={(c) => void updateFolderCategory(folder.id, c)}
                   onUpdateStatus={(s) => void updateFolderStatus(folder.id, s)}
-                  onRemove={() => void removeFolder(folder.id)}
-                  onRestore={() => void restoreFolder(folder.id)}
+                  onRemove={() => void suppressFolder(folder.id)}
+                  onRestore={() => void unsuppressFolder(folder.id)}
                 />
               ))}
             </div>
@@ -748,8 +748,8 @@ export default function FolderListPage() {
                       onSnapshot={() => setActiveFolderId(folder.id)}
                       onUpdateCategory={(c) => void updateFolderCategory(folder.id, c)}
                       onUpdateStatus={(s) => void updateFolderStatus(folder.id, s)}
-                      onRemove={() => void removeFolder(folder.id)}
-                      onRestore={() => void restoreFolder(folder.id)}
+                      onRemove={() => void suppressFolder(folder.id)}
+                      onRestore={() => void unsuppressFolder(folder.id)}
                     />
                   ))}
                 </tbody>
