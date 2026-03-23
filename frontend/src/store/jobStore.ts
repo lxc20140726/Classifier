@@ -19,6 +19,8 @@ interface JobStore {
   handleJobDone: (payload: JobDoneEvent) => void
   handleJobError: (jobId: string, error: string) => void
   startPolling: (jobId: string) => void
+  /** Poll a scan job and notify folderStore on completion (SSE fallback). */
+  startScanPolling: (jobId: string) => void
   stopPolling: (jobId: string) => void
   stopAllPolling: () => void
 }
@@ -168,6 +170,40 @@ export const useJobStore = create<JobStore>((set, get) => ({
         }
       } catch (error) {
         console.error(`Failed to poll job ${jobId}:`, error)
+        get().stopPolling(jobId)
+      }
+    }
+
+    void poll()
+  },
+
+  startScanPolling(jobId) {
+    const { pollingJobIds } = get()
+    if (pollingJobIds.has(jobId)) return
+
+    pollingJobIds.add(jobId)
+
+    const poll = async () => {
+      try {
+        const progress = await getJobProgress(jobId)
+        get().handleJobProgress(progress)
+
+        if (['succeeded', 'failed', 'partial', 'cancelled'].includes(progress.status)) {
+          get().stopPolling(jobId)
+          // SSE fallback: notify folderStore that the scan job is done.
+          // Lazy import avoids a circular dependency at module evaluation time.
+          const { useFolderStore } = await import('@/store/folderStore')
+          const folderStore = useFolderStore.getState()
+          if (folderStore.scanProgress?.jobId === jobId || folderStore.isScanning) {
+            folderStore.handleScanDone()
+            void folderStore.fetchFolders()
+          }
+        } else {
+          const timer = window.setTimeout(poll, 2000)
+          get().pollingTimers.set(jobId, timer)
+        }
+      } catch (error) {
+        console.error(`Failed to poll scan job ${jobId}:`, error)
         get().stopPolling(jobId)
       }
     }

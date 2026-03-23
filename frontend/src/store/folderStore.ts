@@ -9,6 +9,7 @@ import {
   updateFolderStatus,
   type FolderQueryParams,
 } from '@/api/folders'
+import { useJobStore } from '@/store/jobStore'
 import type { Category, Folder, FolderStatus, ScanStartResponse, ScanProgressEvent } from '@/types'
 
 export interface FolderFilters {
@@ -113,6 +114,9 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     try {
       const response = await scanFolders()
       get().handleScanStarted(response)
+      // Start polling as SSE fallback: if SSE events are missed the poll loop
+      // will detect completion and call handleScanDone via jobStore coordination.
+      useJobStore.getState().startScanPolling(response.job_id)
     } catch (error) {
       window.clearTimeout(fallbackTimer)
       set({
@@ -122,6 +126,9 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     }
   },
   handleScanStarted(payload) {
+    // Guard: if isScanning is already false, the scan completed via SSE before this
+    // HTTP response handler ran (race condition with fast scans). Do not re-enable.
+    if (!get().isScanning) return
     set({
       isScanning: true,
       scanProgress: {

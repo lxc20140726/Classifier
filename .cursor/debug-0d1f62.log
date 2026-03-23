@@ -1,0 +1,13 @@
+{"sessionId":"0d1f62","location":"scanner.go","message":"Scan goroutine started","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","sourceDirs":["/Users/liqi/code/Classifier/.local/source"]},"timestamp":1774236964788,"hypothesisId":"B"}
+{"sessionId":"0d1f62","location":"scanner.go","message":"published scan.started","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","total":2},"timestamp":1774236964795,"hypothesisId":"B"}
+{"sessionId":"0d1f62","location":"scanner.go","message":"published scan.done+job.done","data":{"failed":0,"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","processed":2},"timestamp":1774236964808,"hypothesisId":"B"}
+{"sessionId":"0d1f62","location":"folderStore.ts:triggerScan","message":"HTTP response received, about to call handleScanStarted","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","isScanning":true},"timestamp":1774236964793,"hypothesisId":"A"}
+{"sessionId":"0d1f62","location":"folderStore.ts:handleScanStarted","message":"handleScanStarted called","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","isScanning":true},"timestamp":1774236964794,"hypothesisId":"A"}
+{"sessionId":"0d1f62","location":"useSSE.ts:onopen","message":"SSE connection opened","data":{"readyState":1},"timestamp":1774236964801,"hypothesisId":"B"}
+{"sessionId":"0d1f62","location":"useSSE.ts:scan.started","message":"SSE scan.started received","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","isScanning":true},"timestamp":1774236964802,"hypothesisId":"A,D"}
+{"sessionId":"0d1f62","location":"folderStore.ts:handleScanStarted","message":"handleScanStarted called","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","isScanning":true},"timestamp":1774236964802,"hypothesisId":"A"}
+{"sessionId":"0d1f62","location":"useSSE.ts:scan.done","message":"SSE scan.done received","data":{"isScanning":true},"timestamp":1774236964810,"hypothesisId":"B,C"}
+{"sessionId":"0d1f62","location":"folderStore.ts:handleScanDone","message":"handleScanDone called","data":{"isScanning":true,"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2"},"timestamp":1774236964810,"hypothesisId":"B,C"}
+{"sessionId":"0d1f62","location":"useSSE.ts:job.done","message":"SSE job.done received","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","status":"succeeded","total":2,"isScanning":false},"timestamp":1774236964816,"hypothesisId":"A,B,C"}
+{"sessionId":"0d1f62","location":"folderStore.ts:handleScanDone","message":"handleScanDone called","data":{"isScanning":false},"timestamp":1774236964817,"hypothesisId":"B,C"}
+{"sessionId":"0d1f62","location":"useSSE.ts:onerror","message":"SSE connection error/closed","data":{"readyState":0,"type":"error"},"timestamp":1774237012204,"hypothesisId":"B"}
