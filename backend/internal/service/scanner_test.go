@@ -188,6 +188,33 @@ func TestScan(t *testing.T) {
 			},
 		},
 		{
+			name: "skips suppressed folders during discovery",
+			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
+				t.Helper()
+
+				visiblePath := filepath.Join(sourceDir, "visible")
+				hiddenPath := filepath.Join(sourceDir, "hidden")
+				adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "visible", IsDir: true}, {Name: "hidden", IsDir: true}})
+				adapter.AddDir(visiblePath, []fs.DirEntry{{Name: "a.jpg", IsDir: false}})
+				adapter.AddDir(hiddenPath, []fs.DirEntry{{Name: "b.jpg", IsDir: false}})
+				adapter.AddFile(filepath.Join(visiblePath, "a.jpg"), 10)
+				adapter.AddFile(filepath.Join(hiddenPath, "b.jpg"), 10)
+			},
+			wantCount: 1,
+			wantErr:   false,
+			assert: func(t *testing.T, repo repository.FolderRepository, sourceDir string) {
+				t.Helper()
+				hiddenPath := filepath.Join(sourceDir, "hidden")
+				visiblePath := filepath.Join(sourceDir, "visible")
+				if _, err := repo.GetByPath(context.Background(), visiblePath); err != nil {
+					t.Fatalf("expected visible folder to be scanned: %v", err)
+				}
+				if _, err := repo.GetByPath(context.Background(), hiddenPath); err == nil {
+					t.Fatalf("expected suppressed folder to be skipped")
+				}
+			},
+		},
+		{
 			name: "propagates read errors",
 			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
 				t.Helper()
@@ -226,6 +253,23 @@ func TestScan(t *testing.T) {
 			tc.setup(t, adapter, sourceDir)
 
 			jobRepo := repository.NewJobRepository(database)
+			if tc.name == "skips suppressed folders during discovery" {
+				hiddenPath := filepath.Join(sourceDir, "hidden")
+				hiddenTime := time.Now().UTC()
+				if err := repo.Upsert(context.Background(), &repository.Folder{
+					ID:             deterministicFolderID(hiddenPath),
+					Path:           hiddenPath,
+					SourceDir:      sourceDir,
+					RelativePath:   "hidden",
+					Name:           "hidden",
+					Category:       "other",
+					CategorySource: "auto",
+					Status:         "pending",
+					DeletedAt:      &hiddenTime,
+				}); err != nil {
+					t.Fatalf("seed suppressed folder error = %v", err)
+				}
+			}
 			snapshotRepo := repository.NewSnapshotRepository(database)
 			auditRepo := repository.NewAuditRepository(database)
 			auditSvc := NewAuditService(auditRepo)

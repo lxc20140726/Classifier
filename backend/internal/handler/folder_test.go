@@ -269,7 +269,17 @@ func TestFolderHandler(t *testing.T) {
 			t.Fatalf("repo.GetByID() error = %v", err)
 		}
 		if folder.DeletedAt == nil {
-			t.Fatalf("expected folder to be soft-deleted")
+			t.Fatalf("expected folder to be suppressed")
+		}
+		if folder.Path != "/media/f2" {
+			t.Fatalf("folder.Path = %q, want original path preserved", folder.Path)
+		}
+		exists, err := fsAdapter.Exists(context.Background(), "/media/f2")
+		if err != nil {
+			t.Fatalf("fsAdapter.Exists() error = %v", err)
+		}
+		if !exists {
+			t.Fatalf("expected actual folder to remain on filesystem")
 		}
 	})
 
