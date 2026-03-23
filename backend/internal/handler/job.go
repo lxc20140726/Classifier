@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,14 +9,24 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/liqiye/classifier/internal/repository"
+	"github.com/liqiye/classifier/internal/service"
 )
 
+type WorkflowJobStarter interface {
+	StartJob(ctx context.Context, input service.StartWorkflowJobInput) (string, error)
+}
+
 type JobHandler struct {
-	jobs repository.JobRepository
+	jobs            repository.JobRepository
+	workflowStarter WorkflowJobStarter
 }
 
 func NewJobHandler(jobRepo repository.JobRepository) *JobHandler {
 	return &JobHandler{jobs: jobRepo}
+}
+
+func NewJobHandlerWithWorkflow(jobRepo repository.JobRepository, workflowStarter WorkflowJobStarter) *JobHandler {
+	return &JobHandler{jobs: jobRepo, workflowStarter: workflowStarter}
 }
 
 func (h *JobHandler) List(c *gin.Context) {
@@ -92,6 +103,42 @@ func (h *JobHandler) Progress(c *gin.Context) {
 	})
 }
 
+func (h *JobHandler) StartWorkflow(c *gin.Context) {
+	if h.workflowStarter == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "workflow runner not configured"})
+		return
+	}
+
+	var req struct {
+		WorkflowDefID string   `json:"workflow_def_id"`
+		FolderIDs     []string `json:"folder_ids"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		return
+	}
+	if req.WorkflowDefID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow_def_id is required"})
+		return
+	}
+	if len(req.FolderIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "folder_ids is required"})
+		return
+	}
+
+	jobID, err := h.workflowStarter.StartJob(c.Request.Context(), service.StartWorkflowJobInput{
+		WorkflowDefID: req.WorkflowDefID,
+		FolderIDs:     req.FolderIDs,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start workflow job"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"job_id": jobID})
+}
+
 func serializeJob(job *repository.Job) gin.H {
 	folderIDs := make([]string, 0)
 	if job.FolderIDs != "" {
@@ -99,17 +146,18 @@ func serializeJob(job *repository.Job) gin.H {
 	}
 
 	return gin.H{
-		"id":          job.ID,
-		"type":        job.Type,
-		"status":      job.Status,
-		"folder_ids":  folderIDs,
-		"total":       job.Total,
-		"done":        job.Done,
-		"failed":      job.Failed,
-		"error":       job.Error,
-		"started_at":  job.StartedAt,
-		"finished_at": job.FinishedAt,
-		"created_at":  job.CreatedAt,
-		"updated_at":  job.UpdatedAt,
+		"id":              job.ID,
+		"type":            job.Type,
+		"workflow_def_id": job.WorkflowDefID,
+		"status":          job.Status,
+		"folder_ids":      folderIDs,
+		"total":           job.Total,
+		"done":            job.Done,
+		"failed":          job.Failed,
+		"error":           job.Error,
+		"started_at":      job.StartedAt,
+		"finished_at":     job.FinishedAt,
+		"created_at":      job.CreatedAt,
+		"updated_at":      job.UpdatedAt,
 	}
 }

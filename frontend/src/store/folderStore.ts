@@ -196,8 +196,9 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     try {
       await suppressFolderRecord(id)
       set((state) => ({
-        folders: state.folders.filter((folder) => folder.id !== id),
-        total: Math.max(0, state.total - 1),
+        folders: state.folders.map((folder) =>
+          folder.id === id ? { ...folder, deleted_at: new Date().toISOString() } : folder,
+        ),
       }))
     } catch (error) {
       set({ error: error instanceof Error ? error.message : '隐藏目录记录失败' })

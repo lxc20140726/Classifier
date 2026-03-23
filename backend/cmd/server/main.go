@@ -37,6 +37,10 @@ func main() {
 	snapshotRepo := repository.NewSnapshotRepository(sqlDB)
 	configRepo := repository.NewConfigRepository(sqlDB)
 	auditRepo := repository.NewAuditRepository(sqlDB)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(sqlDB)
+	workflowRunRepo := repository.NewWorkflowRunRepository(sqlDB)
+	nodeRunRepo := repository.NewNodeRunRepository(sqlDB)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(sqlDB)
 
 	fsAdapter := internalfs.NewOSAdapter()
 	broker := sse.NewBroker()
@@ -45,13 +49,16 @@ func main() {
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
 	moveSvc := service.NewMoveService(fsAdapter, jobRepo, folderRepo, snapshotSvc, auditSvc, broker)
+	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker)
 
 	folderHandler := handler.NewFolderHandler(folderRepo, jobRepo, configRepo, scannerSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
 	moveHandler := handler.NewMoveHandler(moveSvc, jobRepo)
-	jobHandler := handler.NewJobHandler(jobRepo)
+	jobHandler := handler.NewJobHandlerWithWorkflow(jobRepo, workflowRunnerSvc)
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
 	configHandler := handler.NewConfigHandler(configRepo)
 	auditHandler := handler.NewAuditHandler(auditRepo)
+	workflowDefHandler := handler.NewWorkflowDefHandler(workflowDefRepo)
+	workflowRunHandler := handler.NewWorkflowRunHandler(workflowRunnerSvc)
 
 	r := gin.New()
 	r.Use(gin.Logger())
@@ -79,9 +86,27 @@ func main() {
 		jobs := api.Group("/jobs")
 		{
 			jobs.GET("", jobHandler.List)
+			jobs.POST("", jobHandler.StartWorkflow)
 			jobs.GET("/:id", jobHandler.Get)
 			jobs.GET("/:id/progress", jobHandler.Progress)
 			jobs.POST("/move", moveHandler.Start)
+			jobs.GET("/:id/workflow-runs", workflowRunHandler.ListByJob)
+		}
+
+		workflowRuns := api.Group("/workflow-runs")
+		{
+			workflowRuns.GET("/:id", workflowRunHandler.Get)
+			workflowRuns.POST("/:id/resume", workflowRunHandler.Resume)
+			workflowRuns.POST("/:id/rollback", workflowRunHandler.Rollback)
+		}
+
+		workflowDefs := api.Group("/workflow-defs")
+		{
+			workflowDefs.GET("", workflowDefHandler.List)
+			workflowDefs.POST("", workflowDefHandler.Create)
+			workflowDefs.GET("/:id", workflowDefHandler.Get)
+			workflowDefs.PUT("/:id", workflowDefHandler.Update)
+			workflowDefs.DELETE("/:id", workflowDefHandler.Delete)
 		}
 
 		snapshots := api.Group("/snapshots")

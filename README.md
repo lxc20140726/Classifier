@@ -26,29 +26,31 @@
 
 ## 文档
 
+- [文档分类索引](docs/文档目录.md)
+
 ### 系统设计
-- [架构概览](docs/ARCHITECTURE.md)
-- [技术栈](docs/TECH_STACK.md)
-- [项目需求](docs/REQUIREMENTS.md)
+- [架构概览](docs/架构/架构概览.md)
+- [技术栈](docs/架构/技术栈.md)
+- [项目需求](docs/架构/项目需求.md)
 
 ### 功能规格
-- [API 设计](docs/API.md)（最新：[API_V3.md](docs/API_V3.md)）
-- [数据模型](docs/DATA_MODELS.md)（最新：[DATA_MODELS_V3.md](docs/DATA_MODELS_V3.md)）
-- [前端设计](docs/FRONTEND.md)（最新：[FRONTEND_V3.md](docs/FRONTEND_V3.md)）
-- [节点式工作流](docs/WORKFLOW.md)（最新：[WORKFLOW_V3.md](docs/WORKFLOW_V3.md)）
-- [文件分类算法](docs/CLASSIFICATION.md)（最新：[CLASSIFICATION_V3.md](docs/CLASSIFICATION_V3.md)）
-- [重命名编辑器](docs/RENAME_EDITOR.md)（最新：[RENAME_EDITOR_V3.md](docs/RENAME_EDITOR_V3.md)）
-- [Emby 缩略图规范](docs/EMBY_THUMBNAILS.md)
-- [Undo / Snapshot 系统](docs/SNAPSHOT.md)（最新：[SNAPSHOT_V3.md](docs/SNAPSHOT_V3.md)）
-- [审计日志系统](docs/AUDIT_LOG.md)
+- [接口设计](docs/功能/接口设计.md)（最新：[接口设计（版本3）](docs/功能/接口设计（版本3）.md)）
+- [数据模型](docs/架构/数据模型.md)（最新：[数据模型（版本3）](docs/架构/数据模型（版本3）.md)）
+- [前端设计](docs/功能/前端设计.md)（最新：[前端设计（版本3）](docs/功能/前端设计（版本3）.md)）
+- [节点式工作流](docs/功能/工作流设计.md)（最新：[工作流设计（版本3）](docs/功能/工作流设计（版本3）.md)）
+- [文件分类算法](docs/功能/分类规则.md)（最新：[分类规则（版本3）](docs/功能/分类规则（版本3）.md)）
+- [重命名编辑器](docs/功能/重命名编辑器.md)（最新：[重命名编辑器（版本3）](docs/功能/重命名编辑器（版本3）.md)）
+- [视频缩略图规范](docs/功能/视频缩略图规范.md)
+- [快照系统](docs/功能/快照系统.md)（最新：[快照系统（版本3）](docs/功能/快照系统（版本3）.md)）
+- [审计日志系统](docs/功能/审计日志.md)
 
 ### 部署
-- [Docker 部署指南](docs/DEPLOYMENT.md)
-- [极空间部署文档](docs/ZSPACE_DEPLOYMENT.md)
+- [Docker 部署指南](docs/部署/Docker部署指南.md)
+- [极空间部署文档](docs/部署/极空间部署指南.md)
 
 ### 规划
-- [开发路线图](docs/ROADMAP.md)（最新：[ROADMAP_V3.md](docs/ROADMAP_V3.md)）
-- [技术研究](docs/RESEARCH.md)
+- [开发路线图](docs/规划/开发路线图.md)（最新：[开发路线图（版本3）](docs/规划/开发路线图（版本3）.md)）
+- [技术研究](docs/规划/技术研究.md)
 
 ## 本地开发
 
@@ -138,4 +140,4 @@ npm run build
 
 ## 开发进度
 
-Phase 1 MVP + Phase 1.5 前后端均已完成。当前仓库已具备扫描任务持久化、扫描/移动实时反馈、审计日志查询、中文仪表盘、快照时间线和多扫描目录配置。下一阶段重点仍然是通用工作流引擎与节点级输出目录配置。详见 `docs/ROADMAP.md`。
+Phase 1 MVP + Phase 1.5 前后端均已完成。当前仓库已具备扫描任务持久化、扫描/移动实时反馈、审计日志查询、中文仪表盘、快照时间线和多扫描目录配置。下一阶段重点仍然是通用工作流引擎与节点级输出目录配置。详见 `docs/规划/开发路线图.md`。

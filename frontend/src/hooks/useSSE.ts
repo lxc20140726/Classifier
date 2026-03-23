@@ -4,7 +4,8 @@ import { useActivityStore } from '@/store/activityStore'
 import { useFolderStore } from '@/store/folderStore'
 import { useJobStore } from '@/store/jobStore'
 import { useNotificationStore } from '@/store/notificationStore'
-import type { JobDoneEvent, ScanProgressEvent } from '@/types'
+import { useWorkflowRunStore } from '@/store/workflowRunStore'
+import type { JobDoneEvent, ScanProgressEvent, WorkflowNodeEvent } from '@/types'
 
 interface JobProgressEvent extends ScanProgressEvent {
   failed?: number
@@ -90,6 +91,21 @@ export function useSSE() {
           jobId: payload.job_id,
         })
         void useActivityStore.getState().fetchLogs({ limit: 20 })
+      })
+
+      eventSource.addEventListener('workflow_run.node_started', (event) => {
+        const payload = JSON.parse(event.data) as WorkflowNodeEvent
+        useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'running' })
+      })
+
+      eventSource.addEventListener('workflow_run.node_done', (event) => {
+        const payload = JSON.parse(event.data) as WorkflowNodeEvent
+        useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'succeeded' })
+      })
+
+      eventSource.addEventListener('workflow_run.node_failed', (event) => {
+        const payload = JSON.parse(event.data) as WorkflowNodeEvent
+        useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'failed' })
       })
 
       eventSource.onerror = () => {

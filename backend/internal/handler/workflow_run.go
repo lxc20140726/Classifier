@@ -1,0 +1,97 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	"github.com/liqiye/classifier/internal/repository"
+	"github.com/liqiye/classifier/internal/service"
+)
+
+type WorkflowRunReader interface {
+	ListWorkflowRuns(ctx context.Context, jobID string, page, limit int) ([]*repository.WorkflowRun, int, error)
+	GetWorkflowRunDetail(ctx context.Context, workflowRunID string) (*service.WorkflowRunDetail, error)
+	ResumeWorkflowRun(ctx context.Context, workflowRunID string) error
+	RollbackWorkflowRun(ctx context.Context, workflowRunID string) error
+}
+
+type WorkflowRunHandler struct {
+	runner WorkflowRunReader
+}
+
+func NewWorkflowRunHandler(runner WorkflowRunReader) *WorkflowRunHandler {
+	return &WorkflowRunHandler{runner: runner}
+}
+
+func (h *WorkflowRunHandler) ListByJob(c *gin.Context) {
+	page := 1
+	if rawPage := c.Query("page"); rawPage != "" {
+		parsedPage, err := strconv.Atoi(rawPage)
+		if err != nil || parsedPage <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid page"})
+			return
+		}
+		page = parsedPage
+	}
+
+	limit := 20
+	if rawLimit := c.Query("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		limit = parsedLimit
+	}
+
+	items, total, err := h.runner.ListWorkflowRuns(c.Request.Context(), c.Param("id"), page, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list workflow runs"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "limit": limit})
+}
+
+func (h *WorkflowRunHandler) Get(c *gin.Context) {
+	detail, err := h.runner.GetWorkflowRunDetail(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get workflow run"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": detail.Run, "node_runs": detail.NodeRuns})
+}
+
+func (h *WorkflowRunHandler) Resume(c *gin.Context) {
+	if err := h.runner.ResumeWorkflowRun(c.Request.Context(), c.Param("id")); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resume workflow run"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"resumed": true})
+}
+
+func (h *WorkflowRunHandler) Rollback(c *gin.Context) {
+	if err := h.runner.RollbackWorkflowRun(c.Request.Context(), c.Param("id")); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rollback workflow run"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"rolled_back": true})
+}

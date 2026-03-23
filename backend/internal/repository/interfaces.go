@@ -28,6 +28,35 @@ type JobRepository interface {
 	IncrementProgress(ctx context.Context, id string, successDelta, failedDelta int) error
 }
 
+type WorkflowDefinitionRepository interface {
+	Create(ctx context.Context, item *WorkflowDefinition) error
+	GetByID(ctx context.Context, id string) (*WorkflowDefinition, error)
+	List(ctx context.Context, filter WorkflowDefListFilter) ([]*WorkflowDefinition, int, error)
+	Update(ctx context.Context, item *WorkflowDefinition) error
+	Delete(ctx context.Context, id string) error
+}
+
+type WorkflowRunRepository interface {
+	Create(ctx context.Context, item *WorkflowRun) error
+	GetByID(ctx context.Context, id string) (*WorkflowRun, error)
+	List(ctx context.Context, filter WorkflowRunListFilter) ([]*WorkflowRun, int, error)
+	UpdateStatus(ctx context.Context, id, status, resumeNodeID string) error
+}
+
+type NodeRunRepository interface {
+	Create(ctx context.Context, item *NodeRun) error
+	GetByID(ctx context.Context, id string) (*NodeRun, error)
+	List(ctx context.Context, filter NodeRunListFilter) ([]*NodeRun, int, error)
+	GetLatestByNodeID(ctx context.Context, workflowRunID, nodeID string) (*NodeRun, error)
+	UpdateStart(ctx context.Context, id, inputJSON string) error
+	UpdateFinish(ctx context.Context, id, status, outputJSON, errMsg string) error
+}
+
+type NodeSnapshotRepository interface {
+	Create(ctx context.Context, item *NodeSnapshot) error
+	ListByNodeRunID(ctx context.Context, nodeRunID string) ([]*NodeSnapshot, error)
+}
+
 type SnapshotRepository interface {
 	Create(ctx context.Context, s *Snapshot) error
 	GetByID(ctx context.Context, id string) (*Snapshot, error)

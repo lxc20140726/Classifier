@@ -38,6 +38,14 @@ func nullableJSON(v json.RawMessage) sql.NullString {
 	return sql.NullString{String: string(v), Valid: true}
 }
 
+func nullableTime(t *time.Time) sql.NullString {
+	if t == nil || t.IsZero() {
+		return sql.NullString{}
+	}
+
+	return sql.NullString{String: t.UTC().Format("2006-01-02 15:04:05"), Valid: true}
+}
+
 func parseDBTime(v any) (time.Time, error) {
 	switch t := v.(type) {
 	case time.Time:
@@ -70,4 +78,20 @@ func parseTimeString(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("parseTimeString unsupported format: %q", value)
+}
+
+func parseNullableTime(v any) (*time.Time, error) {
+	if v == nil {
+		return nil, nil
+	}
+
+	t, err := parseDBTime(v)
+	if err != nil {
+		return nil, err
+	}
+	if t.IsZero() {
+		return nil, nil
+	}
+
+	return &t, nil
 }

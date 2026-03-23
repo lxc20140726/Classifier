@@ -32,3 +32,6 @@ coverage/
 *.crt
 credentials.json
 secrets.json
+.acceptance
+.cursor
+.local

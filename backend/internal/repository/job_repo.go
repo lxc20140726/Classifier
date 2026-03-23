@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 type SQLiteJobRepository struct {
@@ -21,10 +20,11 @@ func (r *SQLiteJobRepository) Create(ctx context.Context, job *Job) error {
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO jobs (
-			id, type, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+			id, type, workflow_def_id, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		job.ID,
 		job.Type,
+		nullableString(job.WorkflowDefID),
 		job.Status,
 		job.FolderIDs,
 		job.Total,
@@ -43,7 +43,7 @@ func (r *SQLiteJobRepository) Create(ctx context.Context, job *Job) error {
 
 func (r *SQLiteJobRepository) GetByID(ctx context.Context, id string) (*Job, error) {
 	job, err := scanJob(r.db.QueryRowContext(ctx, `
-SELECT id, type, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
+SELECT id, type, workflow_def_id, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
 FROM jobs
 WHERE id = ?`, id))
 	if err != nil {
@@ -84,7 +84,7 @@ func (r *SQLiteJobRepository) List(ctx context.Context, filter JobListFilter) ([
 	listArgs := append(append([]any{}, args...), limit, offset)
 
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, type, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
+SELECT id, type, workflow_def_id, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
 FROM jobs`+whereClause+`
 ORDER BY created_at DESC
 LIMIT ? OFFSET ?`, listArgs...)
@@ -174,6 +174,7 @@ WHERE id = ?`, successDelta, failedDelta, id)
 
 func scanJob(scanner interface{ Scan(dest ...any) error }) (*Job, error) {
 	job := &Job{}
+	var workflowDefID sql.NullString
 	var errMsg sql.NullString
 	var startedAt any
 	var finishedAt any
@@ -183,6 +184,7 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (*Job, error) {
 	err := scanner.Scan(
 		&job.ID,
 		&job.Type,
+		&workflowDefID,
 		&job.Status,
 		&job.FolderIDs,
 		&job.Total,
@@ -204,6 +206,9 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (*Job, error) {
 	if errMsg.Valid {
 		job.Error = errMsg.String
 	}
+	if workflowDefID.Valid {
+		job.WorkflowDefID = workflowDefID.String
+	}
 
 	if job.StartedAt, err = parseNullableTime(startedAt); err != nil {
 		return nil, fmt.Errorf("scanJob parse started_at: %w", err)
@@ -219,28 +224,4 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (*Job, error) {
 	}
 
 	return job, nil
-}
-
-func nullableTime(t *time.Time) sql.NullString {
-	if t == nil || t.IsZero() {
-		return sql.NullString{}
-	}
-
-	return sql.NullString{String: t.UTC().Format("2006-01-02 15:04:05"), Valid: true}
-}
-
-func parseNullableTime(v any) (*time.Time, error) {
-	if v == nil {
-		return nil, nil
-	}
-
-	t, err := parseDBTime(v)
-	if err != nil {
-		return nil, err
-	}
-	if t.IsZero() {
-		return nil, nil
-	}
-
-	return &t, nil
 }

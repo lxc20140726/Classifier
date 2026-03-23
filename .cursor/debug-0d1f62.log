@@ -11,3 +11,6 @@
 {"sessionId":"0d1f62","location":"useSSE.ts:job.done","message":"SSE job.done received","data":{"jobId":"d569df33-afc7-4030-b10a-9b64fba779f2","status":"succeeded","total":2,"isScanning":false},"timestamp":1774236964816,"hypothesisId":"A,B,C"}
 {"sessionId":"0d1f62","location":"folderStore.ts:handleScanDone","message":"handleScanDone called","data":{"isScanning":false},"timestamp":1774236964817,"hypothesisId":"B,C"}
 {"sessionId":"0d1f62","location":"useSSE.ts:onerror","message":"SSE connection error/closed","data":{"readyState":0,"type":"error"},"timestamp":1774237012204,"hypothesisId":"B"}
+{"sessionId":"0d1f62","location":"scanner.go","message":"Scan goroutine started","data":{"jobId":"5064616f-5853-44ed-aa04-e3039b97402c","sourceDirs":["/Users/liqi/code/Classifier/.local/source"]},"timestamp":1774243474367,"hypothesisId":"B"}
+{"sessionId":"0d1f62","location":"scanner.go","message":"published scan.started","data":{"jobId":"5064616f-5853-44ed-aa04-e3039b97402c","total":2},"timestamp":1774243474370,"hypothesisId":"B"}
+{"sessionId":"0d1f62","location":"scanner.go","message":"published scan.done+job.done","data":{"failed":0,"jobId":"5064616f-5853-44ed-aa04-e3039b97402c","processed":2},"timestamp":1774243474378,"hypothesisId":"B"}

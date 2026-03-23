@@ -246,34 +246,35 @@ Use repository interfaces instead of reaching into SQL from handlers or services
 ```
 
 - Local developer guidance is in `README.md`
-- NAS deployment guidance is in `docs/ZSPACE_DEPLOYMENT.md`
+- NAS deployment guidance is in `docs/部署/极空间部署指南.md`
 
 ---
 
 ## Documentation Index
 
-- `docs/API.md` — legacy/high-level API notes
-- `docs/API_V3.md` — latest API direction
-- `docs/ARCHITECTURE.md` — legacy/high-level system architecture
-- `docs/ARCHITECTURE_V3.md` — latest architecture direction
-- `docs/AUDIT_LOG.md` — audit model
-- `docs/CLASSIFICATION.md` — legacy classification rules
-- `docs/CLASSIFICATION_V3.md` — classifier-node direction
-- `docs/DATA_MODELS.md` — legacy SQLite/data model reference
-- `docs/DATA_MODELS_V3.md` — latest data model direction
-- `docs/DEPLOYMENT.md` — Docker deployment reference
-- `docs/FRONTEND.md` — legacy frontend design
-- `docs/FRONTEND_V3.md` — latest frontend direction
-- `docs/CONFIG_SYSTEM.md` — v3 config system design
-- `docs/RESEARCH.md` — technical research notes
-- `docs/ROADMAP.md` — actual implementation roadmap/status
-- `docs/ROADMAP_V3.md` — v3 execution plan
-- `docs/SNAPSHOT.md` — legacy snapshot / revert design
-- `docs/SNAPSHOT_V3.md` — node-level snapshot direction
-- `docs/WORKFLOW.md` — legacy workflow planning
-- `docs/WORKFLOW_V3.md` — latest workflow design
-- `docs/RENAME_EDITOR_V3.md` — v3 rename design
-- `docs/ZSPACE_DEPLOYMENT.md` — 极空间 deployment runbook
+- `docs/文档目录.md` — categorized documentation index
+- `docs/功能/接口设计.md` — legacy/high-level API notes
+- `docs/功能/接口设计（版本3）.md` — latest API direction
+- `docs/架构/架构概览.md` — legacy/high-level system architecture
+- `docs/架构/架构概览（版本3）.md` — latest architecture direction
+- `docs/功能/审计日志.md` — audit model
+- `docs/功能/分类规则.md` — legacy classification rules
+- `docs/功能/分类规则（版本3）.md` — classifier-node direction
+- `docs/架构/数据模型.md` — legacy SQLite/data model reference
+- `docs/架构/数据模型（版本3）.md` — latest data model direction
+- `docs/部署/Docker部署指南.md` — Docker deployment reference
+- `docs/功能/前端设计.md` — legacy frontend design
+- `docs/功能/前端设计（版本3）.md` — latest frontend direction
+- `docs/架构/配置系统.md` — v3 config system design
+- `docs/规划/技术研究.md` — technical research notes
+- `docs/规划/开发路线图.md` — actual implementation roadmap/status
+- `docs/规划/开发路线图（版本3）.md` — v3 execution plan
+- `docs/功能/快照系统.md` — legacy snapshot / revert design
+- `docs/功能/快照系统（版本3）.md` — node-level snapshot direction
+- `docs/功能/工作流设计.md` — legacy workflow planning
+- `docs/功能/工作流设计（版本3）.md` — latest workflow design
+- `docs/功能/重命名编辑器（版本3）.md` — v3 rename design
+- `docs/部署/极空间部署指南.md` — 极空间 deployment runbook
 
 ---
 
