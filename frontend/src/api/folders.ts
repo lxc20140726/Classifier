@@ -110,7 +110,7 @@ export async function updateFolderStatus(id: string, status: FolderStatus): Prom
   return { data: parseFolder(response.data) }
 }
 
-export function deleteFolder(id: string) {
+export function suppressFolder(id: string) {
   return request<{ data: { deleted: boolean } }>(`/folders/${id}`, {
     method: 'DELETE',
   })
@@ -123,7 +123,7 @@ export function moveFolders(folderIds: string[], targetDir: string) {
   })
 }
 
-export async function restoreFolder(id: string): Promise<{ data: Folder }> {
+export async function unsuppressFolder(id: string): Promise<{ data: Folder }> {
   const response = await request<{ data: RawFolder }>(`/folders/${id}/restore`, {
     method: 'POST',
   })

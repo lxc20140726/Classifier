@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 
 import {
-  deleteFolder,
+  suppressFolder as suppressFolderRecord,
   listFolders,
-  restoreFolder,
+  unsuppressFolder as unsuppressFolderRecord,
   scanFolders,
   updateFolderCategory,
   updateFolderStatus,
@@ -51,8 +51,8 @@ interface FolderStore {
   handleScanDone: () => void
   updateFolderCategory: (id: string, category: Category) => Promise<void>
   updateFolderStatus: (id: string, status: FolderStatus) => Promise<void>
-  removeFolder: (id: string) => Promise<void>
-  restoreFolder: (id: string) => Promise<void>
+  suppressFolder: (id: string) => Promise<void>
+  unsuppressFolder: (id: string) => Promise<void>
 }
 
 function buildQuery(filters: FolderFilters, page: number, limit: number): FolderQueryParams {
@@ -192,25 +192,25 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
       set({ error: error instanceof Error ? error.message : '更新状态失败' })
     }
   },
-  async removeFolder(id) {
+  async suppressFolder(id) {
     try {
-      await deleteFolder(id)
+      await suppressFolderRecord(id)
       set((state) => ({
         folders: state.folders.filter((folder) => folder.id !== id),
         total: Math.max(0, state.total - 1),
       }))
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : '删除目录记录失败' })
+      set({ error: error instanceof Error ? error.message : '隐藏目录记录失败' })
     }
   },
-  async restoreFolder(id) {
+  async unsuppressFolder(id) {
     try {
-      const response = await restoreFolder(id)
+      const response = await unsuppressFolderRecord(id)
       set((state) => ({
         folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
       }))
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : '恢复目录失败' })
+      set({ error: error instanceof Error ? error.message : '恢复扫描失败' })
     }
   },
 }))
