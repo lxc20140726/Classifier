@@ -665,10 +665,10 @@ export default function FolderListPage() {
           <button
             key={s}
             type="button"
-            onClick={() => { setPage(1); setFilters({ ...filters, status: s === '' ? undefined : s }) }}
+            onClick={() => { setPage(1); setFilters({ ...filters, status: s === '' ? undefined : s, onlyDeleted: undefined }) }}
             className={cn(
               'rounded-full border px-3 py-1 text-xs font-medium transition',
-              filters.status === (s === '' ? undefined : s)
+              !filters.onlyDeleted && filters.status === (s === '' ? undefined : s)
                 ? 'border-primary bg-primary text-primary-foreground'
                 : 'border-border hover:bg-accent',
             )}
@@ -676,6 +676,19 @@ export default function FolderListPage() {
             {STATUS_LABEL[s]}
           </button>
         ))}
+        <div className="mx-1 w-px bg-border" />
+        <button
+          type="button"
+          onClick={() => { setPage(1); setFilters({ onlyDeleted: filters.onlyDeleted ? undefined : true }) }}
+          className={cn(
+            'rounded-full border px-3 py-1 text-xs font-medium transition',
+            filters.onlyDeleted
+              ? 'border-red-400 bg-red-100 text-red-700'
+              : 'border-border hover:bg-accent',
+          )}
+        >
+          已隐藏
+        </button>
       </div>
 
       <div className="mt-4 flex flex-col gap-4 xl:flex-row">
