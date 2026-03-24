@@ -41,6 +41,7 @@ type WorkflowRunRepository interface {
 	GetByID(ctx context.Context, id string) (*WorkflowRun, error)
 	List(ctx context.Context, filter WorkflowRunListFilter) ([]*WorkflowRun, int, error)
 	UpdateStatus(ctx context.Context, id, status, resumeNodeID string) error
+	UpdateBlocks(ctx context.Context, id string, delta int) error
 }
 
 type NodeRunRepository interface {
@@ -50,6 +51,7 @@ type NodeRunRepository interface {
 	GetLatestByNodeID(ctx context.Context, workflowRunID, nodeID string) (*NodeRun, error)
 	UpdateStart(ctx context.Context, id, inputJSON string) error
 	UpdateFinish(ctx context.Context, id, status, outputJSON, errMsg string) error
+	SetResumeToken(ctx context.Context, nodeRunID, token string) error
 }
 
 type NodeSnapshotRepository interface {

@@ -20,14 +20,19 @@ func (r *SQLiteWorkflowRunRepository) Create(ctx context.Context, item *Workflow
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO workflow_runs (
-	id, job_id, folder_id, workflow_def_id, status, resume_node_id, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	id, job_id, folder_id, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		item.ID,
 		item.JobID,
 		item.FolderID,
 		item.WorkflowDefID,
 		item.Status,
 		nullableString(item.ResumeNodeID),
+		nullableString(item.LastNodeID),
+		item.ExternalBlocks,
+		nullableString(item.Error),
+		nullableTime(item.StartedAt),
+		nullableTime(item.FinishedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("workflowRunRepo.Create: %w", err)
@@ -38,7 +43,7 @@ func (r *SQLiteWorkflowRunRepository) Create(ctx context.Context, item *Workflow
 
 func (r *SQLiteWorkflowRunRepository) GetByID(ctx context.Context, id string) (*WorkflowRun, error) {
 	item, err := scanWorkflowRun(r.db.QueryRowContext(ctx, `
-SELECT id, job_id, folder_id, workflow_def_id, status, resume_node_id, created_at, updated_at
+SELECT id, job_id, folder_id, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
 FROM workflow_runs
 WHERE id = ?`, id))
 	if err != nil {
@@ -87,7 +92,7 @@ func (r *SQLiteWorkflowRunRepository) List(ctx context.Context, filter WorkflowR
 	listArgs := append(append([]any{}, args...), limit, offset)
 
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, job_id, folder_id, workflow_def_id, status, resume_node_id, created_at, updated_at
+SELECT id, job_id, folder_id, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
 FROM workflow_runs`+whereClause+`
 ORDER BY created_at DESC
 LIMIT ? OFFSET ?`, listArgs...)
@@ -115,10 +120,18 @@ func (r *SQLiteWorkflowRunRepository) UpdateStatus(ctx context.Context, id, stat
 	res, err := r.db.ExecContext(
 		ctx,
 		`UPDATE workflow_runs
-SET status = ?, resume_node_id = ?, updated_at = CURRENT_TIMESTAMP
+SET status = ?,
+	resume_node_id = ?,
+	last_node_id = ?,
+	started_at = CASE WHEN ? = 'running' THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
+	finished_at = CASE WHEN ? IN ('succeeded', 'failed', 'rolled_back') THEN CURRENT_TIMESTAMP ELSE finished_at END,
+	updated_at = CURRENT_TIMESTAMP
 WHERE id = ?`,
 		status,
 		nullableString(resumeNodeID),
+		nullableString(resumeNodeID),
+		status,
+		status,
 		id,
 	)
 	if err != nil {
@@ -132,9 +145,33 @@ WHERE id = ?`,
 	return nil
 }
 
+func (r *SQLiteWorkflowRunRepository) UpdateBlocks(ctx context.Context, id string, delta int) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		`UPDATE workflow_runs
+SET external_blocks = MAX(0, external_blocks + ?), updated_at = CURRENT_TIMESTAMP
+WHERE id = ?`,
+		delta,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("workflowRunRepo.UpdateBlocks: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("workflowRunRepo.UpdateBlocks: %w", err)
+	}
+
+	return nil
+}
+
 func scanWorkflowRun(scanner interface{ Scan(dest ...any) error }) (*WorkflowRun, error) {
 	item := &WorkflowRun{}
 	var resumeNodeID sql.NullString
+	var lastNodeID sql.NullString
+	var errMsg sql.NullString
+	var startedAt any
+	var finishedAt any
 	var createdAt any
 	var updatedAt any
 
@@ -145,6 +182,11 @@ func scanWorkflowRun(scanner interface{ Scan(dest ...any) error }) (*WorkflowRun
 		&item.WorkflowDefID,
 		&item.Status,
 		&resumeNodeID,
+		&lastNodeID,
+		&item.ExternalBlocks,
+		&errMsg,
+		&startedAt,
+		&finishedAt,
 		&createdAt,
 		&updatedAt,
 	)
@@ -157,6 +199,20 @@ func scanWorkflowRun(scanner interface{ Scan(dest ...any) error }) (*WorkflowRun
 
 	if resumeNodeID.Valid {
 		item.ResumeNodeID = resumeNodeID.String
+	}
+	if lastNodeID.Valid {
+		item.LastNodeID = lastNodeID.String
+	}
+	if errMsg.Valid {
+		item.Error = errMsg.String
+	}
+	item.StartedAt, err = parseNullableTime(startedAt)
+	if err != nil {
+		return nil, fmt.Errorf("scanWorkflowRun parse started_at: %w", err)
+	}
+	item.FinishedAt, err = parseNullableTime(finishedAt)
+	if err != nil {
+		return nil, fmt.Errorf("scanWorkflowRun parse finished_at: %w", err)
 	}
 	item.CreatedAt, err = parseDBTime(createdAt)
 	if err != nil {

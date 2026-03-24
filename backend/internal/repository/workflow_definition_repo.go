@@ -19,10 +19,11 @@ func (r *SQLiteWorkflowDefinitionRepository) Create(ctx context.Context, item *W
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO workflow_definitions (
-	id, name, graph_json, is_active, version, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	id, name, description, graph_json, is_active, version, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		item.ID,
 		item.Name,
+		item.Description,
 		item.GraphJSON,
 		boolToInt(item.IsActive),
 		item.Version,
@@ -36,7 +37,7 @@ func (r *SQLiteWorkflowDefinitionRepository) Create(ctx context.Context, item *W
 
 func (r *SQLiteWorkflowDefinitionRepository) GetByID(ctx context.Context, id string) (*WorkflowDefinition, error) {
 	item, err := scanWorkflowDefinition(r.db.QueryRowContext(ctx, `
-SELECT id, name, graph_json, is_active, version, created_at, updated_at
+SELECT id, name, description, graph_json, is_active, version, created_at, updated_at
 FROM workflow_definitions
 WHERE id = ?`, id))
 	if err != nil {
@@ -63,7 +64,7 @@ func (r *SQLiteWorkflowDefinitionRepository) List(ctx context.Context, filter Wo
 	offset := (page - 1) * limit
 
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, graph_json, is_active, version, created_at, updated_at
+SELECT id, name, description, graph_json, is_active, version, created_at, updated_at
 FROM workflow_definitions
 ORDER BY created_at DESC
 LIMIT ? OFFSET ?`, limit, offset)
@@ -91,9 +92,10 @@ func (r *SQLiteWorkflowDefinitionRepository) Update(ctx context.Context, item *W
 	res, err := r.db.ExecContext(
 		ctx,
 		`UPDATE workflow_definitions
-SET name = ?, graph_json = ?, is_active = ?, version = ?, updated_at = CURRENT_TIMESTAMP
+SET name = ?, description = ?, graph_json = ?, is_active = ?, version = ?, updated_at = CURRENT_TIMESTAMP
 WHERE id = ?`,
 		item.Name,
+		item.Description,
 		item.GraphJSON,
 		boolToInt(item.IsActive),
 		item.Version,
@@ -132,6 +134,7 @@ func scanWorkflowDefinition(scanner interface{ Scan(dest ...any) error }) (*Work
 	err := scanner.Scan(
 		&item.ID,
 		&item.Name,
+		&item.Description,
 		&item.GraphJSON,
 		&activeInt,
 		&item.Version,

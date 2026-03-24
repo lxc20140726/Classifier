@@ -95,39 +95,47 @@ type AuditListFilter struct {
 }
 
 type WorkflowDefinition struct {
-	ID        string    `db:"id"`
-	Name      string    `db:"name"`
-	GraphJSON string    `db:"graph_json"`
-	IsActive  bool      `db:"is_active"`
-	Version   int       `db:"version"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
+	ID          string    `db:"id"`
+	Name        string    `db:"name"`
+	Description string    `db:"description"`
+	GraphJSON   string    `db:"graph_json"`
+	IsActive    bool      `db:"is_active"`
+	Version     int       `db:"version"`
+	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
 }
 
 type WorkflowRun struct {
-	ID            string    `db:"id"`
-	JobID         string    `db:"job_id"`
-	FolderID      string    `db:"folder_id"`
-	WorkflowDefID string    `db:"workflow_def_id"`
-	Status        string    `db:"status"`
-	ResumeNodeID  string    `db:"resume_node_id"`
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
+	ID             string     `db:"id"`
+	JobID          string     `db:"job_id"`
+	FolderID       string     `db:"folder_id"`
+	WorkflowDefID  string     `db:"workflow_def_id"`
+	Status         string     `db:"status"`
+	ResumeNodeID   string     `db:"resume_node_id"`
+	LastNodeID     string     `db:"last_node_id"`
+	ExternalBlocks int        `db:"external_blocks"`
+	Error          string     `db:"error"`
+	StartedAt      *time.Time `db:"started_at"`
+	FinishedAt     *time.Time `db:"finished_at"`
+	CreatedAt      time.Time  `db:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at"`
 }
 
 type NodeRun struct {
-	ID            string     `db:"id"`
-	WorkflowRunID string     `db:"workflow_run_id"`
-	NodeID        string     `db:"node_id"`
-	NodeType      string     `db:"node_type"`
-	Sequence      int        `db:"sequence"`
-	Status        string     `db:"status"`
-	InputJSON     string     `db:"input_json"`
-	OutputJSON    string     `db:"output_json"`
-	Error         string     `db:"error"`
-	StartedAt     *time.Time `db:"started_at"`
-	FinishedAt    *time.Time `db:"finished_at"`
-	CreatedAt     time.Time  `db:"created_at"`
+	ID             string     `db:"id"`
+	WorkflowRunID  string     `db:"workflow_run_id"`
+	NodeID         string     `db:"node_id"`
+	NodeType       string     `db:"node_type"`
+	Sequence       int        `db:"sequence"`
+	Status         string     `db:"status"`
+	InputJSON      string     `db:"input_json"`
+	OutputJSON     string     `db:"output_json"`
+	InputSignature string     `db:"input_signature"`
+	ResumeToken    string     `db:"resume_token"`
+	Error          string     `db:"error"`
+	StartedAt      *time.Time `db:"started_at"`
+	FinishedAt     *time.Time `db:"finished_at"`
+	CreatedAt      time.Time  `db:"created_at"`
 }
 
 type NodeSnapshot struct {
@@ -137,6 +145,7 @@ type NodeSnapshot struct {
 	Kind          string    `db:"kind"`
 	FSManifest    string    `db:"fs_manifest"`
 	OutputJSON    string    `db:"output_json"`
+	Compensation  string    `db:"compensation"`
 	CreatedAt     time.Time `db:"created_at"`
 }
 
@@ -146,15 +155,36 @@ type WorkflowGraph struct {
 }
 
 type WorkflowGraphNode struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Config  map[string]any `json:"config"`
-	Enabled bool           `json:"enabled"`
+	ID         string                   `json:"id"`
+	Type       string                   `json:"type"`
+	Label      string                   `json:"label,omitempty"`
+	Config     map[string]any           `json:"config"`
+	Inputs     map[string]NodeInputSpec `json:"inputs,omitempty"`
+	UIPosition *NodeUIPosition          `json:"ui_position,omitempty"`
+	Enabled    bool                     `json:"enabled"`
 }
 
 type WorkflowGraphEdge struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
+	ID         string `json:"id,omitempty"`
+	Source     string `json:"source"`
+	SourcePort int    `json:"source_port"`
+	Target     string `json:"target"`
+	TargetPort int    `json:"target_port"`
+}
+
+type NodeInputSpec struct {
+	ConstValue *any            `json:"const_value,omitempty"`
+	LinkSource *NodeLinkSource `json:"link_source,omitempty"`
+}
+
+type NodeLinkSource struct {
+	SourceNodeID    string `json:"source_node_id"`
+	OutputPortIndex int    `json:"output_port_index"`
+}
+
+type NodeUIPosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 type WorkflowDefListFilter struct {

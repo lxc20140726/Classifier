@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/liqiye/classifier/internal/fs"
@@ -29,10 +30,36 @@ type NodeExecutionInput struct {
 	NodeRun     *repository.NodeRun
 	Node        repository.WorkflowGraphNode
 	Folder      *repository.Folder
+	Inputs      map[string]any
 }
 
+type ExecutionStatus string
+
+const (
+	ExecutionSuccess ExecutionStatus = "success"
+	ExecutionFailure ExecutionStatus = "failure"
+	ExecutionPending ExecutionStatus = "pending"
+)
+
 type NodeExecutionOutput struct {
-	Output map[string]any
+	Outputs       []any
+	Status        ExecutionStatus
+	PendingReason string
+}
+
+type NodeSchemaPort struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+type NodeSchema struct {
+	Type         string           `json:"type"`
+	Label        string           `json:"label"`
+	Description  string           `json:"description"`
+	InputPorts   []NodeSchemaPort `json:"input_ports"`
+	OutputPorts  []NodeSchemaPort `json:"output_ports"`
+	ConfigSchema map[string]any   `json:"config_schema,omitempty"`
 }
 
 type NodeRollbackInput struct {
@@ -44,19 +71,23 @@ type NodeRollbackInput struct {
 
 type WorkflowNodeExecutor interface {
 	Type() string
+	Schema() NodeSchema
 	Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error)
+	Resume(ctx context.Context, input NodeExecutionInput, resumeData map[string]any) (NodeExecutionOutput, error)
 	Rollback(ctx context.Context, input NodeRollbackInput) error
 }
 
 type WorkflowRunnerService struct {
-	jobs          repository.JobRepository
-	folders       repository.FolderRepository
-	workflowDefs  repository.WorkflowDefinitionRepository
-	workflowRuns  repository.WorkflowRunRepository
-	nodeRuns      repository.NodeRunRepository
-	nodeSnapshots repository.NodeSnapshotRepository
-	executors     map[string]WorkflowNodeExecutor
-	broker        *sse.Broker
+	jobs              repository.JobRepository
+	folders           repository.FolderRepository
+	workflowDefs      repository.WorkflowDefinitionRepository
+	workflowRuns      repository.WorkflowRunRepository
+	nodeRuns          repository.NodeRunRepository
+	nodeSnapshots     repository.NodeSnapshotRepository
+	executors         map[string]WorkflowNodeExecutor
+	broker            *sse.Broker
+	pendingResumeData map[string]map[string]any
+	pendingResumeMu   sync.Mutex
 }
 
 func NewWorkflowRunnerService(
@@ -70,14 +101,15 @@ func NewWorkflowRunnerService(
 	broker *sse.Broker,
 ) *WorkflowRunnerService {
 	svc := &WorkflowRunnerService{
-		jobs:          jobRepo,
-		folders:       folderRepo,
-		workflowDefs:  workflowDefRepo,
-		workflowRuns:  workflowRunRepo,
-		nodeRuns:      nodeRunRepo,
-		nodeSnapshots: nodeSnapshotRepo,
-		executors:     make(map[string]WorkflowNodeExecutor),
-		broker:        broker,
+		jobs:              jobRepo,
+		folders:           folderRepo,
+		workflowDefs:      workflowDefRepo,
+		workflowRuns:      workflowRunRepo,
+		nodeRuns:          nodeRunRepo,
+		nodeSnapshots:     nodeSnapshotRepo,
+		executors:         make(map[string]WorkflowNodeExecutor),
+		broker:            broker,
+		pendingResumeData: make(map[string]map[string]any),
 	}
 
 	svc.RegisterExecutor(&triggerNodeExecutor{})
@@ -191,8 +223,28 @@ func (s *WorkflowRunnerService) GetWorkflowRunDetail(ctx context.Context, workfl
 }
 
 func (s *WorkflowRunnerService) ResumeWorkflowRun(ctx context.Context, workflowRunID string) error {
-	if err := s.executeWorkflowRun(ctx, workflowRunID, true); err != nil {
+	if err := s.ResumeWorkflowRunWithData(ctx, workflowRunID, nil); err != nil {
 		return fmt.Errorf("workflowRunner.ResumeWorkflowRun: %w", err)
+	}
+
+	return nil
+}
+
+func (s *WorkflowRunnerService) ResumeWorkflowRunWithData(ctx context.Context, workflowRunID string, resumeData map[string]any) error {
+	s.pendingResumeMu.Lock()
+	if resumeData == nil {
+		delete(s.pendingResumeData, workflowRunID)
+	} else {
+		copied := make(map[string]any, len(resumeData))
+		for key, value := range resumeData {
+			copied[key] = value
+		}
+		s.pendingResumeData[workflowRunID] = copied
+	}
+	s.pendingResumeMu.Unlock()
+
+	if err := s.executeWorkflowRun(ctx, workflowRunID, true); err != nil {
+		return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData: %w", err)
 	}
 
 	return nil
@@ -285,6 +337,17 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	if err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun list node runs for workflow run %q: %w", run.ID, err)
 	}
+	outputCache := make(map[string][]any)
+	for _, existingRun := range existingRuns {
+		if existingRun.NodeID == "" || strings.TrimSpace(existingRun.OutputJSON) == "" {
+			continue
+		}
+		outputs, parseErr := parseNodeOutputs(existingRun.OutputJSON)
+		if parseErr != nil {
+			continue
+		}
+		outputCache[existingRun.NodeID] = outputs
+	}
 	seq := len(existingRuns)
 
 	resumeNodeID := ""
@@ -293,6 +356,14 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	}
 	startNow := resumeNodeID == ""
 
+	var resumeData map[string]any
+	if resume {
+		s.pendingResumeMu.Lock()
+		resumeData = s.pendingResumeData[workflowRunID]
+		delete(s.pendingResumeData, workflowRunID)
+		s.pendingResumeMu.Unlock()
+	}
+
 	for _, node := range nodes {
 		if !startNow {
 			if node.ID == resumeNodeID {
@@ -300,6 +371,25 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			} else {
 				continue
 			}
+		}
+
+		inputs := make(map[string]any)
+		for portName, spec := range node.Inputs {
+			if spec.ConstValue != nil {
+				inputs[portName] = *spec.ConstValue
+				continue
+			}
+			if spec.LinkSource == nil {
+				continue
+			}
+
+			sourceOutputs := outputCache[spec.LinkSource.SourceNodeID]
+			if spec.LinkSource.OutputPortIndex < 0 || spec.LinkSource.OutputPortIndex >= len(sourceOutputs) {
+				inputs[portName] = nil
+				continue
+			}
+
+			inputs[portName] = sourceOutputs[spec.LinkSource.OutputPortIndex]
 		}
 
 		seq++
@@ -321,6 +411,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			"folder_id":       folder.ID,
 			"folder_path":     folder.Path,
 			"node":            node,
+			"inputs":          inputs,
 		})
 		if err != nil {
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
@@ -351,7 +442,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		if !ok {
 			err := fmt.Errorf("workflowRunner.executeWorkflowRun: executor not found for node type %q", node.Type)
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", err.Error())
-			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]any{"error": err.Error()})
+			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": err.Error()}})
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
@@ -365,15 +456,24 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			return err
 		}
 
-		execOutput, execErr := executor.Execute(ctx, NodeExecutionInput{
+		execInput := NodeExecutionInput{
 			WorkflowRun: run,
 			NodeRun:     nodeRun,
 			Node:        node,
 			Folder:      folder,
-		})
+			Inputs:      inputs,
+		}
+
+		var execOutput NodeExecutionOutput
+		var execErr error
+		if resume && node.ID == resumeNodeID {
+			execOutput, execErr = executor.Resume(ctx, execInput, resumeData)
+		} else {
+			execOutput, execErr = executor.Execute(ctx, execInput)
+		}
 		if execErr != nil {
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", execErr.Error())
-			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]any{"error": execErr.Error()})
+			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": execErr.Error()}})
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
@@ -387,10 +487,57 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			return fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %w", node.ID, execErr)
 		}
 
-		outputJSON, marshalErr := json.Marshal(execOutput.Output)
+		if execOutput.Status == "" {
+			execOutput.Status = ExecutionSuccess
+		}
+
+		outputJSON, marshalErr := json.Marshal(execOutput.Outputs)
 		if marshalErr != nil {
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return fmt.Errorf("workflowRunner.executeWorkflowRun marshal node output for node %q: %w", node.ID, marshalErr)
+		}
+
+		if execOutput.Status == ExecutionPending {
+			errMsg := execOutput.PendingReason
+			if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "waiting_input", string(outputJSON), errMsg); err != nil {
+				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+				return fmt.Errorf("workflowRunner.executeWorkflowRun update waiting_input for node run %q: %w", nodeRun.ID, err)
+			}
+
+			if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "waiting_input", node.ID); err != nil {
+				return fmt.Errorf("workflowRunner.executeWorkflowRun set waiting_input for %q: %w", run.ID, err)
+			}
+
+			s.publish("workflow_run.node_pending", map[string]any{
+				"job_id":          run.JobID,
+				"workflow_run_id": run.ID,
+				"folder_id":       run.FolderID,
+				"node_run_id":     nodeRun.ID,
+				"node_id":         node.ID,
+				"node_type":       node.Type,
+				"error":           execOutput.PendingReason,
+			})
+
+			return nil
+		}
+		if execOutput.Status == ExecutionFailure {
+			errMsg := execOutput.PendingReason
+			if strings.TrimSpace(errMsg) == "" {
+				errMsg = "node returned failure status"
+			}
+			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", string(outputJSON), errMsg)
+			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": errMsg}})
+			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+			s.publish("workflow_run.node_failed", map[string]any{
+				"job_id":          run.JobID,
+				"workflow_run_id": run.ID,
+				"folder_id":       run.FolderID,
+				"node_run_id":     nodeRun.ID,
+				"node_id":         node.ID,
+				"node_type":       node.Type,
+				"error":           errMsg,
+			})
+			return fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %s", node.ID, errMsg)
 		}
 
 		if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "succeeded", string(outputJSON), ""); err != nil {
@@ -398,13 +545,15 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			return fmt.Errorf("workflowRunner.executeWorkflowRun update finish for node run %q: %w", nodeRun.ID, err)
 		}
 
+		outputCache[node.ID] = append([]any(nil), execOutput.Outputs...)
+
 		folder, err = s.folders.GetByID(ctx, run.FolderID)
 		if err != nil {
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return fmt.Errorf("workflowRunner.executeWorkflowRun reload folder %q after node %q: %w", run.FolderID, node.ID, err)
 		}
 
-		if err := s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, execOutput.Output); err != nil {
+		if err := s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, execOutput.Outputs); err != nil {
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return fmt.Errorf("workflowRunner.executeWorkflowRun create post snapshot for node %q: %w", node.ID, err)
 		}
@@ -433,7 +582,7 @@ func (s *WorkflowRunnerService) createNodeSnapshot(
 	nodeRun *repository.NodeRun,
 	kind string,
 	folder *repository.Folder,
-	output map[string]any,
+	outputs []any,
 ) error {
 	manifestJSON, err := json.Marshal(map[string]any{
 		"folder_id":   folder.ID,
@@ -447,8 +596,8 @@ func (s *WorkflowRunnerService) createNodeSnapshot(
 	}
 
 	outputJSON := ""
-	if len(output) > 0 {
-		data, marshalErr := json.Marshal(output)
+	if outputs != nil {
+		data, marshalErr := json.Marshal(map[string]any{"outputs": outputs})
 		if marshalErr != nil {
 			return fmt.Errorf("workflowRunner.createNodeSnapshot marshal output for node run %q: %w", nodeRun.ID, marshalErr)
 		}
@@ -484,10 +633,13 @@ func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {
 
 	var raw struct {
 		Nodes []struct {
-			ID      string         `json:"id"`
-			Type    string         `json:"type"`
-			Config  map[string]any `json:"config"`
-			Enabled *bool          `json:"enabled"`
+			ID         string                              `json:"id"`
+			Type       string                              `json:"type"`
+			Label      string                              `json:"label"`
+			Config     map[string]any                      `json:"config"`
+			Inputs     map[string]repository.NodeInputSpec `json:"inputs"`
+			UIPosition *repository.NodeUIPosition          `json:"ui_position"`
+			Enabled    *bool                               `json:"enabled"`
 		} `json:"nodes"`
 		Edges []repository.WorkflowGraphEdge `json:"edges"`
 	}
@@ -508,10 +660,13 @@ func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {
 			continue
 		}
 		filtered = append(filtered, repository.WorkflowGraphNode{
-			ID:      node.ID,
-			Type:    node.Type,
-			Config:  node.Config,
-			Enabled: enabled,
+			ID:         node.ID,
+			Type:       node.Type,
+			Label:      node.Label,
+			Config:     node.Config,
+			Inputs:     node.Inputs,
+			UIPosition: node.UIPosition,
+			Enabled:    enabled,
 		})
 	}
 	if len(filtered) == 0 {
@@ -524,6 +679,22 @@ func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {
 	}
 
 	return graph, nil
+}
+
+func parseNodeOutputs(rawOutput string) ([]any, error) {
+	var outputs []any
+	if err := json.Unmarshal([]byte(rawOutput), &outputs); err == nil {
+		return outputs, nil
+	}
+
+	var wrapped struct {
+		Outputs []any `json:"outputs"`
+	}
+	if err := json.Unmarshal([]byte(rawOutput), &wrapped); err != nil {
+		return nil, err
+	}
+
+	return wrapped.Outputs, nil
 }
 
 func topologicalNodes(graph *repository.WorkflowGraph) ([]repository.WorkflowGraphNode, error) {
@@ -588,8 +759,20 @@ func (e *triggerNodeExecutor) Type() string {
 	return "trigger"
 }
 
+func (e *triggerNodeExecutor) Schema() NodeSchema {
+	return NodeSchema{Type: e.Type(), Label: "Trigger", Description: "Trigger node"}
+}
+
 func (e *triggerNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	return NodeExecutionOutput{Output: map[string]any{"triggered": true, "node_id": input.Node.ID}}, nil
+	if input.Folder == nil {
+		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+	}
+
+	return NodeExecutionOutput{Outputs: []any{input.Folder}, Status: ExecutionSuccess}, nil
+}
+
+func (e *triggerNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, fmt.Errorf("%s: Resume not supported", e.Type())
 }
 
 func (e *triggerNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
@@ -603,6 +786,10 @@ type extRatioClassifierNodeExecutor struct {
 
 func (e *extRatioClassifierNodeExecutor) Type() string {
 	return "ext-ratio-classifier"
+}
+
+func (e *extRatioClassifierNodeExecutor) Schema() NodeSchema {
+	return NodeSchema{Type: e.Type(), Label: "Ext Ratio Classifier", Description: "Classify folder by extension ratio"}
 }
 
 func (e *extRatioClassifierNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
@@ -620,15 +807,20 @@ func (e *extRatioClassifierNodeExecutor) Execute(ctx context.Context, input Node
 	}
 
 	newCategory := Classify(input.Folder.Name, fileNames)
-	oldCategory := input.Folder.Category
 	if err := e.folders.UpdateCategory(ctx, input.Folder.ID, newCategory, "workflow"); err != nil {
 		return NodeExecutionOutput{}, fmt.Errorf("extRatioClassifier.Execute update category for folder %q: %w", input.Folder.ID, err)
 	}
+	input.Folder.Category = newCategory
 
-	return NodeExecutionOutput{Output: map[string]any{
-		"old_category": oldCategory,
-		"new_category": newCategory,
-	}}, nil
+	if input.Folder == nil {
+		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+	}
+
+	return NodeExecutionOutput{Outputs: []any{input.Folder}, Status: ExecutionSuccess}, nil
+}
+
+func (e *extRatioClassifierNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, fmt.Errorf("%s: Resume not supported", e.Type())
 }
 
 func (e *extRatioClassifierNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {
@@ -669,6 +861,10 @@ func (e *moveNodeExecutor) Type() string {
 	return "move"
 }
 
+func (e *moveNodeExecutor) Schema() NodeSchema {
+	return NodeSchema{Type: e.Type(), Label: "Move", Description: "Move folder to target directory"}
+}
+
 func (e *moveNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
 	targetDir := stringConfig(input.Node.Config, "target_dir")
 	if targetDir == "" {
@@ -690,12 +886,17 @@ func (e *moveNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput
 	if err := e.folders.UpdatePath(ctx, input.Folder.ID, dst); err != nil {
 		return NodeExecutionOutput{}, fmt.Errorf("moveNode.Execute update path for folder %q: %w", input.Folder.ID, err)
 	}
+	input.Folder.Path = dst
 
-	return NodeExecutionOutput{Output: map[string]any{
-		"original_path": input.Folder.Path,
-		"current_path":  dst,
-		"target_dir":    targetDir,
-	}}, nil
+	if input.Folder == nil {
+		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+	}
+
+	return NodeExecutionOutput{Outputs: []any{input.Folder}, Status: ExecutionSuccess}, nil
+}
+
+func (e *moveNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, fmt.Errorf("%s: Resume not supported", e.Type())
 }
 
 func (e *moveNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {

@@ -19,14 +19,15 @@ func (r *SQLiteNodeSnapshotRepository) Create(ctx context.Context, item *NodeSna
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO node_snapshots (
-	id, node_run_id, workflow_run_id, kind, fs_manifest, output_json, created_at
-) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+	id, node_run_id, workflow_run_id, kind, fs_manifest, output_json, compensation, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		item.ID,
 		item.NodeRunID,
 		item.WorkflowRunID,
 		item.Kind,
 		nullableString(item.FSManifest),
 		nullableString(item.OutputJSON),
+		nullableString(item.Compensation),
 	)
 	if err != nil {
 		return fmt.Errorf("nodeSnapshotRepo.Create: %w", err)
@@ -37,7 +38,7 @@ func (r *SQLiteNodeSnapshotRepository) Create(ctx context.Context, item *NodeSna
 
 func (r *SQLiteNodeSnapshotRepository) ListByNodeRunID(ctx context.Context, nodeRunID string) ([]*NodeSnapshot, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, node_run_id, workflow_run_id, kind, fs_manifest, output_json, created_at
+SELECT id, node_run_id, workflow_run_id, kind, fs_manifest, output_json, compensation, created_at
 FROM node_snapshots
 WHERE node_run_id = ?
 ORDER BY created_at ASC`, nodeRunID)
@@ -65,6 +66,7 @@ func scanNodeSnapshot(scanner interface{ Scan(dest ...any) error }) (*NodeSnapsh
 	item := &NodeSnapshot{}
 	var fsManifest sql.NullString
 	var outputJSON sql.NullString
+	var compensation sql.NullString
 	var createdAt any
 
 	err := scanner.Scan(
@@ -74,6 +76,7 @@ func scanNodeSnapshot(scanner interface{ Scan(dest ...any) error }) (*NodeSnapsh
 		&item.Kind,
 		&fsManifest,
 		&outputJSON,
+		&compensation,
 		&createdAt,
 	)
 	if err != nil {
@@ -88,6 +91,9 @@ func scanNodeSnapshot(scanner interface{ Scan(dest ...any) error }) (*NodeSnapsh
 	}
 	if outputJSON.Valid {
 		item.OutputJSON = outputJSON.String
+	}
+	if compensation.Valid {
+		item.Compensation = compensation.String
 	}
 	item.CreatedAt, err = parseDBTime(createdAt)
 	if err != nil {
