@@ -31,6 +31,7 @@ import type { NodeRun, NodeRunStatus } from '@/types'
 import { listNodeTypes } from '@/api/nodeTypes'
 import { getWorkflowDef, updateWorkflowDef } from '@/api/workflowDefs'
 import { cn } from '@/lib/utils'
+import { useThemeStore } from '@/store/themeStore'
 import type {
   NodeInputSpec,
   NodeSchema,
@@ -97,53 +98,53 @@ interface NodeCategory {
 const NODE_CATEGORIES: NodeCategory[] = [
   {
     label: '触发器',
-    iconColor: 'text-violet-600',
-    accentClass: 'from-violet-500/20 to-purple-500/10 border-violet-200',
-    borderHoverClass: 'hover:border-violet-300',
+    iconColor: 'text-violet-600 dark:text-violet-400',
+    accentClass: 'from-violet-500/20 to-purple-500/10 border-violet-200 dark:from-violet-500/25 dark:to-purple-500/15 dark:border-violet-700',
+    borderHoverClass: 'hover:border-violet-300 dark:hover:border-violet-500',
     types: new Set(['trigger']),
   },
   {
     label: '扫描 & 读取',
-    iconColor: 'text-blue-600',
-    accentClass: 'from-blue-500/20 to-indigo-500/10 border-blue-200',
-    borderHoverClass: 'hover:border-blue-300',
+    iconColor: 'text-blue-600 dark:text-blue-400',
+    accentClass: 'from-blue-500/20 to-indigo-500/10 border-blue-200 dark:from-blue-500/25 dark:to-indigo-500/15 dark:border-blue-700',
+    borderHoverClass: 'hover:border-blue-300 dark:hover:border-blue-500',
     types: new Set(['folder-tree-scanner', 'classification-reader']),
   },
   {
     label: '分类器',
-    iconColor: 'text-cyan-600',
-    accentClass: 'from-cyan-500/20 to-teal-500/10 border-cyan-200',
-    borderHoverClass: 'hover:border-cyan-300',
+    iconColor: 'text-cyan-600 dark:text-cyan-400',
+    accentClass: 'from-cyan-500/20 to-teal-500/10 border-cyan-200 dark:from-cyan-500/25 dark:to-teal-500/15 dark:border-cyan-700',
+    borderHoverClass: 'hover:border-cyan-300 dark:hover:border-cyan-500',
     types: new Set(['ext-ratio-classifier', 'name-keyword-classifier', 'file-tree-classifier', 'manual-classifier']),
   },
   {
     label: '逻辑控制',
-    iconColor: 'text-amber-600',
-    accentClass: 'from-amber-500/20 to-orange-500/10 border-amber-200',
-    borderHoverClass: 'hover:border-amber-300',
+    iconColor: 'text-amber-600 dark:text-amber-400',
+    accentClass: 'from-amber-500/20 to-orange-500/10 border-amber-200 dark:from-amber-500/25 dark:to-orange-500/15 dark:border-amber-700',
+    borderHoverClass: 'hover:border-amber-300 dark:hover:border-amber-500',
     types: new Set(['confidence-check', 'folder-splitter', 'category-router', 'subtree-aggregator']),
   },
   {
     label: '执行操作',
-    iconColor: 'text-emerald-600',
-    accentClass: 'from-emerald-500/20 to-green-500/10 border-emerald-200',
-    borderHoverClass: 'hover:border-emerald-300',
+    iconColor: 'text-emerald-600 dark:text-emerald-400',
+    accentClass: 'from-emerald-500/20 to-green-500/10 border-emerald-200 dark:from-emerald-500/25 dark:to-green-500/15 dark:border-emerald-700',
+    borderHoverClass: 'hover:border-emerald-300 dark:hover:border-emerald-500',
     types: new Set(['move', 'move-node', 'rename-node', 'compress-node', 'thumbnail-node']),
   },
   {
     label: '审计日志',
-    iconColor: 'text-slate-500',
-    accentClass: 'from-slate-400/20 to-zinc-400/10 border-slate-200',
-    borderHoverClass: 'hover:border-slate-300',
+    iconColor: 'text-slate-500 dark:text-slate-400',
+    accentClass: 'from-slate-400/20 to-zinc-400/10 border-slate-200 dark:from-slate-400/20 dark:to-zinc-400/10 dark:border-slate-600',
+    borderHoverClass: 'hover:border-slate-300 dark:hover:border-slate-500',
     types: new Set(['audit-log']),
   },
 ]
 
 const FALLBACK_CATEGORY: NodeCategory = {
   label: '其他',
-  iconColor: 'text-gray-500',
-  accentClass: 'from-gray-400/20 to-gray-300/10 border-gray-200',
-  borderHoverClass: 'hover:border-gray-300',
+  iconColor: 'text-gray-500 dark:text-gray-400',
+  accentClass: 'from-gray-400/20 to-gray-300/10 border-gray-200 dark:from-gray-500/20 dark:to-gray-400/10 dark:border-gray-600',
+  borderHoverClass: 'hover:border-gray-300 dark:hover:border-gray-500',
   types: new Set(),
 }
 
@@ -839,12 +840,12 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
 // ─── WorkflowNodeCard ─────────────────────────────────────────────────────────
 
 const NODE_STATUS_CFG: Record<NodeRunStatus, { label: string; cls: string; icon: ReactElement | null }> = {
-  running: { label: '执行中', cls: 'text-amber-700 bg-amber-50 border-amber-200', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
-  succeeded: { label: '完成', cls: 'text-emerald-700 bg-emerald-50 border-emerald-200', icon: <CheckCircle2 className="h-3 w-3" /> },
-  failed: { label: '失败', cls: 'text-red-700 bg-red-50 border-red-200', icon: <TriangleAlert className="h-3 w-3" /> },
+  running: { label: '执行中', cls: 'text-amber-700 bg-amber-50 border-amber-200 dark:text-amber-400 dark:bg-amber-900/30 dark:border-amber-700', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
+  succeeded: { label: '完成', cls: 'text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-400 dark:bg-emerald-900/30 dark:border-emerald-700', icon: <CheckCircle2 className="h-3 w-3" /> },
+  failed: { label: '失败', cls: 'text-red-700 bg-red-50 border-red-200 dark:text-red-400 dark:bg-red-900/30 dark:border-red-700', icon: <TriangleAlert className="h-3 w-3" /> },
   pending: { label: '等待中', cls: 'text-muted-foreground bg-muted/40 border-border', icon: null },
-  skipped: { label: '已跳过', cls: 'text-slate-500 bg-slate-50 border-slate-200', icon: null },
-  waiting_input: { label: '等待输入', cls: 'text-blue-700 bg-blue-50 border-blue-200', icon: <Loader2 className="h-3 w-3 animate-pulse" /> },
+  skipped: { label: '已跳过', cls: 'text-slate-500 bg-slate-50 border-slate-200 dark:text-slate-400 dark:bg-slate-800/40 dark:border-slate-600', icon: null },
+  waiting_input: { label: '等待输入', cls: 'text-blue-700 bg-blue-50 border-blue-200 dark:text-blue-400 dark:bg-blue-900/30 dark:border-blue-700', icon: <Loader2 className="h-3 w-3 animate-pulse" /> },
 }
 
 function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
@@ -947,21 +948,21 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
 
             {/* Rename preview */}
             {renamePreview && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5 dark:border-emerald-700 dark:bg-emerald-900/20">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-emerald-800">重命名预览</p>
-                  <span className="text-[10px] text-emerald-700">策略：{renamePreview.strategy}</span>
+                  <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-400">重命名预览</p>
+                  <span className="text-[10px] text-emerald-700 dark:text-emerald-500">策略：{renamePreview.strategy}</span>
                 </div>
-                <p className="mt-1 text-[10px] text-emerald-700/80">
+                <p className="mt-1 text-[10px] text-emerald-700/80 dark:text-emerald-500/80">
                   示例：
                   <span className="font-mono">{RENAME_PREVIEW_SAMPLE.name}</span>
                 </p>
-                <div className="mt-1.5 rounded-lg border border-emerald-200 bg-white/80 px-2 py-1.5">
+                <div className="mt-1.5 rounded-lg border border-emerald-200 bg-white/80 px-2 py-1.5 dark:border-emerald-700/50 dark:bg-emerald-950/50">
                   <p className="text-[10px] text-muted-foreground">预览目标名称</p>
                   <p className="font-mono text-sm text-foreground">{renamePreview.targetName}</p>
                 </div>
                 {renamePreview.warning && (
-                  <p className="mt-1 text-[10px] text-amber-700">{renamePreview.warning}</p>
+                  <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">{renamePreview.warning}</p>
                 )}
               </div>
             )}
@@ -979,7 +980,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
               <button
                 type="button"
                 onClick={() => void onRollbackRun(nodeRun.workflow_run_id)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/40"
               >
                 <RotateCcw className="h-4 w-4" />
                 回退此节点的工作流运行
@@ -988,7 +989,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
             <button
               type="button"
               onClick={() => deleteNode(id)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50/60 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50/60 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 dark:border-red-700 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
             >
               <Trash2 className="h-4 w-4" />
               删除该节点
@@ -1098,7 +1099,7 @@ function RunWorkflowModal({ open, workflowDefId, onClose, onStarted }: RunWorkfl
               </label>
             ))}
           </div>
-          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+          {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
         </div>
         <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
           <button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm transition hover:bg-accent">取消</button>
@@ -1122,6 +1123,7 @@ function RunWorkflowModal({ open, workflowDefId, onClose, onStarted }: RunWorkfl
 function WorkflowEditorScreen() {
   const navigate = useNavigate()
   const params = useParams<{ id: string }>()
+  const theme = useThemeStore((s) => s.theme)
   const workflowDefId = params.id ?? ''
 
   const [workflowDef, setWorkflowDef] = useState<WorkflowDefinition | null>(null)
@@ -1421,12 +1423,12 @@ function WorkflowEditorScreen() {
             </div>
 
             <div className="flex items-center gap-3">
-              {error && <span className="text-sm text-red-600">{error}</span>}
-              {notice && <span className="text-sm text-emerald-700">{notice}</span>}
+              {error && <span className="text-sm text-red-600 dark:text-red-400">{error}</span>}
+              {notice && <span className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</span>}
               <button
                 type="button"
                 onClick={() => setIsRunModalOpen(true)}
-                className="inline-flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-100"
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
               >
                 <Play className="h-4 w-4" />
                 运行
@@ -1581,10 +1583,15 @@ function WorkflowEditorScreen() {
               zoomOnScroll={false}
               zoomOnPinch
               preventScrolling
-              className="bg-[linear-gradient(135deg,rgba(248,250,252,0.9),rgba(240,249,255,0.9))]"
-              defaultEdgeOptions={{ style: { strokeWidth: 2, stroke: '#0f766e' } }}
+              colorMode={theme}
+              className={
+                theme === 'dark'
+                  ? 'bg-[linear-gradient(135deg,rgba(10,14,26,0.97),rgba(15,22,40,0.97))]'
+                  : 'bg-[linear-gradient(135deg,rgba(248,250,252,0.9),rgba(240,249,255,0.9))]'
+              }
+              defaultEdgeOptions={{ style: { strokeWidth: 2, stroke: theme === 'dark' ? '#2dd4bf' : '#0f766e' } }}
             >
-              <Background gap={24} size={1} color="#cbd5e1" />
+              <Background gap={24} size={1} color={theme === 'dark' ? '#2d3748' : '#cbd5e1'} />
               <MiniMap className="!bg-background/90" pannable zoomable />
               <Controls />
             </ReactFlow>
@@ -1602,7 +1609,7 @@ function WorkflowEditorScreen() {
                   <button
                     type="button"
                     onClick={deleteSelectedEdge}
-                    className="rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 transition hover:bg-red-50"
+                    className="rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 transition hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/30"
                   >
                     删除连线
                   </button>

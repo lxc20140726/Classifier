@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 
 import { Layout } from '@/components/Layout'
 import { useSSE } from '@/hooks/useSSE'
+import { useThemeStore } from '@/store/themeStore'
 import AuditLogsPage from '@/pages/AuditLogsPage'
 import FolderListPage from '@/pages/FolderListPage'
 import JobsPage from '@/pages/JobsPage'
@@ -12,6 +13,7 @@ import WorkflowDefsPage from '@/pages/WorkflowDefsPage'
 
 export default function App() {
   useSSE()
+  useThemeStore()
 
   return (
     <BrowserRouter>

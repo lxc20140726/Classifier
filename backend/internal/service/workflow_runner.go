@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/liqiye/classifier/internal/fs"
@@ -360,7 +361,7 @@ func (s *WorkflowRunnerService) RollbackWorkflowRun(ctx context.Context, workflo
 	return nil
 }
 
-func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflowRunID string, resume bool) error {
+func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflowRunID string, resume bool) (retErr error) {
 	run, err := s.workflowRuns.GetByID(ctx, workflowRunID)
 	if err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun get workflow run %q: %w", workflowRunID, err)
@@ -389,6 +390,16 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	if err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun get folder %q: %w", run.FolderID, err)
 	}
+
+	runStartedAt := time.Now()
+	if !resume {
+		_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.start", "success", 0, nil)
+	}
+	defer func() {
+		if retErr != nil {
+			_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.failed", "failed", time.Since(runStartedAt).Milliseconds(), retErr)
+		}
+	}()
 
 	existingRuns, _, err := s.nodeRuns.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 2000})
 	if err != nil {
@@ -544,6 +555,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			Inputs:      inputs,
 		}
 
+		nodeStartedAt := time.Now()
 		var execOutput NodeExecutionOutput
 		var execErr error
 		if resume && node.ID == resumeNodeID {
@@ -554,7 +566,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		if execErr != nil {
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", execErr.Error())
 			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": execErr.Error()}})
-			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, nil, execErr)
+			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, nil, execErr, nodeStartedAt)
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
@@ -608,7 +620,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			}
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", string(outputJSON), errMsg)
 			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": errMsg}})
-			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, fmt.Errorf("%s", errMsg))
+			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, fmt.Errorf("%s", errMsg), nodeStartedAt)
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
@@ -639,7 +651,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return fmt.Errorf("workflowRunner.executeWorkflowRun create post snapshot for node %q: %w", node.ID, err)
 		}
-		_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, nil)
+		_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, nil, nodeStartedAt)
 
 		s.publish("workflow_run.node_done", map[string]any{
 			"job_id":          run.JobID,
@@ -656,11 +668,12 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		return fmt.Errorf("workflowRunner.executeWorkflowRun set succeeded for %q: %w", run.ID, err)
 	}
 
+	_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.complete", "success", time.Since(runStartedAt).Milliseconds(), nil)
 	return nil
 }
 
-func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, input NodeExecutionInput, currentFolder *repository.Folder, outputs []any, execErr error) error {
-	if s.auditSvc == nil || !isFileMutatingNodeType(input.Node.Type) {
+func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, input NodeExecutionInput, currentFolder *repository.Folder, outputs []any, execErr error, startedAt time.Time) error {
+	if s.auditSvc == nil {
 		return nil
 	}
 
@@ -721,12 +734,13 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 		Action:     action,
 		Result:     result,
 		Detail:     detailJSON,
+		DurationMs: time.Since(startedAt).Milliseconds(),
 		ErrorMsg:   errorString(execErr),
 	})
 }
 
 func (s *WorkflowRunnerService) writeNodeRollbackAudit(ctx context.Context, run *repository.WorkflowRun, nodeRun *repository.NodeRun, folder *repository.Folder, snapshots []*repository.NodeSnapshot) error {
-	if s.auditSvc == nil || nodeRun == nil || !isFileMutatingNodeType(nodeRun.NodeType) {
+	if s.auditSvc == nil || nodeRun == nil {
 		return nil
 	}
 
@@ -751,13 +765,34 @@ func (s *WorkflowRunnerService) writeNodeRollbackAudit(ctx context.Context, run 
 	})
 }
 
-func isFileMutatingNodeType(nodeType string) bool {
-	switch nodeType {
-	case "move", phase4MoveNodeExecutorType, compressNodeExecutorType, thumbnailNodeExecutorType:
-		return true
-	default:
-		return false
+func (s *WorkflowRunnerService) writeWorkflowRunAudit(ctx context.Context, run *repository.WorkflowRun, folder *repository.Folder, action, result string, durationMs int64, auditErr error) error {
+	if s.auditSvc == nil {
+		return nil
 	}
+
+	detail := map[string]any{
+		"workflow_run_id":  workflowRunIDFromInput(run),
+		"workflow_def_id":  run.WorkflowDefID,
+	}
+	if auditErr != nil {
+		detail["error"] = auditErr.Error()
+	}
+
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("workflowRunner.writeWorkflowRunAudit marshal detail: %w", err)
+	}
+
+	return s.auditSvc.Write(ctx, &repository.AuditLog{
+		JobID:      workflowJobIDFromInput(run),
+		FolderID:   folderIDForAudit(folder, nil),
+		FolderPath: folderPathForAudit(folder, nil),
+		Action:     action,
+		Result:     result,
+		Detail:     detailJSON,
+		DurationMs: durationMs,
+		ErrorMsg:   errorString(auditErr),
+	})
 }
 
 func nodeRunIDFromInput(run *repository.NodeRun) string {

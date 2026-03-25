@@ -13,7 +13,21 @@
     --muted-foreground: 215 14% 42%;
     --accent: 28 65% 92%;
     --accent-foreground: 220 28% 12%;
+    --card: 42 33% 99%;
     --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 222 28% 10%;
+    --foreground: 210 20% 92%;
+    --border: 220 20% 20%;
+    --primary: 198 60% 52%;
+    --primary-foreground: 222 28% 8%;
+    --muted: 220 22% 16%;
+    --muted-foreground: 215 14% 60%;
+    --accent: 220 22% 20%;
+    --accent-foreground: 210 20% 92%;
+    --card: 222 28% 12%;
   }
 
   * {

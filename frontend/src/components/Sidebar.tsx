@@ -1,7 +1,8 @@
-import { Briefcase, FolderKanban, GitBranch, ScrollText, Settings } from 'lucide-react'
+import { Briefcase, FolderKanban, GitBranch, Moon, ScrollText, Settings, Sun } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
+import { useThemeStore } from '@/store/themeStore'
 
 const navItems = [
   { to: '/', label: '文件夹', icon: FolderKanban, end: true },
@@ -12,6 +13,8 @@ const navItems = [
 ]
 
 export function Sidebar() {
+  const { theme, toggleTheme } = useThemeStore()
+
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-muted/30">
       <div className="border-b border-border px-6 py-5">
@@ -44,6 +47,16 @@ export function Sidebar() {
           )
         })}
       </nav>
+      <div className="border-t border-border p-4">
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          <span>{theme === 'dark' ? '切换到浅色' : '切换到暗色'}</span>
+        </button>
+      </div>
     </aside>
   )
 }
