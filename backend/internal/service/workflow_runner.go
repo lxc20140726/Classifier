@@ -88,6 +88,7 @@ type WorkflowRunnerService struct {
 	nodeSnapshots     repository.NodeSnapshotRepository
 	executors         map[string]WorkflowNodeExecutor
 	broker            *sse.Broker
+	auditSvc          *AuditService
 	pendingResumeData map[string]map[string]any
 	pendingResumeMu   sync.Mutex
 	folderConcurrency int
@@ -113,6 +114,7 @@ func NewWorkflowRunnerService(
 		nodeSnapshots:     nodeSnapshotRepo,
 		executors:         make(map[string]WorkflowNodeExecutor),
 		broker:            broker,
+		auditSvc:          auditSvc,
 		pendingResumeData: make(map[string]map[string]any),
 		folderConcurrency: defaultWorkflowFolderConcurrency(),
 	}
@@ -343,6 +345,7 @@ func (s *WorkflowRunnerService) RollbackWorkflowRun(ctx context.Context, workflo
 		}); rbErr != nil {
 			return fmt.Errorf("workflowRunner.RollbackWorkflowRun rollback node %q: %w", nodeRun.NodeID, rbErr)
 		}
+		_ = s.writeNodeRollbackAudit(ctx, run, nodeRun, folder, snaps)
 
 		folder, err = s.folders.GetByID(ctx, run.FolderID)
 		if err != nil {
@@ -551,6 +554,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		if execErr != nil {
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", execErr.Error())
 			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": execErr.Error()}})
+			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, nil, execErr)
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
@@ -604,6 +608,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			}
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", string(outputJSON), errMsg)
 			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": errMsg}})
+			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, fmt.Errorf("%s", errMsg))
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
@@ -634,6 +639,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return fmt.Errorf("workflowRunner.executeWorkflowRun create post snapshot for node %q: %w", node.ID, err)
 		}
+		_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, nil)
 
 		s.publish("workflow_run.node_done", map[string]any{
 			"job_id":          run.JobID,
@@ -651,6 +657,168 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	}
 
 	return nil
+}
+
+func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, input NodeExecutionInput, currentFolder *repository.Folder, outputs []any, execErr error) error {
+	if s.auditSvc == nil || !isFileMutatingNodeType(input.Node.Type) {
+		return nil
+	}
+
+	detail := map[string]any{
+		"workflow_run_id": workflowRunIDFromInput(input.WorkflowRun),
+		"node_run_id":     nodeRunIDFromInput(input.NodeRun),
+		"node_id":         input.Node.ID,
+		"node_type":       input.Node.Type,
+	}
+	action := "workflow." + input.Node.Type
+	folderPath := folderPathForAudit(input.Folder, currentFolder)
+	result := "success"
+
+	switch input.Node.Type {
+	case "move":
+		detail["source_path"] = folderPathForAudit(input.Folder, nil)
+		detail["target_path"] = folderPathForAudit(currentFolder, nil)
+	case phase4MoveNodeExecutorType:
+		results := moveResultsForAudit(outputs)
+		detail["results"] = results
+		if len(results) > 0 {
+			folderPath = strings.TrimSpace(results[0].TargetPath)
+			if folderPath == "" {
+				folderPath = strings.TrimSpace(results[0].SourcePath)
+			}
+			if strings.TrimSpace(results[0].Status) != "" {
+				result = strings.TrimSpace(results[0].Status)
+			}
+		}
+	case compressNodeExecutorType:
+		archives := stringSliceOutput(outputs, 1)
+		detail["archive_paths"] = archives
+		if len(archives) > 0 {
+			folderPath = archives[0]
+		}
+	case thumbnailNodeExecutorType:
+		thumbnails := stringSliceOutput(outputs, 1)
+		detail["thumbnail_paths"] = thumbnails
+		if len(thumbnails) > 0 {
+			folderPath = thumbnails[0]
+		}
+	}
+
+	if execErr != nil {
+		result = "failed"
+		detail["error"] = execErr.Error()
+	}
+
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("workflowRunner.writeNodeExecutionAudit marshal detail: %w", err)
+	}
+
+	return s.auditSvc.Write(ctx, &repository.AuditLog{
+		JobID:      workflowJobIDFromInput(input.WorkflowRun),
+		FolderID:   folderIDForAudit(input.Folder, currentFolder),
+		FolderPath: folderPath,
+		Action:     action,
+		Result:     result,
+		Detail:     detailJSON,
+		ErrorMsg:   errorString(execErr),
+	})
+}
+
+func (s *WorkflowRunnerService) writeNodeRollbackAudit(ctx context.Context, run *repository.WorkflowRun, nodeRun *repository.NodeRun, folder *repository.Folder, snapshots []*repository.NodeSnapshot) error {
+	if s.auditSvc == nil || nodeRun == nil || !isFileMutatingNodeType(nodeRun.NodeType) {
+		return nil
+	}
+
+	detailJSON, err := json.Marshal(map[string]any{
+		"workflow_run_id": workflowRunIDFromInput(run),
+		"node_run_id":     nodeRun.ID,
+		"node_id":         nodeRun.NodeID,
+		"node_type":       nodeRun.NodeType,
+		"snapshot_count":  len(snapshots),
+	})
+	if err != nil {
+		return fmt.Errorf("workflowRunner.writeNodeRollbackAudit marshal detail: %w", err)
+	}
+
+	return s.auditSvc.Write(ctx, &repository.AuditLog{
+		JobID:      workflowJobIDFromInput(run),
+		FolderID:   folderIDForAudit(folder, nil),
+		FolderPath: folderPathForAudit(folder, nil),
+		Action:     "workflow." + nodeRun.NodeType + ".rollback",
+		Result:     "success",
+		Detail:     detailJSON,
+	})
+}
+
+func isFileMutatingNodeType(nodeType string) bool {
+	switch nodeType {
+	case "move", phase4MoveNodeExecutorType, compressNodeExecutorType, thumbnailNodeExecutorType:
+		return true
+	default:
+		return false
+	}
+}
+
+func nodeRunIDFromInput(run *repository.NodeRun) string {
+	if run == nil {
+		return ""
+	}
+
+	return run.ID
+}
+
+func folderIDForAudit(primary *repository.Folder, fallback *repository.Folder) string {
+	if primary != nil && strings.TrimSpace(primary.ID) != "" {
+		return strings.TrimSpace(primary.ID)
+	}
+	if fallback != nil {
+		return strings.TrimSpace(fallback.ID)
+	}
+
+	return ""
+}
+
+func folderPathForAudit(primary *repository.Folder, fallback *repository.Folder) string {
+	if primary != nil && strings.TrimSpace(primary.Path) != "" {
+		return strings.TrimSpace(primary.Path)
+	}
+	if fallback != nil {
+		return strings.TrimSpace(fallback.Path)
+	}
+
+	return ""
+}
+
+func moveResultsForAudit(outputs []any) []MoveResult {
+	if len(outputs) < 2 {
+		return nil
+	}
+
+	switch typed := outputs[1].(type) {
+	case []MoveResult:
+		return append([]MoveResult(nil), typed...)
+	case MoveResult:
+		return []MoveResult{typed}
+	default:
+		return nil
+	}
+}
+
+func stringSliceOutput(outputs []any, index int) []string {
+	if index < 0 || index >= len(outputs) {
+		return nil
+	}
+
+	return uniqueCompactStringSlice(anyToStringSlice(outputs[index]))
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return err.Error()
 }
 
 func (s *WorkflowRunnerService) createNodeSnapshot(

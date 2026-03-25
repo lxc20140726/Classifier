@@ -67,6 +67,11 @@ type slowParallelExecutor struct {
 	visited   []string
 }
 
+type auditOutputExecutor struct {
+	nodeType string
+	outputs  []any
+}
+
 func (e *consumeInputExecutor) Type() string {
 	return "consume-input"
 }
@@ -127,6 +132,26 @@ func (e *slowParallelExecutor) Resume(_ context.Context, _ NodeExecutionInput, _
 }
 
 func (e *slowParallelExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *auditOutputExecutor) Type() string {
+	return e.nodeType
+}
+
+func (e *auditOutputExecutor) Schema() NodeSchema {
+	return NodeSchema{Type: e.Type(), Label: e.Type(), Description: "Emit outputs for audit tests"}
+}
+
+func (e *auditOutputExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{Outputs: e.outputs, Status: ExecutionSuccess}, nil
+}
+
+func (e *auditOutputExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *auditOutputExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
 }
 
@@ -382,6 +407,104 @@ func TestWorkflowRunnerServiceRunsFoldersInParallel(t *testing.T) {
 	}
 	if len(executor.visited) != 2 {
 		t.Fatalf("visited len = %d, want 2", len(executor.visited))
+	}
+}
+
+func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+	auditRepo := repository.NewAuditRepository(database)
+	auditSvc := NewAuditService(auditRepo)
+
+	folder := &repository.Folder{ID: "folder-audit", Path: "/source/folder-audit", Name: "folder-audit", Category: "other", CategorySource: "auto", Status: "pending"}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	testCases := []struct {
+		name       string
+		nodeType   string
+		outputs    []any
+		action     string
+		result     string
+		folderPath string
+	}{
+		{
+			name:       "move-node",
+			nodeType:   "move-node",
+			outputs:    []any{[]ProcessingItem{{FolderID: folder.ID, SourcePath: "/target/folder-audit", FolderName: folder.Name}}, []MoveResult{{SourcePath: folder.Path, TargetPath: "/target/folder-audit", Status: "moved"}}},
+			action:     "workflow.move-node",
+			result:     "moved",
+			folderPath: "/target/folder-audit",
+		},
+		{
+			name:       "compress-node",
+			nodeType:   "compress-node",
+			outputs:    []any{[]ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}, []string{"/archives/folder-audit.cbz"}},
+			action:     "workflow.compress-node",
+			result:     "success",
+			folderPath: "/archives/folder-audit.cbz",
+		},
+		{
+			name:       "thumbnail-node",
+			nodeType:   "thumbnail-node",
+			outputs:    []any{[]ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}, []string{"/thumbs/folder-audit.jpg"}},
+			action:     "workflow.thumbnail-node",
+			result:     "success",
+			folderPath: "/thumbs/folder-audit.jpg",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			graph := repository.WorkflowGraph{
+				Nodes: []repository.WorkflowGraphNode{
+					{ID: "n1", Type: "trigger", Enabled: true},
+					{ID: "n2", Type: tc.nodeType, Enabled: true},
+				},
+				Edges: []repository.WorkflowGraphEdge{{Source: "n1", Target: "n2"}},
+			}
+			graphJSON, err := json.Marshal(graph)
+			if err != nil {
+				t.Fatalf("json.Marshal(graph) error = %v", err)
+			}
+
+			def := &repository.WorkflowDefinition{ID: "wf-" + tc.nodeType, Name: tc.nodeType, GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+			if err := workflowDefRepo.Create(ctx, def); err != nil {
+				t.Fatalf("workflowDefRepo.Create() error = %v", err)
+			}
+
+			svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, auditSvc)
+			svc.RegisterExecutor(&auditOutputExecutor{nodeType: tc.nodeType, outputs: tc.outputs})
+
+			jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, FolderIDs: []string{folder.ID}})
+			if err != nil {
+				t.Fatalf("StartJob() error = %v", err)
+			}
+			waitJobDone(t, jobRepo, jobID)
+
+			logs, _, err := auditRepo.List(ctx, repository.AuditListFilter{JobID: jobID, Action: tc.action, Page: 1, Limit: 20})
+			if err != nil {
+				t.Fatalf("auditRepo.List() error = %v", err)
+			}
+			if len(logs) == 0 {
+				t.Fatalf("audit logs len = 0, want at least 1")
+			}
+			if logs[0].Result != tc.result {
+				t.Fatalf("audit result = %q, want %q", logs[0].Result, tc.result)
+			}
+			if logs[0].FolderPath != tc.folderPath {
+				t.Fatalf("audit folder_path = %q, want %q", logs[0].FolderPath, tc.folderPath)
+			}
+		})
 	}
 }
 

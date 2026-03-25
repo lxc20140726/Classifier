@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	internalfs "github.com/liqiye/classifier/internal/fs"
@@ -33,16 +34,18 @@ type FolderScanStarter interface {
 type FolderHandler struct {
 	folders          repository.FolderRepository
 	config           repository.ConfigRepository
+	scheduledJobs    repository.ScheduledWorkflowRepository
 	scanStarter      FolderScanStarter
 	fs               internalfs.FSAdapter
 	defaultSourceDir string
 	deleteStagingDir string
 }
 
-func NewFolderHandler(folderRepo repository.FolderRepository, configRepo repository.ConfigRepository, scanStarter FolderScanStarter, fsAdapter internalfs.FSAdapter, sourceDir, deleteStagingDir string) *FolderHandler {
+func NewFolderHandler(folderRepo repository.FolderRepository, configRepo repository.ConfigRepository, scheduledJobRepo repository.ScheduledWorkflowRepository, scanStarter FolderScanStarter, fsAdapter internalfs.FSAdapter, sourceDir, deleteStagingDir string) *FolderHandler {
 	return &FolderHandler{
 		folders:          folderRepo,
 		config:           configRepo,
+		scheduledJobs:    scheduledJobRepo,
 		scanStarter:      scanStarter,
 		fs:               fsAdapter,
 		defaultSourceDir: sourceDir,
@@ -138,6 +141,38 @@ func (h *FolderHandler) Scan(c *gin.Context) {
 }
 
 func (h *FolderHandler) loadScanSourceDirs(ctx context.Context) ([]string, error) {
+	if h.scheduledJobs != nil {
+		items, err := h.scheduledJobs.ListEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		sourceDirs := make([]string, 0)
+		seen := map[string]struct{}{}
+		for _, item := range items {
+			if item == nil || strings.TrimSpace(item.JobType) != "scan" || strings.TrimSpace(item.SourceDirs) == "" {
+				continue
+			}
+			var dirs []string
+			if err := json.Unmarshal([]byte(item.SourceDirs), &dirs); err != nil {
+				return nil, errors.New("invalid scheduled workflow source_dirs")
+			}
+			for _, dir := range dirs {
+				trimmed := strings.TrimSpace(dir)
+				if trimmed == "" {
+					continue
+				}
+				if _, ok := seen[trimmed]; ok {
+					continue
+				}
+				seen[trimmed] = struct{}{}
+				sourceDirs = append(sourceDirs, trimmed)
+			}
+		}
+		if len(sourceDirs) > 0 {
+			return sourceDirs, nil
+		}
+	}
+
 	if h.config != nil {
 		if raw, err := h.config.Get(ctx, "scan_input_dirs"); err == nil {
 			var dirs []string

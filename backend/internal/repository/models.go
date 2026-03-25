@@ -42,6 +42,20 @@ type Job struct {
 	UpdatedAt     time.Time  `db:"updated_at"`
 }
 
+type ScheduledWorkflow struct {
+	ID            string     `db:"id"`
+	Name          string     `db:"name"`
+	JobType       string     `db:"job_type"`
+	WorkflowDefID string     `db:"workflow_def_id"`
+	FolderIDs     string     `db:"folder_ids"`
+	SourceDirs    string     `db:"source_dirs"`
+	CronSpec      string     `db:"cron_spec"`
+	Enabled       bool       `db:"enabled"`
+	LastRunAt     *time.Time `db:"last_run_at"`
+	CreatedAt     time.Time  `db:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at"`
+}
+
 type Snapshot struct {
 	ID            string          `db:"id"`
 	JobID         string          `db:"job_id"`
@@ -82,6 +96,11 @@ type JobListFilter struct {
 	Status string
 	Page   int
 	Limit  int
+}
+
+type ScheduledWorkflowListFilter struct {
+	Page  int
+	Limit int
 }
 
 type AuditListFilter struct {

@@ -1,5 +1,5 @@
 import { request } from '@/api/client'
-import type { Job, NodeRun, PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
+import type { NodeRun, PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
 
 export interface WorkflowRunQueryParams {
   page?: number
@@ -12,7 +12,7 @@ export interface StartWorkflowJobBody {
 }
 
 export function startWorkflowJob(body: StartWorkflowJobBody) {
-  return request<{ data: Job }>('/jobs', {
+  return request<{ job_id: string }>('/jobs', {
     method: 'POST',
     body: JSON.stringify(body),
   })

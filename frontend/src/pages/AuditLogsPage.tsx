@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import type { AuditLog } from '@/types'
 
 interface AuditFilterState {
+  jobId: string
   action: string
   result: string
   folderPath: string
@@ -14,6 +15,7 @@ interface AuditFilterState {
 }
 
 const INITIAL_FILTERS: AuditFilterState = {
+  jobId: '',
   action: '',
   result: '',
   folderPath: '',
@@ -40,7 +42,8 @@ export default function AuditLogsPage() {
     setIsLoading(true)
     setError(null)
     try {
-      const response = await listAuditLogs({
+        const response = await listAuditLogs({
+        jobId: nextFilters.jobId || undefined,
         action: nextFilters.action || undefined,
         result: nextFilters.result || undefined,
         folderPath: nextFilters.folderPath || undefined,
@@ -72,7 +75,7 @@ export default function AuditLogsPage() {
         <div>
           <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Audit Trail</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">审计日志</h1>
-          <p className="mt-1 text-sm text-muted-foreground">支持按时间范围、动作、结果和路径关键词检索。</p>
+          <p className="mt-1 text-sm text-muted-foreground">支持按任务、时间范围、动作、结果和路径关键词检索。</p>
         </div>
         <button
           type="button"
@@ -86,7 +89,13 @@ export default function AuditLogsPage() {
       </div>
 
       <div className="rounded-3xl border border-border bg-card p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <input
+            value={filters.jobId}
+            onChange={(event) => setFilters((prev) => ({ ...prev, jobId: event.target.value }))}
+            placeholder="任务 ID"
+            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+          />
           <input
             value={filters.folderPath}
             onChange={(event) => setFilters((prev) => ({ ...prev, folderPath: event.target.value }))}

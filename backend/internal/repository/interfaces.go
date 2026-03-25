@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 type FolderRepository interface {
@@ -27,6 +28,16 @@ type JobRepository interface {
 	UpdateTotal(ctx context.Context, id string, total int) error
 	UpdateStatus(ctx context.Context, id, status, errMsg string) error
 	IncrementProgress(ctx context.Context, id string, successDelta, failedDelta int) error
+}
+
+type ScheduledWorkflowRepository interface {
+	Create(ctx context.Context, item *ScheduledWorkflow) error
+	GetByID(ctx context.Context, id string) (*ScheduledWorkflow, error)
+	List(ctx context.Context, filter ScheduledWorkflowListFilter) ([]*ScheduledWorkflow, int, error)
+	ListEnabled(ctx context.Context) ([]*ScheduledWorkflow, error)
+	Update(ctx context.Context, item *ScheduledWorkflow) error
+	Delete(ctx context.Context, id string) error
+	UpdateLastRunAt(ctx context.Context, id string, at time.Time) error
 }
 
 type WorkflowDefinitionRepository interface {

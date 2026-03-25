@@ -58,9 +58,9 @@ func seedFolder(t *testing.T, repo repository.FolderRepository, folder *reposito
 	}
 }
 
-func setupRouter(folderRepo repository.FolderRepository, configRepo repository.ConfigRepository, starter FolderScanStarter, fsAdapter fs.FSAdapter) *gin.Engine {
+func setupRouter(folderRepo repository.FolderRepository, configRepo repository.ConfigRepository, scheduledRepo repository.ScheduledWorkflowRepository, starter FolderScanStarter, fsAdapter fs.FSAdapter) *gin.Engine {
 	g := gin.New()
-	h := NewFolderHandler(folderRepo, configRepo, starter, fsAdapter, "/test/source", "/test/delete-staging")
+	h := NewFolderHandler(folderRepo, configRepo, scheduledRepo, starter, fsAdapter, "/test/source", "/test/delete-staging")
 
 	g.GET("/folders", h.List)
 	g.GET("/folders/:id", h.Get)
@@ -79,9 +79,10 @@ func TestFolderHandler(t *testing.T) {
 	database := newHandlerTestDB(t)
 	repo := repository.NewFolderRepository(database)
 	configRepo := repository.NewConfigRepository(database)
+	scheduledRepo := repository.NewScheduledWorkflowRepository(database)
 	starter := &stubScanStarter{called: make(chan scannerCall, 1)}
 	fsAdapter := fs.NewMockAdapter()
-	router := setupRouter(repo, configRepo, starter, fsAdapter)
+	router := setupRouter(repo, configRepo, scheduledRepo, starter, fsAdapter)
 
 	seedFolder(t, repo, &repository.Folder{
 		ID:             "f1",
@@ -158,7 +159,37 @@ func TestFolderHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("scan returns 202", func(t *testing.T) {
+	t.Run("scan returns 202 from scheduled scan jobs", func(t *testing.T) {
+		if err := scheduledRepo.Create(context.Background(), &repository.ScheduledWorkflow{
+			ID:         "scan-job",
+			Name:       "scan-job",
+			JobType:    "scan",
+			SourceDirs: `["/task/source","/task/other"]`,
+			CronSpec:   "0 * * * *",
+			Enabled:    true,
+		}); err != nil {
+			t.Fatalf("scheduledRepo.Create() error = %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/folders/scan", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+		}
+
+		call := <-starter.called
+		if len(call.sourceDirs) != 2 || call.sourceDirs[0] != "/task/source" || call.sourceDirs[1] != "/task/other" {
+			t.Fatalf("sourceDirs = %#v, want scheduled dirs", call.sourceDirs)
+		}
+	})
+
+	t.Run("scan falls back to config when no scheduled scan jobs", func(t *testing.T) {
+		if err := scheduledRepo.Delete(context.Background(), "scan-job"); err != nil {
+			t.Fatalf("scheduledRepo.Delete() error = %v", err)
+		}
 		if err := configRepo.Set(context.Background(), "scan_input_dirs", `["/test/source","/test/other"]`); err != nil {
 			t.Fatalf("configRepo.Set() error = %v", err)
 		}

@@ -82,6 +82,20 @@ export interface Job {
   updated_at: string
 }
 
+export interface ScheduledWorkflow {
+  id: string
+  name: string
+  job_type: 'workflow' | 'scan'
+  workflow_def_id: string
+  folder_ids: string[]
+  source_dirs: string[]
+  cron_spec: string
+  enabled: boolean
+  last_run_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface JobProgress {
   job_id: string
   status: JobStatus

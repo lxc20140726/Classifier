@@ -1,20 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, FolderSearch } from 'lucide-react'
+import { FolderSearch } from 'lucide-react'
 
 import { getConfig, updateConfig } from '@/api/config'
 import { DirPicker } from '@/components/DirPicker'
 import type { AppConfig } from '@/types'
 
 interface FormState {
-  scanInputDirs: string[]
-  scanCron: string
   targetDir: string
   outputDirs: NonNullable<AppConfig['output_dirs']>
 }
 
 const INITIAL_FORM: FormState = {
-  scanInputDirs: [],
-  scanCron: '',
   targetDir: '',
   outputDirs: {
     video: '',
@@ -40,7 +36,7 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [pickerTarget, setPickerTarget] = useState<'scan' | 'target' | keyof NonNullable<AppConfig['output_dirs']>>('scan')
+  const [pickerTarget, setPickerTarget] = useState<'target' | keyof NonNullable<AppConfig['output_dirs']>>('target')
 
   useEffect(() => {
     let active = true
@@ -51,8 +47,6 @@ export default function SettingsPage() {
         if (!active) return
 
         setForm({
-          scanInputDirs: response.data.scan_input_dirs ?? [],
-          scanCron: response.data.scan_cron ?? '',
           targetDir: response.data.target_dir ?? '',
           outputDirs: {
             video: response.data.output_dirs?.video ?? '',
@@ -75,25 +69,9 @@ export default function SettingsPage() {
     return () => { active = false }
   }, [])
 
-  function removeDir(index: number) {
-    setForm((prev) => ({
-      ...prev,
-      scanInputDirs: prev.scanInputDirs.filter((_, i) => i !== index),
-    }))
-  }
-
-  function addDir(path: string) {
-    setForm((prev) => {
-      if (pickerTarget === 'scan') {
-        return {
-          ...prev,
-          scanInputDirs: prev.scanInputDirs.includes(path)
-            ? prev.scanInputDirs
-            : [...prev.scanInputDirs, path],
-        }
-      }
-
-      if (pickerTarget === 'target') {
+	function addDir(path: string) {
+		setForm((prev) => {
+			if (pickerTarget === 'target') {
         return {
           ...prev,
           targetDir: path,
@@ -118,13 +96,10 @@ export default function SettingsPage() {
     setSuccess(null)
 
     try {
-      await updateConfig({
-        scan_input_dirs: form.scanInputDirs,
-        scan_cron: form.scanCron,
-        source_dir: form.scanInputDirs[0] ?? '',
-        target_dir: form.targetDir,
-        output_dirs: form.outputDirs,
-      })
+        await updateConfig({
+          target_dir: form.targetDir,
+          output_dirs: form.outputDirs,
+        })
       setSuccess('配置已保存')
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : '保存失败')
@@ -138,76 +113,6 @@ export default function SettingsPage() {
       <h1 className="mb-6 text-xl font-semibold">系统配置</h1>
 
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-8">
-        {/* Scan input dirs */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <label className="block text-sm font-medium">扫描输入目录</label>
-              <p className="text-xs text-muted-foreground">每次扫描会遍历以下所有目录的直接子文件夹。</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setPickerOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm transition hover:bg-accent"
-            >
-              <FolderSearch className="h-4 w-4" />
-              添加目录
-            </button>
-          </div>
-
-          {isLoading && <p className="text-sm text-muted-foreground">加载中…</p>}
-
-          {!isLoading && form.scanInputDirs.length === 0 && (
-            <div className="rounded-xl border border-dashed border-border px-5 py-8 text-center">
-              <FolderSearch className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">尚未配置扫描目录，点击「添加目录」开始。</p>
-            </div>
-          )}
-
-          <ul className="space-y-2">
-            {form.scanInputDirs.map((dir, idx) => (
-              <li
-                key={dir}
-                className="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3"
-              >
-                <span className="break-all text-sm font-mono text-foreground">{dir}</span>
-                <button
-                  type="button"
-                  onClick={() => removeDir(idx)}
-                  className="ml-3 shrink-0 rounded-lg p-1.5 text-muted-foreground transition hover:bg-red-50 hover:text-red-600"
-                  aria-label="删除"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-          </ul>
-
-          {form.scanInputDirs.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setPickerOpen(true)}
-              className="flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-            >
-              <Plus className="h-4 w-4" />
-              添加更多目录
-            </button>
-          )}
-        </div>
-
-        <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
-          <div>
-            <label className="block text-sm font-medium">定时扫描 Cron</label>
-            <p className="text-xs text-muted-foreground">使用标准 5 段 cron 表达式，例如 `*/15 * * * *` 表示每 15 分钟扫描一次。</p>
-          </div>
-          <input
-            value={form.scanCron}
-            onChange={(event) => setForm((prev) => ({ ...prev, scanCron: event.target.value }))}
-            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm font-mono outline-none ring-primary focus:ring-2"
-            placeholder="0 * * * *"
-          />
-        </div>
-
         <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -292,7 +197,7 @@ export default function SettingsPage() {
         <DirPicker
           open={pickerOpen}
           initialPath="/"
-          title={pickerTarget === 'scan' ? '选择扫描输入目录' : '选择输出目录'}
+          title={pickerTarget === 'target' ? '选择目标目录' : '选择输出目录'}
           onConfirm={addDir}
           onCancel={() => setPickerOpen(false)}
         />

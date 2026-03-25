@@ -46,6 +46,7 @@ func main() {
 	workflowRunRepo := repository.NewWorkflowRunRepository(sqlDB)
 	nodeRunRepo := repository.NewNodeRunRepository(sqlDB)
 	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(sqlDB)
+	scheduledWorkflowRepo := repository.NewScheduledWorkflowRepository(sqlDB)
 
 	fsAdapter := internalfs.NewOSAdapter()
 	broker := sse.NewBroker()
@@ -57,7 +58,8 @@ func main() {
 	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, scannerSvc)
 	moveJobStarterSvc := service.NewMoveJobStarterService(jobRepo, moveSvc)
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
-	scanScheduler := service.NewScanScheduler(configRepo, scanJobStarterSvc)
+	scheduledWorkflowSvc := service.NewScheduledWorkflowService(scheduledWorkflowRepo, workflowRunnerSvc, scanJobStarterSvc)
+	scheduledWorkflowScheduler := service.NewScheduledWorkflowScheduler(scheduledWorkflowRepo, scheduledWorkflowSvc)
 	workflowRunnerSvc.RegisterExecutor(service.NewFolderTreeScannerExecutor(fsAdapter))
 	workflowRunnerSvc.RegisterExecutor(service.NewNameKeywordClassifierExecutor())
 	workflowRunnerSvc.RegisterExecutor(service.NewFileTreeClassifierExecutor())
@@ -71,24 +73,28 @@ func main() {
 		log.Fatalf("seed default processing workflow: %v", err)
 	}
 
-	if err := scanScheduler.Start(context.Background()); err != nil {
-		log.Fatalf("start scan scheduler: %v", err)
+	if err := scheduledWorkflowSvc.BootstrapLegacyScanCron(context.Background(), configRepo); err != nil {
+		log.Fatalf("bootstrap legacy scan cron: %v", err)
+	}
+	if err := scheduledWorkflowScheduler.Start(context.Background()); err != nil {
+		log.Fatalf("start scheduled workflow scheduler: %v", err)
 	}
 	defer func() {
-		if err := scanScheduler.Stop(context.Background()); err != nil {
-			log.Printf("stop scan scheduler: %v", err)
+		if err := scheduledWorkflowScheduler.Stop(context.Background()); err != nil {
+			log.Printf("stop scheduled workflow scheduler: %v", err)
 		}
 	}()
 
-	folderHandler := handler.NewFolderHandler(folderRepo, configRepo, scanJobStarterSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
+	folderHandler := handler.NewFolderHandler(folderRepo, configRepo, scheduledWorkflowRepo, scanJobStarterSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
 	moveHandler := handler.NewMoveHandler(moveJobStarterSvc)
 	jobHandler := handler.NewJobHandlerWithWorkflow(jobRepo, workflowRunnerSvc)
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
-	configHandler := handler.NewConfigHandler(configRepo, scanScheduler)
+	configHandler := handler.NewConfigHandler(configRepo, nil)
 	auditHandler := handler.NewAuditHandler(auditRepo)
 	nodeTypeHandler := handler.NewNodeTypeHandler(workflowRunnerSvc)
 	workflowDefHandler := handler.NewWorkflowDefHandler(workflowDefRepo)
 	workflowRunHandler := handler.NewWorkflowRunHandler(workflowRunnerSvc)
+	scheduledWorkflowHandler := handler.NewScheduledWorkflowHandler(scheduledWorkflowRepo, scheduledWorkflowSvc, scheduledWorkflowScheduler)
 
 	r := gin.New()
 	r.Use(gin.Logger())
@@ -140,6 +146,16 @@ func main() {
 			workflowDefs.DELETE("/:id", workflowDefHandler.Delete)
 		}
 
+		scheduledWorkflows := api.Group("/scheduled-workflows")
+		{
+			scheduledWorkflows.GET("", scheduledWorkflowHandler.List)
+			scheduledWorkflows.POST("", scheduledWorkflowHandler.Create)
+			scheduledWorkflows.GET("/:id", scheduledWorkflowHandler.Get)
+			scheduledWorkflows.PUT("/:id", scheduledWorkflowHandler.Update)
+			scheduledWorkflows.DELETE("/:id", scheduledWorkflowHandler.Delete)
+			scheduledWorkflows.POST("/:id/run", scheduledWorkflowHandler.RunNow)
+		}
+
 		snapshots := api.Group("/snapshots")
 		{
 			snapshots.GET("", snapshotHandler.List)
@@ -161,6 +177,10 @@ func main() {
 
 	r.NoRoute(func(c *gin.Context) {
 		assetPath := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "api route not found"})
+			return
+		}
 		if assetPath != "" {
 			if _, err := fs.Stat(distFS, assetPath); err == nil {
 				assetServer.ServeHTTP(c.Writer, c.Request)
