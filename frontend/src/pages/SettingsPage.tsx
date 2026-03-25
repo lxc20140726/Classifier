@@ -7,12 +7,14 @@ import type { AppConfig } from '@/types'
 
 interface FormState {
   scanInputDirs: string[]
+  scanCron: string
   targetDir: string
   outputDirs: NonNullable<AppConfig['output_dirs']>
 }
 
 const INITIAL_FORM: FormState = {
   scanInputDirs: [],
+  scanCron: '',
   targetDir: '',
   outputDirs: {
     video: '',
@@ -50,6 +52,7 @@ export default function SettingsPage() {
 
         setForm({
           scanInputDirs: response.data.scan_input_dirs ?? [],
+          scanCron: response.data.scan_cron ?? '',
           targetDir: response.data.target_dir ?? '',
           outputDirs: {
             video: response.data.output_dirs?.video ?? '',
@@ -117,6 +120,7 @@ export default function SettingsPage() {
     try {
       await updateConfig({
         scan_input_dirs: form.scanInputDirs,
+        scan_cron: form.scanCron,
         source_dir: form.scanInputDirs[0] ?? '',
         target_dir: form.targetDir,
         output_dirs: form.outputDirs,
@@ -189,6 +193,19 @@ export default function SettingsPage() {
               添加更多目录
             </button>
           )}
+        </div>
+
+        <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
+          <div>
+            <label className="block text-sm font-medium">定时扫描 Cron</label>
+            <p className="text-xs text-muted-foreground">使用标准 5 段 cron 表达式，例如 `*/15 * * * *` 表示每 15 分钟扫描一次。</p>
+          </div>
+          <input
+            value={form.scanCron}
+            onChange={(event) => setForm((prev) => ({ ...prev, scanCron: event.target.value }))}
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm font-mono outline-none ring-primary focus:ring-2"
+            placeholder="0 * * * *"
+          />
         </div>
 
         <div className="space-y-3 rounded-2xl border border-border bg-card p-4">

@@ -2,26 +2,22 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"github.com/liqiye/classifier/internal/repository"
 	"github.com/liqiye/classifier/internal/service"
 )
 
-type MoveExecutor interface {
-	MoveFolders(ctx context.Context, input service.MoveFolderInput) error
+type MoveJobStarter interface {
+	StartJob(ctx context.Context, input service.MoveFolderInput) (string, error)
 }
 
 type MoveHandler struct {
-	mover MoveExecutor
-	jobs  repository.JobRepository
+	starter MoveJobStarter
 }
 
-func NewMoveHandler(mover MoveExecutor, jobs repository.JobRepository) *MoveHandler {
-	return &MoveHandler{mover: mover, jobs: jobs}
+func NewMoveHandler(starter MoveJobStarter) *MoveHandler {
+	return &MoveHandler{starter: starter}
 }
 
 func (h *MoveHandler) Start(c *gin.Context) {
@@ -45,38 +41,19 @@ func (h *MoveHandler) Start(c *gin.Context) {
 		return
 	}
 
-	jobID := uuid.NewString()
-	folderIDsJSON, err := json.Marshal(req.FolderIDs)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode folder_ids"})
+	if h.starter == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "move starter not configured"})
 		return
 	}
 
-	if h.jobs != nil {
-		err = h.jobs.Create(c.Request.Context(), &repository.Job{
-			ID:        jobID,
-			Type:      "move",
-			Status:    "pending",
-			FolderIDs: string(folderIDsJSON),
-			Total:     len(req.FolderIDs),
-		})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create job"})
-			return
-		}
+	jobID, err := h.starter.StartJob(c.Request.Context(), service.MoveFolderInput{
+		FolderIDs: req.FolderIDs,
+		TargetDir: req.TargetDir,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create job"})
+		return
 	}
-
-	go func(folderIDs []string, targetDir, currentJobID string) {
-		if h.mover == nil {
-			return
-		}
-
-		_ = h.mover.MoveFolders(context.Background(), service.MoveFolderInput{
-			FolderIDs: folderIDs,
-			TargetDir: targetDir,
-			JobID:     currentJobID,
-		})
-	}(append([]string(nil), req.FolderIDs...), req.TargetDir, jobID)
 
 	c.JSON(http.StatusAccepted, gin.H{"job_id": jobID})
 }

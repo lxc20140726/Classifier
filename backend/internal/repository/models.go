@@ -107,6 +107,7 @@ type AppConfigOutputDirs struct {
 type AppConfig struct {
 	Version       int                 `json:"version"`
 	ScanInputDirs []string            `json:"scan_input_dirs"`
+	ScanCron      string              `json:"scan_cron"`
 	SourceDir     string              `json:"source_dir"`
 	TargetDir     string              `json:"target_dir"`
 	OutputDirs    AppConfigOutputDirs `json:"output_dirs"`

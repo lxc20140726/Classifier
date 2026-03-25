@@ -42,6 +42,7 @@ export interface Snapshot {
 
 export interface AppConfig {
   version?: number
+  scan_cron?: string
   source_dir?: string
   target_dir?: string
   scan_input_dirs?: string[]

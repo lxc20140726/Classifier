@@ -15,23 +15,21 @@ import (
 	dbpkg "github.com/liqiye/classifier/internal/db"
 	"github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
-	"github.com/liqiye/classifier/internal/service"
 )
 
 var folderHandlerDBCounter uint64
 
 type scannerCall struct {
-	jobID      string
 	sourceDirs []string
 }
 
-type stubScanner struct {
+type stubScanStarter struct {
 	called chan scannerCall
 }
 
-func (s *stubScanner) Scan(_ context.Context, input service.ScanInput) (int, error) {
-	s.called <- scannerCall{jobID: input.JobID, sourceDirs: input.SourceDirs}
-	return 1, nil
+func (s *stubScanStarter) StartJob(_ context.Context, sourceDirs []string) (string, error) {
+	s.called <- scannerCall{sourceDirs: sourceDirs}
+	return "scan-job-1", nil
 }
 
 func newHandlerTestDB(t *testing.T) *sql.DB {
@@ -60,9 +58,9 @@ func seedFolder(t *testing.T, repo repository.FolderRepository, folder *reposito
 	}
 }
 
-func setupRouter(folderRepo repository.FolderRepository, jobRepo repository.JobRepository, configRepo repository.ConfigRepository, scanner FolderScanService, fsAdapter fs.FSAdapter) *gin.Engine {
+func setupRouter(folderRepo repository.FolderRepository, configRepo repository.ConfigRepository, starter FolderScanStarter, fsAdapter fs.FSAdapter) *gin.Engine {
 	g := gin.New()
-	h := NewFolderHandler(folderRepo, jobRepo, configRepo, scanner, fsAdapter, "/test/source", "/test/delete-staging")
+	h := NewFolderHandler(folderRepo, configRepo, starter, fsAdapter, "/test/source", "/test/delete-staging")
 
 	g.GET("/folders", h.List)
 	g.GET("/folders/:id", h.Get)
@@ -80,11 +78,10 @@ func TestFolderHandler(t *testing.T) {
 
 	database := newHandlerTestDB(t)
 	repo := repository.NewFolderRepository(database)
-	jobRepo := repository.NewJobRepository(database)
 	configRepo := repository.NewConfigRepository(database)
-	scanner := &stubScanner{called: make(chan scannerCall, 1)}
+	starter := &stubScanStarter{called: make(chan scannerCall, 1)}
 	fsAdapter := fs.NewMockAdapter()
-	router := setupRouter(repo, jobRepo, configRepo, scanner, fsAdapter)
+	router := setupRouter(repo, configRepo, starter, fsAdapter)
 
 	seedFolder(t, repo, &repository.Folder{
 		ID:             "f1",
@@ -175,12 +172,9 @@ func TestFolderHandler(t *testing.T) {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
 		}
 
-		call := <-scanner.called
+		call := <-starter.called
 		if len(call.sourceDirs) != 2 || call.sourceDirs[0] != "/test/source" || call.sourceDirs[1] != "/test/other" {
 			t.Fatalf("sourceDirs = %#v, want configured dirs", call.sourceDirs)
-		}
-		if call.jobID == "" {
-			t.Fatalf("expected scan job id to be set")
 		}
 	})
 

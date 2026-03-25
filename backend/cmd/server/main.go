@@ -54,7 +54,10 @@ func main() {
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
 	moveSvc := service.NewMoveService(fsAdapter, jobRepo, folderRepo, snapshotSvc, auditSvc, broker)
+	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, scannerSvc)
+	moveJobStarterSvc := service.NewMoveJobStarterService(jobRepo, moveSvc)
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
+	scanScheduler := service.NewScanScheduler(configRepo, scanJobStarterSvc)
 	workflowRunnerSvc.RegisterExecutor(service.NewFolderTreeScannerExecutor(fsAdapter))
 	workflowRunnerSvc.RegisterExecutor(service.NewNameKeywordClassifierExecutor())
 	workflowRunnerSvc.RegisterExecutor(service.NewFileTreeClassifierExecutor())
@@ -68,11 +71,20 @@ func main() {
 		log.Fatalf("seed default processing workflow: %v", err)
 	}
 
-	folderHandler := handler.NewFolderHandler(folderRepo, jobRepo, configRepo, scannerSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
-	moveHandler := handler.NewMoveHandler(moveSvc, jobRepo)
+	if err := scanScheduler.Start(context.Background()); err != nil {
+		log.Fatalf("start scan scheduler: %v", err)
+	}
+	defer func() {
+		if err := scanScheduler.Stop(context.Background()); err != nil {
+			log.Printf("stop scan scheduler: %v", err)
+		}
+	}()
+
+	folderHandler := handler.NewFolderHandler(folderRepo, configRepo, scanJobStarterSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
+	moveHandler := handler.NewMoveHandler(moveJobStarterSvc)
 	jobHandler := handler.NewJobHandlerWithWorkflow(jobRepo, workflowRunnerSvc)
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
-	configHandler := handler.NewConfigHandler(configRepo)
+	configHandler := handler.NewConfigHandler(configRepo, scanScheduler)
 	auditHandler := handler.NewAuditHandler(auditRepo)
 	nodeTypeHandler := handler.NewNodeTypeHandler(workflowRunnerSvc)
 	workflowDefHandler := handler.NewWorkflowDefHandler(workflowDefRepo)

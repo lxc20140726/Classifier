@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/liqiye/classifier/internal/fs"
@@ -88,6 +90,7 @@ type WorkflowRunnerService struct {
 	broker            *sse.Broker
 	pendingResumeData map[string]map[string]any
 	pendingResumeMu   sync.Mutex
+	folderConcurrency int
 }
 
 func NewWorkflowRunnerService(
@@ -111,6 +114,7 @@ func NewWorkflowRunnerService(
 		executors:         make(map[string]WorkflowNodeExecutor),
 		broker:            broker,
 		pendingResumeData: make(map[string]map[string]any),
+		folderConcurrency: defaultWorkflowFolderConcurrency(),
 	}
 
 	svc.RegisterExecutor(&triggerNodeExecutor{})
@@ -186,37 +190,64 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID string, folderIDs []string) {
 	_ = s.jobs.UpdateStatus(ctx, jobID, "running", "")
 
-	failed := 0
-	for _, folderID := range folderIDs {
-		run := &repository.WorkflowRun{
-			ID:            uuid.NewString(),
-			JobID:         jobID,
-			FolderID:      folderID,
-			WorkflowDefID: workflowDefID,
-			Status:        "pending",
-		}
-		if err := s.workflowRuns.Create(ctx, run); err != nil {
-			failed++
-			_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-			continue
-		}
-
-		if err := s.executeWorkflowRun(ctx, run.ID, false); err != nil {
-			failed++
-			_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-			continue
-		}
-
-		_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
+	var failed atomic.Int64
+	concurrency := s.folderConcurrency
+	if concurrency <= 0 {
+		concurrency = 1
 	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for _, folderID := range folderIDs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(folderID string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			run := &repository.WorkflowRun{
+				ID:            uuid.NewString(),
+				JobID:         jobID,
+				FolderID:      folderID,
+				WorkflowDefID: workflowDefID,
+				Status:        "pending",
+			}
+			if err := s.workflowRuns.Create(ctx, run); err != nil {
+				failed.Add(1)
+				_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+				return
+			}
+
+			if err := s.executeWorkflowRun(ctx, run.ID, false); err != nil {
+				failed.Add(1)
+				_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+				return
+			}
+
+			_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
+		}(folderID)
+	}
+	wg.Wait()
 
 	status := "succeeded"
-	if failed == len(folderIDs) {
+	failedCount := int(failed.Load())
+	if failedCount == len(folderIDs) {
 		status = "failed"
-	} else if failed > 0 {
+	} else if failedCount > 0 {
 		status = "partial"
 	}
 	_ = s.jobs.UpdateStatus(ctx, jobID, status, "")
+}
+
+func defaultWorkflowFolderConcurrency() int {
+	value := runtime.GOMAXPROCS(0)
+	if value < 2 {
+		return 1
+	}
+	if value > 4 {
+		return 4
+	}
+
+	return value
 }
 
 func (s *WorkflowRunnerService) ListWorkflowRuns(ctx context.Context, jobID string, page, limit int) ([]*repository.WorkflowRun, int, error) {

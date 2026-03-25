@@ -16,6 +16,12 @@ import (
 	"github.com/liqiye/classifier/internal/repository"
 )
 
+type stubConfigSyncer struct{}
+
+func (s *stubConfigSyncer) Sync(_ context.Context) error {
+	return nil
+}
+
 var configHandlerDBCounter uint64
 
 func newConfigHandlerTestRepo(t *testing.T) repository.ConfigRepository {
@@ -38,7 +44,7 @@ func newConfigHandlerTestRepo(t *testing.T) repository.ConfigRepository {
 
 func setupConfigRouter(configRepo repository.ConfigRepository) *gin.Engine {
 	g := gin.New()
-	h := NewConfigHandler(configRepo)
+	h := NewConfigHandler(configRepo, &stubConfigSyncer{})
 
 	g.GET("/config", h.Get)
 	g.PUT("/config", h.Put)
@@ -93,11 +99,15 @@ func TestConfigHandler(t *testing.T) {
 		if !reflect.DeepEqual(payload.Data.ScanInputDirs, []string{"/media/source", "/media/source-2"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/media/source /media/source-2]", payload.Data.ScanInputDirs)
 		}
+		if payload.Data.ScanCron != "" {
+			t.Fatalf("scan_cron = %q, want empty", payload.Data.ScanCron)
+		}
 	})
 
 	t.Run("put saves structured config and syncs legacy keys", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
 			"scan_input_dirs":["/mnt/source","/mnt/source-2"],
+			"scan_cron":"*/15 * * * *",
 			"source_dir":"/mnt/source",
 			"target_dir":"/mnt/target",
 			"output_dirs":{
@@ -124,6 +134,9 @@ func TestConfigHandler(t *testing.T) {
 		if !reflect.DeepEqual(storedConfig.ScanInputDirs, []string{"/mnt/source", "/mnt/source-2"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/mnt/source /mnt/source-2]", storedConfig.ScanInputDirs)
 		}
+		if storedConfig.ScanCron != "*/15 * * * *" {
+			t.Fatalf("scan_cron = %q, want */15 * * * *", storedConfig.ScanCron)
+		}
 
 		sourceDir, err := repo.Get(context.Background(), "source_dir")
 		if err != nil {
@@ -147,6 +160,26 @@ func TestConfigHandler(t *testing.T) {
 		}
 		if rawScanInputDirs != `["/mnt/source","/mnt/source-2"]` {
 			t.Fatalf("scan_input_dirs = %q, want %q", rawScanInputDirs, `["/mnt/source","/mnt/source-2"]`)
+		}
+
+		rawScanCron, err := repo.Get(context.Background(), "scan_cron")
+		if err != nil {
+			t.Fatalf("repo.Get(scan_cron) error = %v", err)
+		}
+		if rawScanCron != "*/15 * * * *" {
+			t.Fatalf("scan_cron = %q, want */15 * * * *", rawScanCron)
+		}
+	})
+
+	t.Run("put invalid scan cron returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{"scan_cron":"bad cron"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
 		}
 	})
 
@@ -214,6 +247,9 @@ func TestConfigHandler(t *testing.T) {
 		}
 		if !reflect.DeepEqual(payload.Data.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/legacy/source /legacy/source-2]", payload.Data.ScanInputDirs)
+		}
+		if payload.Data.ScanCron != "" {
+			t.Fatalf("scan_cron = %q, want empty", payload.Data.ScanCron)
 		}
 	})
 }

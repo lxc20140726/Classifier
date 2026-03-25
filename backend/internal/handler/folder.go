@@ -8,10 +8,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	internalfs "github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
-	"github.com/liqiye/classifier/internal/service"
 )
 
 var validCategories = map[string]struct{}{
@@ -28,26 +26,24 @@ var validStatuses = map[string]struct{}{
 	"skip":    {},
 }
 
-type FolderScanService interface {
-	Scan(ctx context.Context, input service.ScanInput) (int, error)
+type FolderScanStarter interface {
+	StartJob(ctx context.Context, sourceDirs []string) (string, error)
 }
 
 type FolderHandler struct {
 	folders          repository.FolderRepository
-	jobs             repository.JobRepository
 	config           repository.ConfigRepository
-	scanner          FolderScanService
+	scanStarter      FolderScanStarter
 	fs               internalfs.FSAdapter
 	defaultSourceDir string
 	deleteStagingDir string
 }
 
-func NewFolderHandler(folderRepo repository.FolderRepository, jobRepo repository.JobRepository, configRepo repository.ConfigRepository, scanner FolderScanService, fsAdapter internalfs.FSAdapter, sourceDir, deleteStagingDir string) *FolderHandler {
+func NewFolderHandler(folderRepo repository.FolderRepository, configRepo repository.ConfigRepository, scanStarter FolderScanStarter, fsAdapter internalfs.FSAdapter, sourceDir, deleteStagingDir string) *FolderHandler {
 	return &FolderHandler{
 		folders:          folderRepo,
-		jobs:             jobRepo,
 		config:           configRepo,
-		scanner:          scanner,
+		scanStarter:      scanStarter,
 		fs:               fsAdapter,
 		defaultSourceDir: sourceDir,
 		deleteStagingDir: deleteStagingDir,
@@ -127,32 +123,15 @@ func (h *FolderHandler) Scan(c *gin.Context) {
 		return
 	}
 
-	jobID := uuid.NewString()
-	if h.jobs != nil {
-		folderIDsJSON, marshalErr := json.Marshal([]string{})
-		if marshalErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode folder_ids"})
-			return
-		}
-		if err := h.jobs.Create(c.Request.Context(), &repository.Job{
-			ID:        jobID,
-			Type:      "scan",
-			Status:    "pending",
-			FolderIDs: string(folderIDsJSON),
-			Total:     0,
-		}); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create scan job"})
-			return
-		}
+	if h.scanStarter == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "scan starter not configured"})
+		return
 	}
 
-	if h.scanner != nil {
-		go func(dirs []string, currentJobID string) {
-			_, _ = h.scanner.Scan(context.Background(), service.ScanInput{
-				JobID:      currentJobID,
-				SourceDirs: dirs,
-			})
-		}(append([]string(nil), sourceDirs...), jobID)
+	jobID, err := h.scanStarter.StartJob(c.Request.Context(), sourceDirs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create scan job"})
+		return
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"started": true, "job_id": jobID, "source_dirs": sourceDirs})

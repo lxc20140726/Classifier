@@ -95,6 +95,7 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 	err := repo.SaveAppConfig(ctx, &AppConfig{
 		Version:       2,
 		ScanInputDirs: []string{"/mnt/source", "/mnt/source-2"},
+		ScanCron:      "0 * * * *",
 		SourceDir:     "/mnt/source",
 		TargetDir:     "/mnt/target",
 		OutputDirs: AppConfigOutputDirs{
@@ -120,6 +121,9 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 	if !reflect.DeepEqual(got.ScanInputDirs, []string{"/mnt/source", "/mnt/source-2"}) {
 		t.Fatalf("ScanInputDirs = %#v, want [/mnt/source /mnt/source-2]", got.ScanInputDirs)
 	}
+	if got.ScanCron != "0 * * * *" {
+		t.Fatalf("ScanCron = %q, want 0 * * * *", got.ScanCron)
+	}
 
 	rawScanInputDirs, err := repo.Get(ctx, "scan_input_dirs")
 	if err != nil {
@@ -127,6 +131,14 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 	}
 	if rawScanInputDirs != `["/mnt/source","/mnt/source-2"]` {
 		t.Fatalf("scan_input_dirs = %q, want %q", rawScanInputDirs, `["/mnt/source","/mnt/source-2"]`)
+	}
+
+	rawScanCron, err := repo.Get(ctx, "scan_cron")
+	if err != nil {
+		t.Fatalf("Get(scan_cron) error = %v", err)
+	}
+	if rawScanCron != "0 * * * *" {
+		t.Fatalf("scan_cron = %q, want 0 * * * *", rawScanCron)
 	}
 }
 

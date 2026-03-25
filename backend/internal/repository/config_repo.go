@@ -144,6 +144,9 @@ ON CONFLICT(id) DO UPDATE SET
 	if err := r.Set(ctx, "scan_input_dirs", string(scanDirsJSON)); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig set scan_input_dirs: %w", err)
 	}
+	if err := r.Set(ctx, "scan_cron", normalized.ScanCron); err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig set scan_cron: %w", err)
+	}
 	if err := r.Set(ctx, "source_dir", normalized.SourceDir); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig set source_dir: %w", err)
 	}
@@ -183,6 +186,9 @@ func mapLegacyConfig(values map[string]string) AppConfig {
 	if value, ok := values["source_dir"]; ok {
 		cfg.SourceDir = strings.TrimSpace(value)
 	}
+	if value, ok := values["scan_cron"]; ok {
+		cfg.ScanCron = strings.TrimSpace(value)
+	}
 	if value, ok := values["target_dir"]; ok {
 		cfg.TargetDir = strings.TrimSpace(value)
 	}
@@ -207,6 +213,7 @@ func defaultAppConfig() AppConfig {
 	return AppConfig{
 		Version:       1,
 		ScanInputDirs: []string{},
+		ScanCron:      "",
 		SourceDir:     "",
 		TargetDir:     "",
 		OutputDirs: AppConfigOutputDirs{
@@ -226,6 +233,7 @@ func normalizeAppConfig(value AppConfig) AppConfig {
 		normalized.Version = value.Version
 	}
 
+	normalized.ScanCron = strings.TrimSpace(value.ScanCron)
 	normalized.SourceDir = strings.TrimSpace(value.SourceDir)
 	normalized.TargetDir = strings.TrimSpace(value.TargetDir)
 	normalized.ScanInputDirs = cleanPathList(value.ScanInputDirs)
