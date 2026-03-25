@@ -81,6 +81,7 @@ func TestAuditRepositoryWriteGetAndList(t *testing.T) {
 		{name: "filter action", filter: AuditListFilter{Action: "rename", Page: 1, Limit: 10}, wantTotal: 2, wantLen: 2},
 		{name: "filter result", filter: AuditListFilter{Result: "failed", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
 		{name: "filter folder", filter: AuditListFilter{FolderID: "folder-1", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
+		{name: "filter folder path keyword", filter: AuditListFilter{FolderPathKeyword: "/media/b", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
 		{name: "pagination", filter: AuditListFilter{Page: 2, Limit: 2}, wantTotal: 3, wantLen: 1},
 	}
 
@@ -137,6 +138,19 @@ func TestAuditRepositoryListTimeRange(t *testing.T) {
 
 	if items[0].ID != "t2" {
 		t.Fatalf("List(From)[0].ID = %q, want t2", items[0].ID)
+	}
+
+	items, total, err = repo.List(ctx, AuditListFilter{To: mid, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("List(To) error = %v", err)
+	}
+
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("List(To) total/len = %d/%d, want 1/1", total, len(items))
+	}
+
+	if items[0].ID != "t1" {
+		t.Fatalf("List(To)[0].ID = %q, want t1", items[0].ID)
 	}
 }
 

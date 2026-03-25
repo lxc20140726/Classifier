@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -80,5 +82,123 @@ func TestConfigRepositoryGetNotFound(t *testing.T) {
 	_, err := repo.Get(context.Background(), "missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewConfigRepository(database)
+	ctx := context.Background()
+
+	err := repo.SaveAppConfig(ctx, &AppConfig{
+		Version:       2,
+		ScanInputDirs: []string{"/mnt/source", "/mnt/source-2"},
+		SourceDir:     "/mnt/source",
+		TargetDir:     "/mnt/target",
+		OutputDirs: AppConfigOutputDirs{
+			Video: "/mnt/out/video",
+			Manga: "/mnt/out/manga",
+			Photo: "/mnt/out/photo",
+			Other: "/mnt/out/other",
+			Mixed: "/mnt/out/mixed",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveAppConfig() error = %v", err)
+	}
+
+	got, err := repo.GetAppConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetAppConfig() error = %v", err)
+	}
+
+	if got.Version != 2 {
+		t.Fatalf("Version = %d, want 2", got.Version)
+	}
+	if !reflect.DeepEqual(got.ScanInputDirs, []string{"/mnt/source", "/mnt/source-2"}) {
+		t.Fatalf("ScanInputDirs = %#v, want [/mnt/source /mnt/source-2]", got.ScanInputDirs)
+	}
+
+	rawScanInputDirs, err := repo.Get(ctx, "scan_input_dirs")
+	if err != nil {
+		t.Fatalf("Get(scan_input_dirs) error = %v", err)
+	}
+	if rawScanInputDirs != `["/mnt/source","/mnt/source-2"]` {
+		t.Fatalf("scan_input_dirs = %q, want %q", rawScanInputDirs, `["/mnt/source","/mnt/source-2"]`)
+	}
+}
+
+func TestConfigRepositoryGetAppConfigFallsBackToLegacyKV(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewConfigRepository(database)
+	ctx := context.Background()
+
+	if err := repo.Set(ctx, "source_dir", "/legacy/source"); err != nil {
+		t.Fatalf("Set(source_dir) error = %v", err)
+	}
+	if err := repo.Set(ctx, "target_dir", "/legacy/target"); err != nil {
+		t.Fatalf("Set(target_dir) error = %v", err)
+	}
+	if err := repo.Set(ctx, "scan_input_dirs", `["/legacy/source","/legacy/source-2"]`); err != nil {
+		t.Fatalf("Set(scan_input_dirs) error = %v", err)
+	}
+
+	got, err := repo.GetAppConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetAppConfig() error = %v", err)
+	}
+
+	if got.SourceDir != "/legacy/source" {
+		t.Fatalf("SourceDir = %q, want /legacy/source", got.SourceDir)
+	}
+	if got.TargetDir != "/legacy/target" {
+		t.Fatalf("TargetDir = %q, want /legacy/target", got.TargetDir)
+	}
+	if got.OutputDirs.Video != "/legacy/target/video" {
+		t.Fatalf("OutputDirs.Video = %q, want /legacy/target/video", got.OutputDirs.Video)
+	}
+	if !reflect.DeepEqual(got.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
+		t.Fatalf("ScanInputDirs = %#v, want [/legacy/source /legacy/source-2]", got.ScanInputDirs)
+	}
+}
+
+func TestConfigRepositoryEnsureAppConfig(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewConfigRepository(database)
+	ctx := context.Background()
+
+	if err := repo.Set(ctx, "source_dir", "/legacy/source"); err != nil {
+		t.Fatalf("Set(source_dir) error = %v", err)
+	}
+
+	if err := repo.EnsureAppConfig(ctx); err != nil {
+		t.Fatalf("EnsureAppConfig() error = %v", err)
+	}
+
+	var rowCount int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM app_config WHERE id = 1").Scan(&rowCount); err != nil {
+		t.Fatalf("query app_config count error = %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("app_config row count = %d, want 1", rowCount)
+	}
+
+	var rawValue string
+	if err := database.QueryRowContext(ctx, "SELECT value FROM app_config WHERE id = 1").Scan(&rawValue); err != nil {
+		t.Fatalf("query app_config value error = %v", err)
+	}
+
+	var cfg AppConfig
+	if err := json.Unmarshal([]byte(rawValue), &cfg); err != nil {
+		t.Fatalf("json.Unmarshal(app_config.value) error = %v", err)
+	}
+	if cfg.SourceDir != "/legacy/source" {
+		t.Fatalf("cfg.SourceDir = %q, want /legacy/source", cfg.SourceDir)
 	}
 }

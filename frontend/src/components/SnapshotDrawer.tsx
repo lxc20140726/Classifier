@@ -15,6 +15,7 @@ export interface SnapshotDrawerProps {
 
 interface DrawerState {
   revertingId: string | null
+  lastAttemptedId: string | null
   localError: string | null
   failureDetail: RevertResult | null
 }
@@ -108,6 +109,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
   const handleRevertDone = useSnapshotStore((store) => store.handleRevertDone)
   const [state, setState] = useState<DrawerState>({
     revertingId: null,
+    lastAttemptedId: null,
     localError: null,
     failureDetail: null,
   })
@@ -117,7 +119,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
   if (prevKeyRef.current !== openKey) {
     prevKeyRef.current = openKey
     if (openKey !== null) {
-      setState({ revertingId: null, localError: null, failureDetail: null })
+      setState({ revertingId: null, lastAttemptedId: null, localError: null, failureDetail: null })
     }
   }
 
@@ -130,24 +132,26 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
   async function handleRevert(snapshotId: string) {
     if (!folderId) return
 
-    setState({ revertingId: snapshotId, localError: null, failureDetail: null })
+    setState({ revertingId: snapshotId, lastAttemptedId: snapshotId, localError: null, failureDetail: null })
 
     try {
       await revertSnapshot(snapshotId)
       handleRevertDone(snapshotId)
       await fetchSnapshots(folderId)
-      setState({ revertingId: null, localError: null, failureDetail: null })
+      setState({ revertingId: null, lastAttemptedId: snapshotId, localError: null, failureDetail: null })
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 422 && error.body) {
         const revertResult = error.body.revert_result as RevertResult | undefined
         setState({
           revertingId: null,
+          lastAttemptedId: snapshotId,
           localError: error.message,
           failureDetail: revertResult ?? null,
         })
       } else {
         setState({
           revertingId: null,
+          lastAttemptedId: snapshotId,
           localError: error instanceof Error ? error.message : '回退失败',
           failureDetail: null,
         })
@@ -217,7 +221,6 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                 const detailItems = renderDetail(snapshot.detail)
                 const operationLabel = OP_LABELS[snapshot.operation_type] ?? snapshot.operation_type
                 const isReverting = state.revertingId === snapshot.id
-                const hasFailure = state.failureDetail !== null && state.revertingId === null && isReverting
 
                 return (
                   <li key={snapshot.id} className="relative">
@@ -243,7 +246,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                           </div>
                         </div>
 
-                        {snapshot.status !== 'reverted' && snapshot.operation_type === 'move' && (
+                        {snapshot.status === 'committed' && (
                           <button
                             type="button"
                             disabled={state.revertingId !== null}
@@ -256,7 +259,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                         )}
                       </div>
 
-                      {state.failureDetail && state.revertingId === null && snapshot.id === orderedSnapshots.find(s => s.status !== 'reverted' && s.operation_type === 'move')?.id && !hasFailure && (
+                      {state.failureDetail && state.revertingId === null && snapshot.id === state.lastAttemptedId && (
                         <RevertFailurePanel detail={state.failureDetail} />
                       )}
 

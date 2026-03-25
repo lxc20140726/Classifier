@@ -21,6 +21,7 @@ type Folder struct {
 	MarkedForMove     bool       `db:"marked_for_move"`
 	DeletedAt         *time.Time `db:"deleted_at"`
 	DeleteStagingPath string     `db:"delete_staging_path"`
+	CoverImagePath    string     `db:"cover_image_path"`
 	ScannedAt         time.Time  `db:"scanned_at"`
 	UpdatedAt         time.Time  `db:"updated_at"`
 }
@@ -84,58 +85,75 @@ type JobListFilter struct {
 }
 
 type AuditListFilter struct {
-	JobID    string
-	Action   string
-	Result   string
-	FolderID string
-	From     time.Time
-	To       time.Time
-	Page     int
-	Limit    int
+	JobID             string
+	Action            string
+	Result            string
+	FolderID          string
+	FolderPathKeyword string
+	From              time.Time
+	To                time.Time
+	Page              int
+	Limit             int
+}
+
+type AppConfigOutputDirs struct {
+	Video string `json:"video"`
+	Manga string `json:"manga"`
+	Photo string `json:"photo"`
+	Other string `json:"other"`
+	Mixed string `json:"mixed"`
+}
+
+type AppConfig struct {
+	Version       int                 `json:"version"`
+	ScanInputDirs []string            `json:"scan_input_dirs"`
+	SourceDir     string              `json:"source_dir"`
+	TargetDir     string              `json:"target_dir"`
+	OutputDirs    AppConfigOutputDirs `json:"output_dirs"`
 }
 
 type WorkflowDefinition struct {
-	ID          string    `db:"id"`
-	Name        string    `db:"name"`
-	Description string    `db:"description"`
-	GraphJSON   string    `db:"graph_json"`
-	IsActive    bool      `db:"is_active"`
-	Version     int       `db:"version"`
-	CreatedAt   time.Time `db:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at"`
+	ID          string    `db:"id"          json:"id"`
+	Name        string    `db:"name"        json:"name"`
+	Description string    `db:"description" json:"description,omitempty"`
+	GraphJSON   string    `db:"graph_json"  json:"graph_json"`
+	IsActive    bool      `db:"is_active"   json:"is_active"`
+	Version     int       `db:"version"     json:"version"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type WorkflowRun struct {
-	ID             string     `db:"id"`
-	JobID          string     `db:"job_id"`
-	FolderID       string     `db:"folder_id"`
-	WorkflowDefID  string     `db:"workflow_def_id"`
-	Status         string     `db:"status"`
-	ResumeNodeID   string     `db:"resume_node_id"`
-	LastNodeID     string     `db:"last_node_id"`
-	ExternalBlocks int        `db:"external_blocks"`
-	Error          string     `db:"error"`
-	StartedAt      *time.Time `db:"started_at"`
-	FinishedAt     *time.Time `db:"finished_at"`
-	CreatedAt      time.Time  `db:"created_at"`
-	UpdatedAt      time.Time  `db:"updated_at"`
+	ID             string     `db:"id"              json:"id"`
+	JobID          string     `db:"job_id"          json:"job_id"`
+	FolderID       string     `db:"folder_id"       json:"folder_id"`
+	WorkflowDefID  string     `db:"workflow_def_id" json:"workflow_def_id"`
+	Status         string     `db:"status"          json:"status"`
+	ResumeNodeID   string     `db:"resume_node_id"  json:"resume_node_id"`
+	LastNodeID     string     `db:"last_node_id"    json:"last_node_id"`
+	ExternalBlocks int        `db:"external_blocks" json:"external_blocks"`
+	Error          string     `db:"error"           json:"error"`
+	StartedAt      *time.Time `db:"started_at"      json:"started_at"`
+	FinishedAt     *time.Time `db:"finished_at"     json:"finished_at"`
+	CreatedAt      time.Time  `db:"created_at"      json:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at"      json:"updated_at"`
 }
 
 type NodeRun struct {
-	ID             string     `db:"id"`
-	WorkflowRunID  string     `db:"workflow_run_id"`
-	NodeID         string     `db:"node_id"`
-	NodeType       string     `db:"node_type"`
-	Sequence       int        `db:"sequence"`
-	Status         string     `db:"status"`
-	InputJSON      string     `db:"input_json"`
-	OutputJSON     string     `db:"output_json"`
-	InputSignature string     `db:"input_signature"`
-	ResumeToken    string     `db:"resume_token"`
-	Error          string     `db:"error"`
-	StartedAt      *time.Time `db:"started_at"`
-	FinishedAt     *time.Time `db:"finished_at"`
-	CreatedAt      time.Time  `db:"created_at"`
+	ID             string     `db:"id"              json:"id"`
+	WorkflowRunID  string     `db:"workflow_run_id" json:"workflow_run_id"`
+	NodeID         string     `db:"node_id"         json:"node_id"`
+	NodeType       string     `db:"node_type"       json:"node_type"`
+	Sequence       int        `db:"sequence"        json:"sequence"`
+	Status         string     `db:"status"          json:"status"`
+	InputJSON      string     `db:"input_json"      json:"input_json"`
+	OutputJSON     string     `db:"output_json"     json:"output_json"`
+	InputSignature string     `db:"input_signature" json:"input_signature"`
+	ResumeToken    string     `db:"resume_token"    json:"resume_token"`
+	Error          string     `db:"error"           json:"error"`
+	StartedAt      *time.Time `db:"started_at"      json:"started_at"`
+	FinishedAt     *time.Time `db:"finished_at"     json:"finished_at"`
+	CreatedAt      time.Time  `db:"created_at"      json:"created_at"`
 }
 
 type NodeSnapshot struct {

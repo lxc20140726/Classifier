@@ -1,4 +1,4 @@
-import { Briefcase, FolderKanban, Settings } from 'lucide-react'
+import { Briefcase, FolderKanban, GitBranch, ScrollText, Settings } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils'
 const navItems = [
   { to: '/', label: '文件夹', icon: FolderKanban, end: true },
   { to: '/jobs', label: '任务', icon: Briefcase },
+  { to: '/workflow-defs', label: '工作流', icon: GitBranch },
+  { to: '/audit-logs', label: '审计日志', icon: ScrollText },
   { to: '/settings', label: '设置', icon: Settings },
 ]
 

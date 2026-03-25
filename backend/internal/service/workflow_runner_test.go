@@ -143,6 +143,7 @@ func TestWorkflowRunnerServiceStartAndResume(t *testing.T) {
 		nodeSnapshotRepo,
 		adapter,
 		nil,
+		nil,
 	)
 
 	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, FolderIDs: []string{folder.ID}})
@@ -256,6 +257,7 @@ func TestWorkflowRunnerServicePortInputPropagation(t *testing.T) {
 		nodeRunRepo,
 		nodeSnapshotRepo,
 		adapter,
+		nil,
 		nil,
 	)
 	svc.RegisterExecutor(&produceInputExecutor{})

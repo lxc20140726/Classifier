@@ -15,7 +15,12 @@ type WorkflowRunReader interface {
 	ListWorkflowRuns(ctx context.Context, jobID string, page, limit int) ([]*repository.WorkflowRun, int, error)
 	GetWorkflowRunDetail(ctx context.Context, workflowRunID string) (*service.WorkflowRunDetail, error)
 	ResumeWorkflowRun(ctx context.Context, workflowRunID string) error
+	ResumeWorkflowRunWithData(ctx context.Context, workflowRunID string, resumeData map[string]any) error
 	RollbackWorkflowRun(ctx context.Context, workflowRunID string) error
+}
+
+type provideInputRequest struct {
+	Category string `json:"category"`
 }
 
 type WorkflowRunHandler struct {
@@ -94,4 +99,33 @@ func (h *WorkflowRunHandler) Rollback(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"rolled_back": true})
+}
+
+func (h *WorkflowRunHandler) ProvideInput(c *gin.Context) {
+	id := c.Param("id")
+
+	var req provideInputRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	validCategories := map[string]struct{}{
+		"photo": {},
+		"video": {},
+		"manga": {},
+		"mixed": {},
+		"other": {},
+	}
+	if _, ok := validCategories[req.Category]; !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category"})
+		return
+	}
+
+	if err := h.runner.ResumeWorkflowRunWithData(c.Request.Context(), id, map[string]any{"category": req.Category}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }

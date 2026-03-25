@@ -21,8 +21,8 @@ func (r *SQLiteFolderRepository) Upsert(ctx context.Context, f *Folder) error {
 INSERT INTO folders (
 	id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, scanned_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET
 	path = excluded.path,
 	source_dir = excluded.source_dir,
@@ -38,6 +38,7 @@ ON CONFLICT(id) DO UPDATE SET
 	marked_for_move = excluded.marked_for_move,
 	deleted_at = excluded.deleted_at,
 	delete_staging_path = excluded.delete_staging_path,
+	cover_image_path = excluded.cover_image_path,
 	updated_at = CURRENT_TIMESTAMP
 `
 
@@ -59,6 +60,7 @@ ON CONFLICT(id) DO UPDATE SET
 		boolToInt(f.MarkedForMove),
 		nullableTime(f.DeletedAt),
 		nullableString(f.DeleteStagingPath),
+		strings.TrimSpace(f.CoverImagePath),
 	)
 	if err != nil {
 		return fmt.Errorf("folderRepo.Upsert: %w", err)
@@ -72,7 +74,7 @@ func (r *SQLiteFolderRepository) GetByID(ctx context.Context, id string) (*Folde
 		r.db.QueryRowContext(ctx, `
 SELECT id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, scanned_at, updated_at
+	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
 FROM folders
 WHERE id = ?
 `, id),
@@ -89,7 +91,7 @@ func (r *SQLiteFolderRepository) GetByPath(ctx context.Context, path string) (*F
 		r.db.QueryRowContext(ctx, `
 SELECT id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, scanned_at, updated_at
+	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
 FROM folders
 WHERE path = ? AND deleted_at IS NULL
 `, path),
@@ -155,7 +157,7 @@ func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilt
 		ctx,
 		`SELECT id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, scanned_at, updated_at
+	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
 FROM folders`+whereClause+`
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?`,
@@ -237,6 +239,24 @@ func (r *SQLiteFolderRepository) UpdatePath(ctx context.Context, id, newPath str
 	return nil
 }
 
+func (r *SQLiteFolderRepository) UpdateCoverImagePath(ctx context.Context, id, coverImagePath string) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		"UPDATE folders SET cover_image_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		strings.TrimSpace(coverImagePath),
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("folderRepo.UpdateCoverImagePath: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("folderRepo.UpdateCoverImagePath: %w", err)
+	}
+
+	return nil
+}
+
 func (r *SQLiteFolderRepository) IsSuppressedPath(ctx context.Context, path string) (bool, error) {
 	var exists int
 	err := r.db.QueryRowContext(
@@ -306,6 +326,7 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	var markedForMove int
 	var deletedAt any
 	var deleteStagingPath sql.NullString
+	var coverImagePath sql.NullString
 	var scannedAt any
 	var updatedAt any
 
@@ -325,6 +346,7 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 		&markedForMove,
 		&deletedAt,
 		&deleteStagingPath,
+		&coverImagePath,
 		&scannedAt,
 		&updatedAt,
 	)
@@ -341,6 +363,9 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	}
 	if deleteStagingPath.Valid {
 		folder.DeleteStagingPath = deleteStagingPath.String
+	}
+	if coverImagePath.Valid {
+		folder.CoverImagePath = coverImagePath.String
 	}
 
 	folder.ScannedAt, err = parseDBTime(scannedAt)

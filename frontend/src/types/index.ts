@@ -41,9 +41,17 @@ export interface Snapshot {
 }
 
 export interface AppConfig {
+  version?: number
   source_dir?: string
   target_dir?: string
   scan_input_dirs?: string[]
+  output_dirs?: {
+    video?: string
+    manga?: string
+    photo?: string
+    other?: string
+    mixed?: string
+  }
 }
 
 export interface ApiError {
@@ -123,13 +131,35 @@ export interface AuditLog {
   created_at: string
 }
 
-export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partial'
-export type NodeRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
-export type NodeType = 'trigger' | 'ext-ratio-classifier' | 'move'
+export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partial' | 'waiting_input'
+export type NodeRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting_input'
+export type NodeType =
+  | 'trigger'
+  | 'ext-ratio-classifier'
+  | 'move'
+  | 'move-node'
+  | 'folder-tree-scanner'
+  | 'name-keyword-classifier'
+  | 'file-tree-classifier'
+  | 'confidence-check'
+  | 'manual-classifier'
+  | 'subtree-aggregator'
+  | 'classification-reader'
+  | 'folder-splitter'
+  | 'category-router'
+  | 'rename-node'
+  | 'compress-node'
+  | 'thumbnail-node'
+  | 'audit-log'
+
+export interface ProvideInputBody {
+  category: 'photo' | 'video' | 'manga' | 'mixed' | 'other'
+}
 
 export interface WorkflowDefinition {
   id: string
   name: string
+  description?: string
   graph_json: string
   is_active: boolean
   version: number
@@ -175,4 +205,57 @@ export interface WorkflowNodeEvent {
   node_type: string
   status?: NodeRunStatus
   error?: string
+}
+
+export interface NodeUIPosition {
+  x: number
+  y: number
+}
+
+export interface NodeLinkSource {
+  source_node_id: string
+  output_port_index: number
+}
+
+export interface NodeInputSpec {
+  const_value?: unknown
+  link_source?: NodeLinkSource
+}
+
+export interface WorkflowGraphNode {
+  id: string
+  type: NodeType | string
+  label?: string
+  config: Record<string, unknown>
+  inputs?: Record<string, NodeInputSpec>
+  ui_position?: NodeUIPosition
+  enabled: boolean
+}
+
+export interface WorkflowGraphEdge {
+  id?: string
+  source: string
+  source_port: number
+  target: string
+  target_port: number
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowGraphNode[]
+  edges: WorkflowGraphEdge[]
+}
+
+export interface NodeSchemaPort {
+  name: string
+  description: string
+  required: boolean
+}
+
+export interface NodeSchema {
+  type: string
+  label: string
+  description: string
+  input_ports: NodeSchemaPort[]
+  output_ports: NodeSchemaPort[]
+  config_schema?: Record<string, unknown>
 }

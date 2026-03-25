@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/liqiye/classifier/internal/repository"
@@ -37,13 +40,38 @@ func (h *AuditHandler) List(c *gin.Context) {
 		limit = parsedLimit
 	}
 
+	from, err := parseAuditTimeQueryValue(c.Query("from"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from"})
+		return
+	}
+
+	to, err := parseAuditTimeQueryValue(c.Query("to"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to"})
+		return
+	}
+
+	if !from.IsZero() && !to.IsZero() && from.After(to) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid time range"})
+		return
+	}
+
+	folderPathKeyword := strings.TrimSpace(c.Query("folder_path"))
+	if folderPathKeyword == "" {
+		folderPathKeyword = strings.TrimSpace(c.Query("folder_path_keyword"))
+	}
+
 	items, total, err := h.audit.List(c.Request.Context(), repository.AuditListFilter{
-		JobID:    c.Query("job_id"),
-		Action:   c.Query("action"),
-		Result:   c.Query("result"),
-		FolderID: c.Query("folder_id"),
-		Page:     page,
-		Limit:    limit,
+		JobID:             c.Query("job_id"),
+		Action:            c.Query("action"),
+		Result:            c.Query("result"),
+		FolderID:          c.Query("folder_id"),
+		FolderPathKeyword: folderPathKeyword,
+		From:              from,
+		To:                to,
+		Page:              page,
+		Limit:             limit,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list audit logs"})
@@ -51,4 +79,27 @@ func (h *AuditHandler) List(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "limit": limit})
+}
+
+func parseAuditTimeQueryValue(raw string) (time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, nil
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("invalid time format")
 }

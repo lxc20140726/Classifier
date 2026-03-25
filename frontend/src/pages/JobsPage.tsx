@@ -4,7 +4,8 @@ import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useJobStore } from '@/store/jobStore'
-import type { Job, JobStatus } from '@/types'
+import { useWorkflowRunStore } from '@/store/workflowRunStore'
+import type { Job, JobStatus, NodeRun, NodeRunStatus, WorkflowRun, WorkflowRunStatus } from '@/types'
 
 function formatDate(dateStr: string | null) {
   if (!dateStr) return '—'
@@ -21,7 +22,7 @@ function formatDuration(startedAt: string | null, finishedAt: string | null) {
   return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
 }
 
-const STATUS_LABELS: Record<JobStatus, string> = {
+const JOB_STATUS_LABELS: Record<JobStatus, string> = {
   pending: '等待中',
   running: '进行中',
   succeeded: '已完成',
@@ -30,7 +31,7 @@ const STATUS_LABELS: Record<JobStatus, string> = {
   cancelled: '已取消',
 }
 
-const STATUS_STYLES: Record<JobStatus, string> = {
+const JOB_STATUS_STYLES: Record<JobStatus, string> = {
   pending: 'bg-muted text-muted-foreground',
   running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
   succeeded: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
@@ -39,15 +40,63 @@ const STATUS_STYLES: Record<JobStatus, string> = {
   cancelled: 'bg-muted text-muted-foreground',
 }
 
-function StatusBadge({ status }: { status: JobStatus }) {
+const WF_STATUS_LABELS: Record<WorkflowRunStatus, string> = {
+  pending: '等待中',
+  running: '进行中',
+  succeeded: '已完成',
+  failed: '失败',
+  partial: '部分完成',
+  waiting_input: '待确认',
+}
+
+const WF_STATUS_STYLES: Record<WorkflowRunStatus, string> = {
+  pending: 'bg-muted text-muted-foreground',
+  running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  succeeded: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  failed: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+  partial: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
+  waiting_input: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
+}
+
+const NODE_STATUS_LABELS: Record<NodeRunStatus, string> = {
+  pending: '等待中',
+  running: '进行中',
+  succeeded: '已完成',
+  failed: '失败',
+  skipped: '已跳过',
+  waiting_input: '待确认',
+}
+
+const NODE_STATUS_STYLES: Record<NodeRunStatus, string> = {
+  pending: 'bg-muted text-muted-foreground',
+  running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  succeeded: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  failed: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+  skipped: 'bg-muted text-muted-foreground',
+  waiting_input: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  photo: '照片',
+  video: '视频',
+  manga: '漫画',
+  mixed: '混合',
+  other: '其他',
+}
+
+function StatusBadge({ status, labels, styles }: {
+  status: string
+  labels: Record<string, string>
+  styles: Record<string, string>
+}) {
   return (
     <span
       className={cn(
         'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-        STATUS_STYLES[status],
+        styles[status] ?? 'bg-muted text-muted-foreground',
       )}
     >
-      {STATUS_LABELS[status]}
+      {labels[status] ?? status}
     </span>
   )
 }
@@ -65,6 +114,166 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
       <span className="min-w-[3rem] text-right text-xs text-muted-foreground">
         {done}/{total}
       </span>
+    </div>
+  )
+}
+
+function NodeRunsPanel({ runId }: { runId: string }) {
+  const { nodesByRunId, fetchRunDetail } = useWorkflowRunStore()
+  const nodes = nodesByRunId[runId] ?? []
+
+  useEffect(() => {
+    void fetchRunDetail(runId)
+  }, [runId, fetchRunDetail])
+
+  if (nodes.length === 0) {
+    return <p className="py-2 text-xs text-muted-foreground">暂无节点记录</p>
+  }
+
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="border-b border-border">
+          <th className="py-1 pr-4 text-left font-medium text-muted-foreground">节点ID</th>
+          <th className="py-1 pr-4 text-left font-medium text-muted-foreground">类型</th>
+          <th className="py-1 pr-4 text-left font-medium text-muted-foreground">序号</th>
+          <th className="py-1 pr-4 text-left font-medium text-muted-foreground">状态</th>
+          <th className="py-1 text-left font-medium text-muted-foreground">耗时</th>
+        </tr>
+      </thead>
+      <tbody>
+        {nodes.map((node: NodeRun) => (
+          <tr key={node.id || node.node_id} className="border-b border-border/50">
+            <td className="py-1 pr-4 font-mono">{node.node_id}</td>
+            <td className="py-1 pr-4">{node.node_type}</td>
+            <td className="py-1 pr-4">{node.sequence}</td>
+            <td className="py-1 pr-4">
+              <StatusBadge status={node.status} labels={NODE_STATUS_LABELS} styles={NODE_STATUS_STYLES} />
+            </td>
+            <td className="py-1">{formatDuration(node.started_at, node.finished_at)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function WorkflowRunRow({ run }: { run: WorkflowRun }) {
+  const [expanded, setExpanded] = useState(false)
+  const [selectedCategory, setSelectedCategory] = useState<string>('photo')
+  const [isActing, setIsActing] = useState(false)
+  const { rollbackRun, provideInput } = useWorkflowRunStore()
+
+  async function handleRollback() {
+    setIsActing(true)
+    try {
+      await rollbackRun(run.id)
+    } finally {
+      setIsActing(false)
+    }
+  }
+
+  async function handleProvideInput() {
+    setIsActing(true)
+    try {
+      await provideInput(run.id, selectedCategory as 'photo' | 'video' | 'manga' | 'mixed' | 'other')
+    } finally {
+      setIsActing(false)
+    }
+  }
+
+  return (
+    <>
+      <tr
+        className="cursor-pointer border-b border-border/50 transition-colors hover:bg-muted/20"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <td className="py-1.5 pl-2 pr-3">
+          {expanded ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+        </td>
+        <td className="py-1.5 pr-4 font-mono text-xs">{run.folder_id.slice(0, 8)}</td>
+        <td className="py-1.5 pr-4">
+          <StatusBadge status={run.status} labels={WF_STATUS_LABELS} styles={WF_STATUS_STYLES} />
+        </td>
+        <td className="py-1.5 pr-4 text-xs text-muted-foreground">{formatDate(run.created_at)}</td>
+        <td className="py-1.5" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2">
+            {(run.status === 'failed' || run.status === 'partial') && (
+              <button
+                type="button"
+                disabled={isActing}
+                onClick={() => void handleRollback()}
+                className="rounded bg-red-100 px-2 py-0.5 text-xs text-red-700 hover:bg-red-200 disabled:opacity-50 dark:bg-red-900/30 dark:text-red-300"
+              >
+                回滚
+              </button>
+            )}
+            {run.status === 'waiting_input' && (
+              <div className="flex items-center gap-1">
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="rounded border border-border bg-background px-1 py-0.5 text-xs"
+                >
+                  {Object.entries(CATEGORY_LABELS).map(([val, label]) => (
+                    <option key={val} value={val}>{label}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={isActing}
+                  onClick={() => void handleProvideInput()}
+                  className="rounded bg-purple-100 px-2 py-0.5 text-xs text-purple-700 hover:bg-purple-200 disabled:opacity-50 dark:bg-purple-900/30 dark:text-purple-300"
+                >
+                  确认
+                </button>
+              </div>
+            )}
+          </div>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="border-b border-border/30 bg-muted/10">
+          <td colSpan={5} className="px-6 py-3">
+            <NodeRunsPanel runId={run.id} />
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function WorkflowRunsPanel({ jobId }: { jobId: string }) {
+  const { runsByJobId, fetchRunsForJob } = useWorkflowRunStore()
+  const runs = runsByJobId[jobId] ?? []
+
+  useEffect(() => {
+    void fetchRunsForJob(jobId)
+  }, [jobId, fetchRunsForJob])
+
+  if (runs.length === 0) {
+    return <p className="text-xs text-muted-foreground">暂无工作流运行记录</p>
+  }
+
+  return (
+    <div>
+      <p className="mb-2 text-xs font-medium text-muted-foreground">工作流运行（{runs.length}）</p>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-border">
+            <th className="w-6" />
+            <th className="py-1 pr-4 text-left font-medium text-muted-foreground">目录ID</th>
+            <th className="py-1 pr-4 text-left font-medium text-muted-foreground">状态</th>
+            <th className="py-1 pr-4 text-left font-medium text-muted-foreground">创建时间</th>
+            <th className="py-1 text-left font-medium text-muted-foreground">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((run: WorkflowRun) => (
+            <WorkflowRunRow key={run.id} run={run} />
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -94,7 +303,7 @@ function JobRow({ job }: { job: Job }) {
         <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{job.id.slice(0, 8)}</td>
         <td className="px-4 py-3 text-sm">{job.type}</td>
         <td className="px-4 py-3">
-          <StatusBadge status={job.status} />
+          <StatusBadge status={job.status} labels={JOB_STATUS_LABELS} styles={JOB_STATUS_STYLES} />
         </td>
         <td className="w-48 px-4 py-3">
           <ProgressBar done={job.done} total={job.total} />
@@ -108,65 +317,7 @@ function JobRow({ job }: { job: Job }) {
       {expanded && (
         <tr className="border-b border-border bg-muted/20">
           <td colSpan={8} className="px-8 py-4">
-            <div className="grid gap-3 text-sm">
-              {job.error && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
-                   <p className="font-medium text-destructive">错误信息</p>
-                  <p className="mt-0.5 text-destructive/80">{job.error}</p>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 sm:grid-cols-3">
-                <div>
-                   <p className="text-xs text-muted-foreground">任务 ID</p>
-                  <p className="font-mono text-xs">{job.id}</p>
-                </div>
-                <div>
-                   <p className="text-xs text-muted-foreground">任务类型</p>
-                   <p>{job.type === 'scan' ? '扫描' : job.type === 'move' ? '移动' : job.type}</p>
-                </div>
-                <div>
-                   <p className="text-xs text-muted-foreground">状态</p>
-                  <StatusBadge status={job.status} />
-                </div>
-                <div>
-                   <p className="text-xs text-muted-foreground">目录数量</p>
-                   <p>{job.folder_ids.length} 个</p>
-                </div>
-                <div>
-                   <p className="text-xs text-muted-foreground">完成 / 总数</p>
-                  <p>
-                    {job.done} / {job.total}
-                    {job.failed > 0 && (
-                       <span className="ml-1 text-destructive">（{job.failed} 失败）</span>
-                    )}
-                  </p>
-                </div>
-                <div>
-                   <p className="text-xs text-muted-foreground">开始时间</p>
-                  <p>{formatDate(job.started_at)}</p>
-                </div>
-                <div>
-                   <p className="text-xs text-muted-foreground">结束时间</p>
-                  <p>{formatDate(job.finished_at)}</p>
-                </div>
-                <div>
-                   <p className="text-xs text-muted-foreground">创建时间</p>
-                  <p>{formatDate(job.created_at)}</p>
-                </div>
-              </div>
-              {job.folder_ids.length > 0 && (
-                <div>
-                   <p className="text-xs text-muted-foreground">目录 ID</p>
-                  <ul className="mt-1 space-y-0.5">
-                    {job.folder_ids.map((fid) => (
-                      <li key={fid} className="font-mono text-xs">
-                        {fid}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
+            <WorkflowRunsPanel jobId={job.id} />
           </td>
         </tr>
       )}

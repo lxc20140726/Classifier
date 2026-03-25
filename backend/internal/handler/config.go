@@ -16,34 +16,32 @@ func NewConfigHandler(configRepo repository.ConfigRepository) *ConfigHandler {
 }
 
 func (h *ConfigHandler) Get(c *gin.Context) {
-	values, err := h.config.GetAll(c.Request.Context())
+	value, err := h.config.GetAppConfig(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get config"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": values})
+	c.JSON(http.StatusOK, gin.H{"data": value})
 }
 
 func (h *ConfigHandler) Put(c *gin.Context) {
-	var payload map[string]any
+	var payload repository.AppConfig
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
 
-	for key, value := range payload {
-		stringValue, ok := value.(string)
-		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "all config values must be strings"})
-			return
-		}
-
-		if err := h.config.Set(c.Request.Context(), key, stringValue); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config"})
-			return
-		}
+	if err := h.config.SaveAppConfig(c.Request.Context(), &payload); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config"})
+		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"saved": true})
+	stored, err := h.config.GetAppConfig(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load saved config"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"saved": true, "data": stored})
 }

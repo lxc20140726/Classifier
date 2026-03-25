@@ -99,6 +99,7 @@ func NewWorkflowRunnerService(
 	nodeSnapshotRepo repository.NodeSnapshotRepository,
 	fsAdapter fs.FSAdapter,
 	broker *sse.Broker,
+	auditSvc *AuditService,
 ) *WorkflowRunnerService {
 	svc := &WorkflowRunnerService{
 		jobs:              jobRepo,
@@ -113,8 +114,17 @@ func NewWorkflowRunnerService(
 	}
 
 	svc.RegisterExecutor(&triggerNodeExecutor{})
-	svc.RegisterExecutor(&extRatioClassifierNodeExecutor{fs: fsAdapter, folders: folderRepo})
+	svc.RegisterExecutor(&extRatioClassifierNodeExecutor{fs: fsAdapter})
+	svc.RegisterExecutor(newManualClassifierExecutor())
+	svc.RegisterExecutor(newClassificationReaderExecutor())
+	svc.RegisterExecutor(newFolderSplitterExecutor())
+	svc.RegisterExecutor(newCategoryRouterExecutor())
+	svc.RegisterExecutor(newRenameNodeExecutor())
 	svc.RegisterExecutor(&moveNodeExecutor{fs: fsAdapter, folders: folderRepo})
+	svc.RegisterExecutor(newPhase4MoveNodeExecutor(fsAdapter, folderRepo))
+	svc.RegisterExecutor(newThumbnailNodeExecutor(fsAdapter, folderRepo))
+	svc.RegisterExecutor(newCompressNodeExecutor(fsAdapter))
+	svc.RegisterExecutor(newAuditLogNodeExecutor(auditSvc))
 
 	return svc
 }
@@ -125,6 +135,19 @@ func (s *WorkflowRunnerService) RegisterExecutor(executor WorkflowNodeExecutor) 
 	}
 
 	s.executors[executor.Type()] = executor
+}
+
+func (s *WorkflowRunnerService) ListNodeSchemas() []NodeSchema {
+	schemas := make([]NodeSchema, 0, len(s.executors))
+	for _, executor := range s.executors {
+		schemas = append(schemas, executor.Schema())
+	}
+
+	sort.Slice(schemas, func(i, j int) bool {
+		return schemas[i].Type < schemas[j].Type
+	})
+
+	return schemas
 }
 
 func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflowJobInput) (string, error) {
@@ -390,6 +413,29 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			}
 
 			inputs[portName] = sourceOutputs[spec.LinkSource.OutputPortIndex]
+		}
+
+		// Skip nodes whose required inputs resolved to nil (upstream chose the other branch)
+		if len(inputs) > 0 && hasNilRequiredInput(inputs) {
+			seq++
+			skippedRun := &repository.NodeRun{
+				ID:            uuid.NewString(),
+				WorkflowRunID: run.ID,
+				NodeID:        node.ID,
+				NodeType:      node.Type,
+				Sequence:      seq,
+				Status:        "pending",
+			}
+			if err := s.nodeRuns.Create(ctx, skippedRun); err != nil {
+				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+				return fmt.Errorf("workflowRunner.executeWorkflowRun create skipped node run %q: %w", node.ID, err)
+			}
+			if err := s.nodeRuns.UpdateFinish(ctx, skippedRun.ID, "skipped", "{}", ""); err != nil {
+				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+				return fmt.Errorf("workflowRunner.executeWorkflowRun finish skipped node run %q: %w", node.ID, err)
+			}
+			outputCache[node.ID] = nil
+			continue
 		}
 
 		seq++
@@ -780,8 +826,7 @@ func (e *triggerNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) e
 }
 
 type extRatioClassifierNodeExecutor struct {
-	fs      fs.FSAdapter
-	folders repository.FolderRepository
+	fs fs.FSAdapter
 }
 
 func (e *extRatioClassifierNodeExecutor) Type() string {
@@ -793,6 +838,10 @@ func (e *extRatioClassifierNodeExecutor) Schema() NodeSchema {
 }
 
 func (e *extRatioClassifierNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
+	if input.Folder == nil {
+		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+	}
+
 	entries, err := e.fs.ReadDir(ctx, input.Folder.Path)
 	if err != nil {
 		return NodeExecutionOutput{}, fmt.Errorf("extRatioClassifier.Execute read dir %q: %w", input.Folder.Path, err)
@@ -806,49 +855,25 @@ func (e *extRatioClassifierNodeExecutor) Execute(ctx context.Context, input Node
 		fileNames = append(fileNames, entry.Name)
 	}
 
-	newCategory := Classify(input.Folder.Name, fileNames)
-	if err := e.folders.UpdateCategory(ctx, input.Folder.ID, newCategory, "workflow"); err != nil {
-		return NodeExecutionOutput{}, fmt.Errorf("extRatioClassifier.Execute update category for folder %q: %w", input.Folder.ID, err)
+	category := Classify(input.Folder.Name, fileNames)
+	confidence := 0.85
+	if category == "other" {
+		confidence = 0.5
 	}
-	input.Folder.Category = newCategory
+	reason := fmt.Sprintf("ext-ratio: %s", category)
 
-	if input.Folder == nil {
-		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
-	}
-
-	return NodeExecutionOutput{Outputs: []any{input.Folder}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: []any{ClassificationSignal{
+		Category:   category,
+		Confidence: confidence,
+		Reason:     reason,
+	}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *extRatioClassifierNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
 	return NodeExecutionOutput{}, fmt.Errorf("%s: Resume not supported", e.Type())
 }
 
-func (e *extRatioClassifierNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {
-	var pre *repository.NodeSnapshot
-	for _, item := range input.Snapshots {
-		if item.Kind == "pre" {
-			pre = item
-			break
-		}
-	}
-	if pre == nil || strings.TrimSpace(pre.FSManifest) == "" {
-		return nil
-	}
-
-	var state struct {
-		Category string `json:"category"`
-	}
-	if err := json.Unmarshal([]byte(pre.FSManifest), &state); err != nil {
-		return fmt.Errorf("extRatioClassifier.Rollback parse pre manifest for node run %q: %w", input.NodeRun.ID, err)
-	}
-	if state.Category == "" {
-		return nil
-	}
-
-	if err := e.folders.UpdateCategory(ctx, input.Folder.ID, state.Category, "workflow_rollback"); err != nil {
-		return fmt.Errorf("extRatioClassifier.Rollback update category for folder %q: %w", input.Folder.ID, err)
-	}
-
+func (e *extRatioClassifierNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
 }
 
@@ -958,4 +983,16 @@ func stringConfig(config map[string]any, key string) string {
 	}
 
 	return strings.TrimSpace(text)
+}
+
+// hasNilRequiredInput returns true if any input port value is explicitly nil,
+// indicating the upstream node chose the other branch (nil-port skip semantics).
+func hasNilRequiredInput(inputs map[string]any) bool {
+	for _, v := range inputs {
+		if v == nil {
+			return true
+		}
+	}
+
+	return false
 }

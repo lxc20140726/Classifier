@@ -1,0 +1,181 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { expect, test } from '@playwright/test'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const repoRoot = path.resolve(__dirname, '../../..')
+const sourceDir = path.join(repoRoot, '.e2e-fullstack/source')
+const targetDir = path.join(repoRoot, '.e2e-fullstack/target')
+
+test.describe.configure({ mode: 'serial' })
+
+async function saveConfig(request: import('@playwright/test').APIRequestContext) {
+  const response = await request.put('/api/config', {
+    data: {
+      scan_input_dirs: JSON.stringify([sourceDir]),
+      source_dir: sourceDir,
+      target_dir: targetDir,
+    },
+  })
+  expect(response.ok()).toBeTruthy()
+}
+
+async function scanUntilFoldersExist(request: import('@playwright/test').APIRequestContext) {
+  await saveConfig(request)
+  const scanResponse = await request.post('/api/folders/scan')
+  expect(scanResponse.ok()).toBeTruthy()
+
+  await expect
+    .poll(async () => {
+      const response = await request.get('/api/folders?limit=50')
+      if (!response.ok()) return []
+      const body = (await response.json()) as { data: Array<Record<string, unknown>> }
+      return body.data.map((folder) => String(folder.name ?? folder.Name ?? '')).sort()
+    }, { timeout: 15000 })
+    .toEqual(['manga-comic', 'manual-only', 'photo-album'])
+}
+
+async function getFolders(request: import('@playwright/test').APIRequestContext) {
+  const response = await request.get('/api/folders?limit=50')
+  expect(response.ok()).toBeTruthy()
+  const body = (await response.json()) as { data: Array<Record<string, unknown>> }
+  return {
+    data: body.data.map((folder) => ({
+      id: String(folder.id ?? folder.ID ?? ''),
+      name: String(folder.name ?? folder.Name ?? ''),
+      category: String(folder.category ?? folder.Category ?? ''),
+    })),
+  }
+}
+
+test('workflow definition CRUD works against the real backend', async ({ page }) => {
+  const uniqueName = `全链路工作流-${Date.now()}`
+  const updatedName = `${uniqueName}-已更新`
+
+  await page.goto('/')
+  await page.getByRole('link', { name: '工作流' }).click()
+  await expect(page.getByRole('heading', { name: '工作流定义' })).toBeVisible()
+  await expect(page.getByText('默认分类流程')).toBeVisible()
+
+  await page.getByRole('button', { name: '新建' }).click()
+  await page.getByPlaceholder('工作流名称').fill(uniqueName)
+  await page.locator('textarea').fill('{"nodes":[{"id":"n1","type":"trigger","config":{},"enabled":true}],"edges":[]}')
+  await page.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByText(uniqueName)).toBeVisible()
+
+  const row = page.locator('tr').filter({ hasText: uniqueName })
+  await row.getByRole('button', { name: '编辑' }).click()
+  await page.getByPlaceholder('工作流名称').fill(updatedName)
+  await page.locator('textarea').fill('{"nodes":[{"id":"n1","type":"trigger","config":{},"enabled":true},{"id":"n2","type":"move","config":{},"enabled":true}],"edges":[{"id":"e1","source":"n1","source_port":0,"target":"n2","target_port":0}]}')
+  await page.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByText(updatedName)).toBeVisible()
+
+  const updatedRow = page.locator('tr').filter({ hasText: updatedName })
+  await expect(updatedRow.getByText('已激活')).toBeVisible()
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await updatedRow.getByRole('button', { name: '删除' }).click()
+  await expect(page.getByText(updatedName)).toHaveCount(0)
+})
+
+test('scan flow creates folders and snapshot drawer can revert a real snapshot', async ({ page, request }) => {
+  await scanUntilFoldersExist(request)
+
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: '媒体文件夹' })).toBeVisible()
+  await expect(page.locator('[title="photo-album"]')).toBeVisible()
+
+  const row = page.locator('tr').filter({ hasText: 'photo-album' })
+  await row.locator('[title="查看快照时间线"]').click()
+
+  await expect(page.getByRole('heading', { name: '文件夹操作时间线' })).toBeVisible()
+  await expect(page.getByText('分类记录')).toBeVisible()
+  await page.getByRole('button', { name: '回退到此节点' }).first().click()
+  await expect(page.getByText('已回退')).toBeVisible()
+})
+
+test('jobs page provides manual input to a real waiting workflow run', async ({ page, request }) => {
+  await scanUntilFoldersExist(request)
+  const folders = await getFolders(request)
+  const manualFolder = folders.data.find((folder) => folder.name === 'manual-only')
+  expect(manualFolder).toBeTruthy()
+
+  const createWorkflowResponse = await request.post('/api/workflow-defs', {
+    data: {
+      name: `人工确认-${Date.now()}`,
+      graph_json: JSON.stringify({
+        nodes: [
+          { id: 'manual', type: 'manual-classifier', config: {}, enabled: true },
+          {
+            id: 'agg',
+            type: 'subtree-aggregator',
+            config: {},
+            enabled: true,
+            inputs: {
+              signal_manual: {
+                link_source: { source_node_id: 'manual', output_port_index: 0 },
+              },
+            },
+          },
+        ],
+        edges: [
+          { id: 'e1', source: 'manual', source_port: 0, target: 'agg', target_port: 5 },
+        ],
+      }),
+    },
+  })
+  expect(createWorkflowResponse.ok()).toBeTruthy()
+  const workflowDef = (await createWorkflowResponse.json()) as { data: { id: string } }
+
+  const startJobResponse = await request.post('/api/jobs', {
+    data: {
+      workflow_def_id: workflowDef.data.id,
+      folder_ids: [manualFolder!.id],
+    },
+  })
+  expect(startJobResponse.ok()).toBeTruthy()
+  const startJobBody = (await startJobResponse.json()) as { job_id: string }
+  const jobPrefix = startJobBody.job_id.slice(0, 8)
+  const folderPrefix = manualFolder!.id.slice(0, 8)
+
+  let workflowRunId = ''
+  await expect
+    .poll(async () => {
+      const response = await request.get(`/api/jobs/${startJobBody.job_id}/workflow-runs?limit=20`)
+      if (!response.ok()) return ''
+      const body = (await response.json()) as {
+        data: Array<{ id: string; status: string }>
+      }
+      workflowRunId = body.data[0]?.id ?? ''
+      return body.data[0]?.status ?? ''
+    }, { timeout: 15000 })
+    .toBe('waiting_input')
+
+  await page.goto('/')
+  await page.getByRole('link', { name: '任务' }).click()
+  await expect(page.getByRole('heading', { name: '任务历史' })).toBeVisible()
+
+  await page.locator('tr').filter({ hasText: jobPrefix }).first().click()
+  await expect(page.getByText('工作流运行（1）')).toBeVisible()
+
+  await page.locator('tr').filter({ hasText: folderPrefix }).last().click()
+  await expect(page.getByRole('cell', { name: 'manual-classifier', exact: true })).toBeVisible()
+
+  await page.getByRole('combobox').selectOption('video')
+  await page.getByRole('button', { name: '确认' }).click()
+
+  await expect
+    .poll(async () => {
+      const response = await request.get(`/api/workflow-runs/${workflowRunId}`)
+      if (!response.ok()) return ''
+      const body = (await response.json()) as { data: { status: string } }
+      return body.data.status
+    }, { timeout: 15000 })
+    .toBe('succeeded')
+
+  const refreshedFolders = await getFolders(request)
+  const refreshedManualFolder = refreshedFolders.data.find((folder) => folder.id === manualFolder!.id)
+  expect(refreshedManualFolder?.category).toBe('video')
+})

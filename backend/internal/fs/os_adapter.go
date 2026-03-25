@@ -135,6 +135,36 @@ func (a *OSAdapter) Exists(ctx context.Context, path string) (bool, error) {
 	return false, fmt.Errorf("OSAdapter.Exists: %w", err)
 }
 
+func (a *OSAdapter) OpenFileRead(ctx context.Context, path string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("OSAdapter.OpenFileRead: %w", err)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("OSAdapter.OpenFileRead: %w", err)
+	}
+
+	return file, nil
+}
+
+func (a *OSAdapter) OpenFileWrite(ctx context.Context, path string, perm os.FileMode) (io.WriteCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("OSAdapter.OpenFileWrite: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("OSAdapter.OpenFileWrite: %w", err)
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return nil, fmt.Errorf("OSAdapter.OpenFileWrite: %w", err)
+	}
+
+	return file, nil
+}
+
 func (a *OSAdapter) copyTree(ctx context.Context, src, dst string) error {
 	if err := ctx.Err(); err != nil {
 		return err

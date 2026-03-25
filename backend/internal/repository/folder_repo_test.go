@@ -25,6 +25,7 @@ func TestFolderRepositoryUpsertAndGetters(t *testing.T) {
 		TotalFiles:     11,
 		TotalSize:      1024,
 		MarkedForMove:  true,
+		CoverImagePath: "/covers/a.jpg",
 	}
 
 	if err := repo.Upsert(ctx, folder); err != nil {
@@ -54,6 +55,9 @@ func TestFolderRepositoryUpsertAndGetters(t *testing.T) {
 
 	if byID.MarkedForMove != updated.MarkedForMove {
 		t.Fatalf("GetByID().MarkedForMove = %v, want %v", byID.MarkedForMove, updated.MarkedForMove)
+	}
+	if byID.CoverImagePath != updated.CoverImagePath {
+		t.Fatalf("GetByID().CoverImagePath = %q, want %q", byID.CoverImagePath, updated.CoverImagePath)
 	}
 
 	if byID.ScannedAt.IsZero() || byID.UpdatedAt.IsZero() {
@@ -177,6 +181,10 @@ func TestFolderRepositoryUpdatesAndDelete(t *testing.T) {
 		t.Fatalf("UpdatePath() error = %v", err)
 	}
 
+	if err := repo.UpdateCoverImagePath(ctx, folder.ID, "/covers/new-path.jpg"); err != nil {
+		t.Fatalf("UpdateCoverImagePath() error = %v", err)
+	}
+
 	got, err := repo.GetByID(ctx, folder.ID)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v", err)
@@ -192,6 +200,10 @@ func TestFolderRepositoryUpdatesAndDelete(t *testing.T) {
 
 	if got.Path != "/media/new-path" {
 		t.Fatalf("path = %q, want /media/new-path", got.Path)
+	}
+
+	if got.CoverImagePath != "/covers/new-path.jpg" {
+		t.Fatalf("cover_image_path = %q, want /covers/new-path.jpg", got.CoverImagePath)
 	}
 
 	if err := repo.Delete(ctx, folder.ID); err != nil {
@@ -218,6 +230,7 @@ func TestFolderRepositoryNotFoundMutations(t *testing.T) {
 		{name: "UpdateCategory missing", fn: func() error { return repo.UpdateCategory(ctx, "missing", "photo", "auto") }},
 		{name: "UpdateStatus missing", fn: func() error { return repo.UpdateStatus(ctx, "missing", "done") }},
 		{name: "UpdatePath missing", fn: func() error { return repo.UpdatePath(ctx, "missing", "/new") }},
+		{name: "UpdateCoverImagePath missing", fn: func() error { return repo.UpdateCoverImagePath(ctx, "missing", "/cover.jpg") }},
 		{name: "Delete missing", fn: func() error { return repo.Delete(ctx, "missing") }},
 	}
 

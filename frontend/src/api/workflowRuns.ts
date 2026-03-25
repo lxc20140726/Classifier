@@ -1,5 +1,5 @@
 import { request } from '@/api/client'
-import type { Job, NodeRun, PaginatedResponse, WorkflowRun, WorkflowRunDetail } from '@/types'
+import type { Job, NodeRun, PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
 
 export interface WorkflowRunQueryParams {
   page?: number
@@ -43,4 +43,11 @@ export function resumeWorkflowRun(id: string) {
 
 export function rollbackWorkflowRun(id: string) {
   return request<{ rolled_back: boolean }>(`/workflow-runs/${id}/rollback`, { method: 'POST' })
+}
+
+export function provideWorkflowRunInput(id: string, body: ProvideInputBody) {
+  return request<undefined>(`/workflow-runs/${id}/provide-input`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }

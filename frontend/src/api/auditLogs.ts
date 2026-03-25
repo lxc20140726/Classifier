@@ -6,6 +6,9 @@ interface AuditLogQueryParams {
   folderId?: string
   action?: string
   result?: string
+  folderPath?: string
+  from?: string
+  to?: string
   page?: number
   limit?: number
 }
@@ -60,6 +63,9 @@ export async function listAuditLogs(
   if (params.folderId) search.set('folder_id', params.folderId)
   if (params.action) search.set('action', params.action)
   if (params.result) search.set('result', params.result)
+  if (params.folderPath) search.set('folder_path', params.folderPath)
+  if (params.from) search.set('from', params.from)
+  if (params.to) search.set('to', params.to)
   if (params.page) search.set('page', String(params.page))
   if (params.limit) search.set('limit', String(params.limit))
 

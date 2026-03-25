@@ -65,6 +65,11 @@ func (r *SQLiteAuditRepository) List(ctx context.Context, filter AuditListFilter
 		args = append(args, filter.FolderID)
 	}
 
+	if filter.FolderPathKeyword != "" {
+		where = append(where, "folder_path LIKE ?")
+		args = append(args, "%"+filter.FolderPathKeyword+"%")
+	}
+
 	if !filter.From.IsZero() {
 		where = append(where, "created_at >= ?")
 		args = append(args, filter.From.UTC().Format("2006-01-02 15:04:05"))

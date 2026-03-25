@@ -2,9 +2,14 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 )
 
 type SQLiteConfigRepository struct {
@@ -66,4 +71,228 @@ func (r *SQLiteConfigRepository) GetAll(ctx context.Context) (map[string]string,
 	}
 
 	return result, nil
+}
+
+func (r *SQLiteConfigRepository) GetAppConfig(ctx context.Context) (*AppConfig, error) {
+	var version int
+	var rawValue string
+	err := r.db.QueryRowContext(
+		ctx,
+		"SELECT version, value FROM app_config WHERE id = 1",
+	).Scan(&version, &rawValue)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("configRepo.GetAppConfig query: %w", err)
+		}
+
+		legacyValues, legacyErr := r.GetAll(ctx)
+		if legacyErr != nil {
+			return nil, fmt.Errorf("configRepo.GetAppConfig load legacy config: %w", legacyErr)
+		}
+
+		cfg := mapLegacyConfig(legacyValues)
+		return &cfg, nil
+	}
+
+	var cfg AppConfig
+	if err := json.Unmarshal([]byte(rawValue), &cfg); err != nil {
+		return nil, fmt.Errorf("configRepo.GetAppConfig unmarshal: %w", err)
+	}
+
+	cfg = normalizeAppConfig(cfg)
+	if cfg.Version <= 0 {
+		cfg.Version = version
+	}
+
+	return &cfg, nil
+}
+
+func (r *SQLiteConfigRepository) SaveAppConfig(ctx context.Context, value *AppConfig) error {
+	if value == nil {
+		return fmt.Errorf("configRepo.SaveAppConfig: value is nil")
+	}
+
+	normalized := normalizeAppConfig(*value)
+	rawValue, err := json.Marshal(normalized)
+	if err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig marshal: %w", err)
+	}
+
+	checksum := checksumHex(rawValue)
+	_, err = r.db.ExecContext(
+		ctx,
+		`INSERT INTO app_config (id, version, value, checksum, updated_at)
+VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET
+	version = excluded.version,
+	value = excluded.value,
+	checksum = excluded.checksum,
+	updated_at = CURRENT_TIMESTAMP`,
+		normalized.Version,
+		string(rawValue),
+		checksum,
+	)
+	if err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig upsert: %w", err)
+	}
+
+	scanDirsJSON, err := json.Marshal(normalized.ScanInputDirs)
+	if err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig marshal scan_input_dirs: %w", err)
+	}
+
+	if err := r.Set(ctx, "scan_input_dirs", string(scanDirsJSON)); err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig set scan_input_dirs: %w", err)
+	}
+	if err := r.Set(ctx, "source_dir", normalized.SourceDir); err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig set source_dir: %w", err)
+	}
+	if err := r.Set(ctx, "target_dir", normalized.TargetDir); err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig set target_dir: %w", err)
+	}
+
+	return nil
+}
+
+func (r *SQLiteConfigRepository) EnsureAppConfig(ctx context.Context) error {
+	var exists int
+	err := r.db.QueryRowContext(ctx, "SELECT 1 FROM app_config WHERE id = 1").Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("configRepo.EnsureAppConfig query: %w", err)
+	}
+
+	legacyValues, err := r.GetAll(ctx)
+	if err != nil {
+		return fmt.Errorf("configRepo.EnsureAppConfig load legacy config: %w", err)
+	}
+
+	defaultConfig := mapLegacyConfig(legacyValues)
+	if err := r.SaveAppConfig(ctx, &defaultConfig); err != nil {
+		return fmt.Errorf("configRepo.EnsureAppConfig save mapped config: %w", err)
+	}
+
+	return nil
+}
+
+func mapLegacyConfig(values map[string]string) AppConfig {
+	cfg := defaultAppConfig()
+
+	if value, ok := values["source_dir"]; ok {
+		cfg.SourceDir = strings.TrimSpace(value)
+	}
+	if value, ok := values["target_dir"]; ok {
+		cfg.TargetDir = strings.TrimSpace(value)
+	}
+
+	rawScanInputDirs, hasScanInputDirs := values["scan_input_dirs"]
+	if hasScanInputDirs && strings.TrimSpace(rawScanInputDirs) != "" {
+		var dirs []string
+		if err := json.Unmarshal([]byte(rawScanInputDirs), &dirs); err == nil {
+			cfg.ScanInputDirs = cleanPathList(dirs)
+		}
+	}
+	if len(cfg.ScanInputDirs) == 0 && cfg.SourceDir != "" {
+		cfg.ScanInputDirs = []string{cfg.SourceDir}
+	}
+
+	cfg.OutputDirs = fillDefaultOutputDirs(cfg.OutputDirs, cfg.TargetDir)
+
+	return cfg
+}
+
+func defaultAppConfig() AppConfig {
+	return AppConfig{
+		Version:       1,
+		ScanInputDirs: []string{},
+		SourceDir:     "",
+		TargetDir:     "",
+		OutputDirs: AppConfigOutputDirs{
+			Video: "",
+			Manga: "",
+			Photo: "",
+			Other: "",
+			Mixed: "",
+		},
+	}
+}
+
+func normalizeAppConfig(value AppConfig) AppConfig {
+	normalized := defaultAppConfig()
+
+	if value.Version > 0 {
+		normalized.Version = value.Version
+	}
+
+	normalized.SourceDir = strings.TrimSpace(value.SourceDir)
+	normalized.TargetDir = strings.TrimSpace(value.TargetDir)
+	normalized.ScanInputDirs = cleanPathList(value.ScanInputDirs)
+	if len(normalized.ScanInputDirs) == 0 && normalized.SourceDir != "" {
+		normalized.ScanInputDirs = []string{normalized.SourceDir}
+	}
+
+	normalized.OutputDirs = AppConfigOutputDirs{
+		Video: strings.TrimSpace(value.OutputDirs.Video),
+		Manga: strings.TrimSpace(value.OutputDirs.Manga),
+		Photo: strings.TrimSpace(value.OutputDirs.Photo),
+		Other: strings.TrimSpace(value.OutputDirs.Other),
+		Mixed: strings.TrimSpace(value.OutputDirs.Mixed),
+	}
+	normalized.OutputDirs = fillDefaultOutputDirs(normalized.OutputDirs, normalized.TargetDir)
+
+	return normalized
+}
+
+func fillDefaultOutputDirs(dirs AppConfigOutputDirs, targetDir string) AppConfigOutputDirs {
+	baseDir := strings.TrimSpace(targetDir)
+	if baseDir == "" {
+		return dirs
+	}
+
+	if dirs.Video == "" {
+		dirs.Video = filepath.Join(baseDir, "video")
+	}
+	if dirs.Manga == "" {
+		dirs.Manga = filepath.Join(baseDir, "manga")
+	}
+	if dirs.Photo == "" {
+		dirs.Photo = filepath.Join(baseDir, "photo")
+	}
+	if dirs.Other == "" {
+		dirs.Other = filepath.Join(baseDir, "other")
+	}
+	if dirs.Mixed == "" {
+		dirs.Mixed = filepath.Join(baseDir, "mixed")
+	}
+
+	return dirs
+}
+
+func cleanPathList(raw []string) []string {
+	if len(raw) == 0 {
+		return []string{}
+	}
+
+	cleaned := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, item := range raw {
+		value := strings.TrimSpace(item)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		cleaned = append(cleaned, value)
+	}
+
+	return cleaned
+}
+
+func checksumHex(value []byte) string {
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:])
 }

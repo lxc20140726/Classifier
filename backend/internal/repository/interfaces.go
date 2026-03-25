@@ -13,6 +13,7 @@ type FolderRepository interface {
 	UpdateCategory(ctx context.Context, id, category, source string) error
 	UpdateStatus(ctx context.Context, id, status string) error
 	UpdatePath(ctx context.Context, id, newPath string) error
+	UpdateCoverImagePath(ctx context.Context, id, coverImagePath string) error
 	IsSuppressedPath(ctx context.Context, path string) (bool, error)
 	Suppress(ctx context.Context, id, currentPath, originalPath string) error
 	Unsuppress(ctx context.Context, id string) error
@@ -79,4 +80,7 @@ type ConfigRepository interface {
 	Set(ctx context.Context, key, value string) error
 	Get(ctx context.Context, key string) (string, error)
 	GetAll(ctx context.Context) (map[string]string, error)
+	GetAppConfig(ctx context.Context) (*AppConfig, error)
+	SaveAppConfig(ctx context.Context, value *AppConfig) error
+	EnsureAppConfig(ctx context.Context) error
 }

@@ -17,7 +17,7 @@ func TestOpenRunsMigrations(t *testing.T) {
 	}
 	defer database.Close()
 
-	tables := []string{"folders", "snapshots", "audit_logs", "config"}
+	tables := []string{"folders", "snapshots", "audit_logs", "config", "app_config"}
 	for _, table := range tables {
 		t.Run(table, func(t *testing.T) {
 			if !sqliteObjectExists(t, database, "table", table) {

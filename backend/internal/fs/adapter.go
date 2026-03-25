@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"io"
 	"os"
 	"time"
 )
@@ -15,6 +16,8 @@ type FSAdapter interface {
 	MkdirAll(ctx context.Context, path string, perm os.FileMode) error
 	Remove(ctx context.Context, path string) error
 	Exists(ctx context.Context, path string) (bool, error)
+	OpenFileRead(ctx context.Context, path string) (io.ReadCloser, error)
+	OpenFileWrite(ctx context.Context, path string, perm os.FileMode) (io.WriteCloser, error)
 }
 
 // DirEntry represents a directory entry.

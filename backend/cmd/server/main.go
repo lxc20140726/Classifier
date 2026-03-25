@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/liqiye/classifier/internal/config"
@@ -36,6 +38,9 @@ func main() {
 	jobRepo := repository.NewJobRepository(sqlDB)
 	snapshotRepo := repository.NewSnapshotRepository(sqlDB)
 	configRepo := repository.NewConfigRepository(sqlDB)
+	if err := configRepo.EnsureAppConfig(context.Background()); err != nil {
+		log.Fatalf("ensure app config: %v", err)
+	}
 	auditRepo := repository.NewAuditRepository(sqlDB)
 	workflowDefRepo := repository.NewWorkflowDefinitionRepository(sqlDB)
 	workflowRunRepo := repository.NewWorkflowRunRepository(sqlDB)
@@ -49,7 +54,19 @@ func main() {
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
 	moveSvc := service.NewMoveService(fsAdapter, jobRepo, folderRepo, snapshotSvc, auditSvc, broker)
-	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker)
+	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
+	workflowRunnerSvc.RegisterExecutor(service.NewFolderTreeScannerExecutor(fsAdapter))
+	workflowRunnerSvc.RegisterExecutor(service.NewNameKeywordClassifierExecutor())
+	workflowRunnerSvc.RegisterExecutor(service.NewFileTreeClassifierExecutor())
+	workflowRunnerSvc.RegisterExecutor(service.NewConfidenceCheckExecutor())
+	workflowRunnerSvc.RegisterExecutor(service.NewManualClassifierExecutor())
+	workflowRunnerSvc.RegisterExecutor(service.NewSubtreeAggregatorExecutor(folderRepo, auditSvc))
+	if err := service.SeedDefaultWorkflow(context.Background(), workflowDefRepo); err != nil {
+		log.Fatalf("seed default workflow: %v", err)
+	}
+	if err := service.SeedDefaultProcessingWorkflow(context.Background(), workflowDefRepo); err != nil {
+		log.Fatalf("seed default processing workflow: %v", err)
+	}
 
 	folderHandler := handler.NewFolderHandler(folderRepo, jobRepo, configRepo, scannerSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
 	moveHandler := handler.NewMoveHandler(moveSvc, jobRepo)
@@ -57,6 +74,7 @@ func main() {
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
 	configHandler := handler.NewConfigHandler(configRepo)
 	auditHandler := handler.NewAuditHandler(auditRepo)
+	nodeTypeHandler := handler.NewNodeTypeHandler(workflowRunnerSvc)
 	workflowDefHandler := handler.NewWorkflowDefHandler(workflowDefRepo)
 	workflowRunHandler := handler.NewWorkflowRunHandler(workflowRunnerSvc)
 
@@ -97,6 +115,7 @@ func main() {
 		{
 			workflowRuns.GET("/:id", workflowRunHandler.Get)
 			workflowRuns.POST("/:id/resume", workflowRunHandler.Resume)
+			workflowRuns.POST("/:id/provide-input", workflowRunHandler.ProvideInput)
 			workflowRuns.POST("/:id/rollback", workflowRunHandler.Rollback)
 		}
 
@@ -117,6 +136,7 @@ func main() {
 
 		api.GET("/config", configHandler.Get)
 		api.PUT("/config", configHandler.Put)
+		api.GET("/node-types", nodeTypeHandler.List)
 		api.GET("/audit-logs", auditHandler.List)
 		api.GET("/fs/dirs", handler.NewFSHandler(fsAdapter).ListDirs)
 	}
@@ -125,9 +145,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create sub FS: %v", err)
 	}
+	assetServer := http.FileServer(http.FS(distFS))
 
 	r.NoRoute(func(c *gin.Context) {
-		http.FileServer(http.FS(distFS)).ServeHTTP(c.Writer, c.Request)
+		assetPath := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if assetPath != "" {
+			if _, err := fs.Stat(distFS, assetPath); err == nil {
+				assetServer.ServeHTTP(c.Writer, c.Request)
+				return
+			}
+			if filepath.Ext(assetPath) != "" {
+				c.Status(http.StatusNotFound)
+				return
+			}
+		}
+
+		indexHTML, err := fs.ReadFile(distFS, "index.html")
+		if err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
 
 	log.Printf("Classifier starting on :%s", cfg.Port)
