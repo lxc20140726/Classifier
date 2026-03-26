@@ -65,6 +65,19 @@ func TestSeedDefaultWorkflow_CreatesExpectedGraphAndIsIdempotent(t *testing.T) {
 			t.Fatalf("node[%d].Type = %q, want %q; full=%v", i, gotTypes[i], want, gotTypes)
 		}
 	}
+	for _, node := range graph.Nodes {
+		for inputName, spec := range node.Inputs {
+			if spec.LinkSource == nil {
+				continue
+			}
+			if spec.LinkSource.SourcePort == "" {
+				t.Fatalf("default graph node %s input %s source_port is empty", node.ID, inputName)
+			}
+			if spec.LinkSource.OutputPortIndex != 0 {
+				t.Fatalf("default graph node %s input %s still uses output_port_index=%d", node.ID, inputName, spec.LinkSource.OutputPortIndex)
+			}
+		}
+	}
 
 	if err := SeedDefaultWorkflow(ctx, repo); err != nil {
 		t.Fatalf("second SeedDefaultWorkflow() error = %v", err)
@@ -141,6 +154,30 @@ func TestSeedDefaultProcessingWorkflow_CreatesExpectedGraphAndIsIdempotent(t *te
 
 	if len(graph.Edges) == 0 {
 		t.Fatalf("edges count = 0, want > 0")
+	}
+	for _, node := range graph.Nodes {
+		for inputName, spec := range node.Inputs {
+			if spec.LinkSource == nil {
+				continue
+			}
+			if spec.LinkSource.SourcePort == "" {
+				t.Fatalf("node %s input %s source_port is empty", node.ID, inputName)
+			}
+			if spec.LinkSource.OutputPortIndex != 0 {
+				t.Fatalf("node %s input %s still uses output_port_index=%d", node.ID, inputName, spec.LinkSource.OutputPortIndex)
+			}
+		}
+	}
+	for _, edge := range graph.Edges {
+		if edge.SourcePort == "" {
+			t.Fatalf("edge %s source_port is empty", edge.ID)
+		}
+		if edge.TargetPort == "" {
+			t.Fatalf("edge %s target_port is empty", edge.ID)
+		}
+		if edge.SourcePortIndex != 0 || edge.TargetPortIndex != 0 {
+			t.Fatalf("edge %s still uses numeric port indexes: source=%d target=%d", edge.ID, edge.SourcePortIndex, edge.TargetPortIndex)
+		}
 	}
 
 	if err := SeedDefaultProcessingWorkflow(ctx, repo); err != nil {

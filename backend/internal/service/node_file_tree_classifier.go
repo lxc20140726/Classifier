@@ -83,54 +83,64 @@ func (e *fileTreeClassifierNodeExecutor) Schema() NodeSchema {
 		Label:       "文件树分类器",
 		Description: "根据 FolderTree 文件结构进行规则分类",
 		InputPorts: []NodeSchemaPort{{
+			Name:        "trees",
+			Description: "FOLDER_TREE_LIST 输入目录树列表",
+			Required:    false,
+		}, {
 			Name:        "folder",
-			Description: "FOLDER_TREE 输入目录树",
-			Required:    true,
+			Description: "FOLDER_TREE legacy 输入目录树",
+			Required:    false,
 		}},
 		OutputPorts: []NodeSchemaPort{{
 			Name:        "signal",
-			Description: "CLASSIFICATION_SIGNAL 命中时输出分类信号",
+			Description: "CLASSIFICATION_SIGNAL_LIST 分类信号列表",
 		}, {
 			Name:        "folder",
-			Description: "FOLDER_TREE 未命中时透传目录树",
+			Description: "FOLDER_TREE_LIST legacy 未命中透传目录树列表",
 		}},
 	}
 }
 
 func (e *fileTreeClassifierNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	var folder *FolderTree
-
-	rawFolder, ok := input.Inputs["folder"]
-	if ok {
-		switch value := rawFolder.(type) {
-		case nil:
-			folder = nil
-		case FolderTree:
-			copied := value
-			folder = &copied
-		case *FolderTree:
-			folder = value
-		}
+	rawInputs := typedInputsToAny(input.Inputs)
+	rawTrees, ok := firstPresent(rawInputs, "trees", "folder")
+	if !ok {
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}, "folder": {Type: PortTypeFolderTreeList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
-
-	if folder == nil {
-		return NodeExecutionOutput{Outputs: []any{nil, nil}, Status: ExecutionSuccess}, nil
+	trees, found, err := parseFolderTreesInput(rawTrees)
+	if err != nil {
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute parse trees: %w", e.Type(), err)
+	}
+	if !found {
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}, "folder": {Type: PortTypeFolderTreeList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
 	rules := parseTreeRules(input.Node.Config)
-	for _, rule := range rules {
-		if !evaluateRule(*folder, rule) {
-			continue
+	signals := make([]ClassificationSignal, 0, len(trees))
+	unresolved := make([]FolderTree, 0, len(trees))
+
+	for _, tree := range trees {
+		signal := ClassificationSignal{SourcePath: tree.Path, IsEmpty: true}
+		for _, rule := range rules {
+			if !evaluateRule(tree, rule) {
+				continue
+			}
+			signal = ClassificationSignal{
+				SourcePath: tree.Path,
+				Category:   rule.Category,
+				Confidence: rule.Confidence,
+				Reason:     "file-tree:" + rule.Condition,
+			}
+			break
 		}
 
-		return NodeExecutionOutput{Outputs: []any{ClassificationSignal{
-			Category:   rule.Category,
-			Confidence: rule.Confidence,
-			Reason:     "file-tree:" + rule.Condition,
-		}, nil}, Status: ExecutionSuccess}, nil
+		signals = append(signals, signal)
+		if signal.IsEmpty {
+			unresolved = append(unresolved, tree)
+		}
 	}
 
-	return NodeExecutionOutput{Outputs: []any{nil, *folder}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: signals}, "folder": {Type: PortTypeFolderTreeList, Value: unresolved}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *fileTreeClassifierNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

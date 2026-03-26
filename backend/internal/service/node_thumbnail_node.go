@@ -132,10 +132,10 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 	}
 
 	if isList {
-		return NodeExecutionOutput{Outputs: []any{items, thumbnailPaths}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "thumbnail_paths": {Type: PortTypeStringList, Value: thumbnailPaths}}, Status: ExecutionSuccess}, nil
 	}
 
-	return NodeExecutionOutput{Outputs: []any{items[0], thumbnailPaths}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: items[0]}, "thumbnail_paths": {Type: PortTypeStringList, Value: thumbnailPaths}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *thumbnailNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -176,11 +176,22 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 	folderIDSet := map[string]struct{}{}
 
 	if input.NodeRun != nil && strings.TrimSpace(input.NodeRun.OutputJSON) != "" {
-		outputs, err := parseNodeOutputs(input.NodeRun.OutputJSON)
+		typedOutputs, typed, err := parseTypedNodeOutputs(input.NodeRun.OutputJSON)
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse node output json for node run %q: %w", input.NodeRun.ID, err)
 		}
-		paths, folderIDs := thumbnailNodeExtractRollbackData(outputs)
+		var paths []string
+		var folderIDs []string
+		if typed {
+			paths = compactStringSlice(anyToStringSlice(typedOutputs["thumbnail_paths"].Value))
+			folderIDs = thumbnailNodeExtractFolderIDs(typedOutputs["items"].Value)
+		} else {
+			outputs, legacyErr := parseNodeOutputs(input.NodeRun.OutputJSON)
+			if legacyErr != nil {
+				return nil, nil, fmt.Errorf("parse node output json for node run %q: %w", input.NodeRun.ID, legacyErr)
+			}
+			paths, folderIDs = thumbnailNodeExtractRollbackData(outputs)
+		}
 		for _, path := range paths {
 			pathSet[path] = struct{}{}
 		}
@@ -193,11 +204,22 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 		if snapshot == nil || snapshot.Kind != "post" || strings.TrimSpace(snapshot.OutputJSON) == "" {
 			continue
 		}
-		outputs, err := parseNodeOutputs(snapshot.OutputJSON)
+		typedOutputs, typed, err := parseTypedNodeOutputs(snapshot.OutputJSON)
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse node snapshot output json for snapshot %q: %w", snapshot.ID, err)
 		}
-		paths, folderIDs := thumbnailNodeExtractRollbackData(outputs)
+		var paths []string
+		var folderIDs []string
+		if typed {
+			paths = compactStringSlice(anyToStringSlice(typedOutputs["thumbnail_paths"].Value))
+			folderIDs = thumbnailNodeExtractFolderIDs(typedOutputs["items"].Value)
+		} else {
+			outputs, legacyErr := parseNodeOutputs(snapshot.OutputJSON)
+			if legacyErr != nil {
+				return nil, nil, fmt.Errorf("parse node snapshot output json for snapshot %q: %w", snapshot.ID, legacyErr)
+			}
+			paths, folderIDs = thumbnailNodeExtractRollbackData(outputs)
+		}
 		for _, path := range paths {
 			pathSet[path] = struct{}{}
 		}

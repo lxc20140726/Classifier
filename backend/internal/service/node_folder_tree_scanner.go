@@ -35,7 +35,7 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        folderTreeScannerExecutorType,
 		Label:       "目录树扫描器",
-		Description: "递归扫描源目录，为每个顶层子目录输出 FolderTree",
+		Description: "递归扫描源目录，输出顶层子目录 FolderTree 列表",
 		InputPorts: []NodeSchemaPort{{
 			Name:        "source_dir",
 			Description: "PATH 扫描根目录",
@@ -43,7 +43,7 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 		}},
 		OutputPorts: []NodeSchemaPort{{
 			Name:        "tree",
-			Description: "FOLDER_TREE 每个顶层子目录各输出一个 FolderTree",
+			Description: "FOLDER_TREE_LIST 顶层子目录 FolderTree 列表",
 		}},
 	}
 }
@@ -51,7 +51,8 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
 	sourceDir := stringConfig(input.Node.Config, "source_dir")
 	if sourceDir == "" {
-		sourceDir = strings.TrimSpace(anyString(input.Inputs["source_dir"]))
+		rawInputs := typedInputsToAny(input.Inputs)
+		sourceDir = strings.TrimSpace(anyString(rawInputs["source_dir"]))
 	}
 	if sourceDir == "" {
 		return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute: source_dir is required")
@@ -78,7 +79,7 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 		return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute read source dir %q: %w", sourceDir, err)
 	}
 
-	outputs := make([]any, 0, len(entries))
+	trees := make([]FolderTree, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir {
 			continue
@@ -96,10 +97,10 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 			continue
 		}
 
-		outputs = append(outputs, tree)
+		trees = append(trees, tree)
 	}
 
-	return NodeExecutionOutput{Outputs: outputs, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"tree": {Type: PortTypeFolderTreeList, Value: trees}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *folderTreeScannerExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

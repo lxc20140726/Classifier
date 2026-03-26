@@ -44,8 +44,9 @@ func (e *auditLogNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: audit service is not configured", e.Type())
 	}
 
+	rawInputs := typedInputsToAny(input.Inputs)
 	items, _, _ := categoryRouterExtractItems(input.Inputs)
-	resultPayload := auditLogNodeResolveResultInput(input.Inputs)
+	resultPayload := auditLogNodeResolveResultInput(rawInputs)
 
 	detailJSON, err := json.Marshal(map[string]any{
 		"node_id":      input.Node.ID,
@@ -71,7 +72,7 @@ func (e *auditLogNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: write audit log: %w", e.Type(), err)
 	}
 
-	return NodeExecutionOutput{Outputs: []any{auditLogNodeResolveItemInput(input.Inputs), resultPayload}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"item": {Type: PortTypeJSON, Value: auditLogNodeResolveItemInput(rawInputs)}, "result": {Type: PortTypeJSON, Value: resultPayload}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *auditLogNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

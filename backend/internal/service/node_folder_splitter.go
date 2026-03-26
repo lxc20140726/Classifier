@@ -40,7 +40,8 @@ func (e *folderSplitterNodeExecutor) Schema() NodeSchema {
 }
 
 func (e *folderSplitterNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	entry, ok := classificationReaderResolveInputEntry(input.Inputs)
+	rawInputs := typedInputsToAny(input.Inputs)
+	entry, ok := classificationReaderResolveInputEntry(rawInputs)
 	if !ok {
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: entry is required", e.Type())
 	}
@@ -56,7 +57,7 @@ func (e *folderSplitterNodeExecutor) Execute(_ context.Context, input NodeExecut
 		}
 	}
 
-	return NodeExecutionOutput{Outputs: []any{items}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *folderSplitterNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -111,8 +112,8 @@ func folderSplitterBuildFirstLevelItems(entry ClassifiedEntry) []ProcessingItem 
 	}
 
 	out := make([]ProcessingItem, 0, len(entry.Subtree))
-	for key, child := range entry.Subtree {
-		if !folderSplitterIsFirstLevelChild(entry, key, child) {
+	for _, child := range entry.Subtree {
+		if !folderSplitterIsFirstLevelChild(entry, child) {
 			continue
 		}
 
@@ -146,7 +147,7 @@ func folderSplitterBuildFirstLevelItems(entry ClassifiedEntry) []ProcessingItem 
 	return out
 }
 
-func folderSplitterIsFirstLevelChild(entry ClassifiedEntry, key string, child ClassifiedEntry) bool {
+func folderSplitterIsFirstLevelChild(entry ClassifiedEntry, child ClassifiedEntry) bool {
 	if entry.Path != "" && child.Path != "" {
 		rel, err := filepath.Rel(entry.Path, child.Path)
 		if err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
@@ -154,12 +155,5 @@ func folderSplitterIsFirstLevelChild(entry ClassifiedEntry, key string, child Cl
 		}
 	}
 
-	normalizedKey := strings.ReplaceAll(strings.TrimSpace(key), "\\", "/")
-	normalizedKey = strings.TrimPrefix(normalizedKey, "./")
-	normalizedKey = strings.TrimPrefix(normalizedKey, "/")
-	if normalizedKey == "" {
-		return false
-	}
-
-	return !strings.Contains(normalizedKey, "/")
+	return false
 }

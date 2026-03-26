@@ -11,11 +11,16 @@ import (
 )
 
 type WorkflowDefHandler struct {
-	repo repository.WorkflowDefinitionRepository
+	repo      repository.WorkflowDefinitionRepository
+	validator GraphValidator
 }
 
-func NewWorkflowDefHandler(repo repository.WorkflowDefinitionRepository) *WorkflowDefHandler {
-	return &WorkflowDefHandler{repo: repo}
+type GraphValidator interface {
+	ValidateWorkflowGraph(graphJSON string) error
+}
+
+func NewWorkflowDefHandler(repo repository.WorkflowDefinitionRepository, validator GraphValidator) *WorkflowDefHandler {
+	return &WorkflowDefHandler{repo: repo, validator: validator}
 }
 
 func (h *WorkflowDefHandler) List(c *gin.Context) {
@@ -63,6 +68,12 @@ func (h *WorkflowDefHandler) Create(c *gin.Context) {
 	if req.Name == "" || req.GraphJSON == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name and graph_json are required"})
 		return
+	}
+	if h.validator != nil {
+		if err := h.validator.ValidateWorkflowGraph(req.GraphJSON); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	isActive := true
@@ -137,6 +148,12 @@ func (h *WorkflowDefHandler) Update(c *gin.Context) {
 		item.Name = req.Name
 	}
 	if req.GraphJSON != "" {
+		if h.validator != nil {
+			if err := h.validator.ValidateWorkflowGraph(req.GraphJSON); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
 		item.GraphJSON = req.GraphJSON
 	}
 	if req.IsActive != nil {

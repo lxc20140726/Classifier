@@ -44,54 +44,65 @@ func (e *nameKeywordClassifierNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
 		Label:       "Name Keyword Classifier",
-		Description: "Classify folder by configured name keywords",
+		Description: "Classify folder trees by configured name keywords",
 		InputPorts: []NodeSchemaPort{
-			{Name: "folder", Description: "FOLDER_TREE_NODE", Required: false},
+			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
+			{Name: "folder", Description: "FOLDER_TREE_NODE legacy input", Required: false},
 			{Name: "reserved", Description: "reserved", Required: false},
 		},
 		OutputPorts: []NodeSchemaPort{
-			{Name: "signal", Description: "CLASSIFICATION_SIGNAL", Required: false},
-			{Name: "pass", Description: "FOLDER_TREE_NODE", Required: false},
+			{Name: "signal", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
+			{Name: "pass", Description: "FOLDER_TREE_LIST legacy unresolved output", Required: false},
 		},
 	}
 }
 
 func (e *nameKeywordClassifierNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	var folderName string
-	var folderValue any
+	rawInputs := typedInputsToAny(input.Inputs)
+	rawTrees, ok := firstPresent(rawInputs, "trees", "folder")
+	if !ok {
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}, "pass": {Type: PortTypeFolderTreeList, Value: nil}}, Status: ExecutionSuccess}, nil
+	}
 
-	switch v := input.Inputs["folder"].(type) {
-	case FolderTree:
-		folderName = v.Name
-		folderValue = v
-	case *FolderTree:
-		if v == nil {
-			return NodeExecutionOutput{Outputs: []any{nil, nil}, Status: ExecutionSuccess}, nil
-		}
-		folderName = v.Name
-		folderValue = v
-	default:
-		return NodeExecutionOutput{Outputs: []any{nil, nil}, Status: ExecutionSuccess}, nil
+	trees, found, err := parseFolderTreesInput(rawTrees)
+	if err != nil {
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute parse trees: %w", e.Type(), err)
+	}
+	if !found {
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}, "pass": {Type: PortTypeFolderTreeList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
 	rules := parseNameKeywordRules(input.Node.Config)
 	rules = sortRulesByPriorityDesc(rules)
 
-	folderNameLower := strings.ToLower(folderName)
-	for _, rule := range rules {
-		if rule.MatchType != "folder_name_contains" {
-			continue
+	signals := make([]ClassificationSignal, 0, len(trees))
+	unresolved := make([]FolderTree, 0, len(trees))
+
+	for _, tree := range trees {
+		signal := ClassificationSignal{SourcePath: tree.Path, IsEmpty: true}
+		folderNameLower := strings.ToLower(tree.Name)
+		for _, rule := range rules {
+			if rule.MatchType != "folder_name_contains" {
+				continue
+			}
+			if strings.Contains(folderNameLower, strings.ToLower(rule.Keyword)) {
+				signal = ClassificationSignal{
+					SourcePath: tree.Path,
+					Category:   rule.Category,
+					Confidence: rule.Confidence,
+					Reason:     fmt.Sprintf("keyword:%s", rule.Keyword),
+				}
+				break
+			}
 		}
-		if strings.Contains(folderNameLower, strings.ToLower(rule.Keyword)) {
-			return NodeExecutionOutput{Outputs: []any{ClassificationSignal{
-				Category:   rule.Category,
-				Confidence: rule.Confidence,
-				Reason:     fmt.Sprintf("keyword:%s", rule.Keyword),
-			}, nil}, Status: ExecutionSuccess}, nil
+
+		signals = append(signals, signal)
+		if signal.IsEmpty {
+			unresolved = append(unresolved, tree)
 		}
 	}
 
-	return NodeExecutionOutput{Outputs: []any{nil, folderValue}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: signals}, "pass": {Type: PortTypeFolderTreeList, Value: unresolved}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *nameKeywordClassifierNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

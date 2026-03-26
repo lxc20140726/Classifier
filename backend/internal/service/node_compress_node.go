@@ -128,10 +128,10 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	}
 
 	if isList {
-		return NodeExecutionOutput{Outputs: []any{items, archives}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "archives": {Type: PortTypeStringList, Value: archives}}, Status: ExecutionSuccess}, nil
 	}
 
-	return NodeExecutionOutput{Outputs: []any{items[0], archives}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: items[0]}, "archives": {Type: PortTypeStringList, Value: archives}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *compressNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -189,11 +189,21 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 	pathSet := map[string]struct{}{}
 
 	if input.NodeRun != nil && strings.TrimSpace(input.NodeRun.OutputJSON) != "" {
-		outputs, err := parseNodeOutputs(input.NodeRun.OutputJSON)
+		typedOutputs, typed, err := parseTypedNodeOutputs(input.NodeRun.OutputJSON)
 		if err != nil {
 			return nil, fmt.Errorf("parse node output json for node run %q: %w", input.NodeRun.ID, err)
 		}
-		for _, path := range compressNodeExtractArchivePaths(outputs) {
+		var paths []string
+		if typed {
+			paths = compactStringSlice(anyToStringSlice(typedOutputs["archives"].Value))
+		} else {
+			outputs, legacyErr := parseNodeOutputs(input.NodeRun.OutputJSON)
+			if legacyErr != nil {
+				return nil, fmt.Errorf("parse node output json for node run %q: %w", input.NodeRun.ID, legacyErr)
+			}
+			paths = compressNodeExtractArchivePaths(outputs)
+		}
+		for _, path := range paths {
 			pathSet[path] = struct{}{}
 		}
 	}
@@ -202,11 +212,21 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 		if snapshot == nil || snapshot.Kind != "post" || strings.TrimSpace(snapshot.OutputJSON) == "" {
 			continue
 		}
-		outputs, err := parseNodeOutputs(snapshot.OutputJSON)
+		typedOutputs, typed, err := parseTypedNodeOutputs(snapshot.OutputJSON)
 		if err != nil {
 			return nil, fmt.Errorf("parse node snapshot output json for snapshot %q: %w", snapshot.ID, err)
 		}
-		for _, path := range compressNodeExtractArchivePaths(outputs) {
+		var paths []string
+		if typed {
+			paths = compactStringSlice(anyToStringSlice(typedOutputs["archives"].Value))
+		} else {
+			outputs, legacyErr := parseNodeOutputs(snapshot.OutputJSON)
+			if legacyErr != nil {
+				return nil, fmt.Errorf("parse node snapshot output json for snapshot %q: %w", snapshot.ID, legacyErr)
+			}
+			paths = compressNodeExtractArchivePaths(outputs)
+		}
+		for _, path := range paths {
 			pathSet[path] = struct{}{}
 		}
 	}

@@ -92,7 +92,7 @@ func main() {
 	configHandler := handler.NewConfigHandler(configRepo, nil)
 	auditHandler := handler.NewAuditHandler(auditRepo)
 	nodeTypeHandler := handler.NewNodeTypeHandler(workflowRunnerSvc)
-	workflowDefHandler := handler.NewWorkflowDefHandler(workflowDefRepo)
+	workflowDefHandler := handler.NewWorkflowDefHandler(workflowDefRepo, workflowRunnerSvc)
 	workflowRunHandler := handler.NewWorkflowRunHandler(workflowRunnerSvc)
 	scheduledWorkflowHandler := handler.NewScheduledWorkflowHandler(scheduledWorkflowRepo, scheduledWorkflowSvc, scheduledWorkflowScheduler)
 

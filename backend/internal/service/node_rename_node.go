@@ -83,14 +83,14 @@ func (e *renameNodeExecutor) Execute(_ context.Context, input NodeExecutionInput
 	}
 
 	if isList {
-		return NodeExecutionOutput{Outputs: []any{result}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: result}}, Status: ExecutionSuccess}, nil
 	}
 
 	if len(result) == 0 {
-		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
-	return NodeExecutionOutput{Outputs: []any{result[0]}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: result[0]}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *renameNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

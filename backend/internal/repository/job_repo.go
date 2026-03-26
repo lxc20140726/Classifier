@@ -20,11 +20,12 @@ func (r *SQLiteJobRepository) Create(ctx context.Context, job *Job) error {
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO jobs (
-			id, type, workflow_def_id, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+			id, type, workflow_def_id, source_dir, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		job.ID,
 		job.Type,
 		nullableString(job.WorkflowDefID),
+		job.SourceDir,
 		job.Status,
 		job.FolderIDs,
 		job.Total,
@@ -43,7 +44,7 @@ func (r *SQLiteJobRepository) Create(ctx context.Context, job *Job) error {
 
 func (r *SQLiteJobRepository) GetByID(ctx context.Context, id string) (*Job, error) {
 	job, err := scanJob(r.db.QueryRowContext(ctx, `
-SELECT id, type, workflow_def_id, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
+SELECT id, type, workflow_def_id, source_dir, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
 FROM jobs
 WHERE id = ?`, id))
 	if err != nil {
@@ -84,7 +85,7 @@ func (r *SQLiteJobRepository) List(ctx context.Context, filter JobListFilter) ([
 	listArgs := append(append([]any{}, args...), limit, offset)
 
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, type, workflow_def_id, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
+SELECT id, type, workflow_def_id, source_dir, status, folder_ids, total, done, failed, error, started_at, finished_at, created_at, updated_at
 FROM jobs`+whereClause+`
 ORDER BY created_at DESC
 LIMIT ? OFFSET ?`, listArgs...)
@@ -175,6 +176,7 @@ WHERE id = ?`, successDelta, failedDelta, id)
 func scanJob(scanner interface{ Scan(dest ...any) error }) (*Job, error) {
 	job := &Job{}
 	var workflowDefID sql.NullString
+	var sourceDir sql.NullString
 	var errMsg sql.NullString
 	var startedAt any
 	var finishedAt any
@@ -185,6 +187,7 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (*Job, error) {
 		&job.ID,
 		&job.Type,
 		&workflowDefID,
+		&sourceDir,
 		&job.Status,
 		&job.FolderIDs,
 		&job.Total,
@@ -208,6 +211,9 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (*Job, error) {
 	}
 	if workflowDefID.Valid {
 		job.WorkflowDefID = workflowDefID.String
+	}
+	if sourceDir.Valid {
+		job.SourceDir = sourceDir.String
 	}
 
 	if job.StartedAt, err = parseNullableTime(startedAt); err != nil {

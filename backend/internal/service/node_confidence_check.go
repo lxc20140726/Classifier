@@ -29,20 +29,28 @@ func (e *confidenceCheckNodeExecutor) Schema() NodeSchema {
 		Label:       "Confidence Check",
 		Description: "Route classification signal by confidence threshold",
 		InputPorts: []NodeSchemaPort{
-			{Name: "signal", Description: "CLASSIFICATION_SIGNAL", Required: true},
+			{Name: "signals", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
+			{Name: "signal", Description: "CLASSIFICATION_SIGNAL legacy input", Required: false},
 		},
 		OutputPorts: []NodeSchemaPort{
-			{Name: "high", Description: "CLASSIFICATION_SIGNAL", Required: false},
-			{Name: "low", Description: "CLASSIFICATION_SIGNAL", Required: false},
+			{Name: "high", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
+			{Name: "low", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
 		},
 	}
 }
 
 func (e *confidenceCheckNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	rawSignal := input.Inputs["signal"]
-	signal, ok := rawSignal.(ClassificationSignal)
+	rawInputs := typedInputsToAny(input.Inputs)
+	rawSignals, ok := firstPresent(rawInputs, "signals", "signal")
 	if !ok {
-		return NodeExecutionOutput{Outputs: []any{nil, nil}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"high": {Type: PortTypeClassificationSignalList, Value: nil}, "low": {Type: PortTypeClassificationSignalList, Value: nil}}, Status: ExecutionSuccess}, nil
+	}
+	signals, found, err := parseSignalListInput(rawSignals)
+	if err != nil {
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute parse signals: %w", e.Type(), err)
+	}
+	if !found {
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"high": {Type: PortTypeClassificationSignalList, Value: nil}, "low": {Type: PortTypeClassificationSignalList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
 	threshold := 0.75
@@ -50,11 +58,25 @@ func (e *confidenceCheckNodeExecutor) Execute(_ context.Context, input NodeExecu
 		threshold = v
 	}
 
-	if signal.Confidence >= threshold {
-		return NodeExecutionOutput{Outputs: []any{signal, nil}, Status: ExecutionSuccess}, nil
+	high := make([]ClassificationSignal, 0, len(signals))
+	low := make([]ClassificationSignal, 0, len(signals))
+	for _, signal := range signals {
+		empty := ClassificationSignal{SourcePath: signal.SourcePath, IsEmpty: true}
+		if signal.IsEmpty {
+			high = append(high, empty)
+			low = append(low, empty)
+			continue
+		}
+		if signal.Confidence >= threshold {
+			high = append(high, signal)
+			low = append(low, empty)
+			continue
+		}
+		high = append(high, empty)
+		low = append(low, signal)
 	}
 
-	return NodeExecutionOutput{Outputs: []any{nil, signal}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"high": {Type: PortTypeClassificationSignalList, Value: high}, "low": {Type: PortTypeClassificationSignalList, Value: low}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *confidenceCheckNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

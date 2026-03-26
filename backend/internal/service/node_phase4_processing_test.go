@@ -21,26 +21,26 @@ func TestFolderSplitterExecutorMixedSplitFirstLevel(t *testing.T) {
 		Node: repository.WorkflowGraphNode{
 			Config: map[string]any{"split_mixed": true, "split_depth": 1},
 		},
-		Inputs: map[string]any{
+		Inputs: testInputs(map[string]any{
 			"entry": ClassifiedEntry{
 				FolderID: "folder-root",
 				Path:     "/root/mixed",
 				Name:     "mixed",
 				Category: "mixed",
-				Subtree: map[string]ClassifiedEntry{
-					"child-a": {
+				Subtree: []ClassifiedEntry{
+					{
 						FolderID: "folder-a",
 						Path:     "/root/mixed/child-a",
 						Name:     "child-a",
 						Category: "video",
 					},
-					"child-b": {
+					{
 						FolderID: "folder-b",
 						Path:     "/root/mixed/child-b",
 						Name:     "child-b",
 						Category: "photo",
 					},
-					"child-a/nested": {
+					{
 						FolderID: "folder-a-nested",
 						Path:     "/root/mixed/child-a/nested",
 						Name:     "nested",
@@ -48,7 +48,7 @@ func TestFolderSplitterExecutorMixedSplitFirstLevel(t *testing.T) {
 					},
 				},
 			},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -60,9 +60,9 @@ func TestFolderSplitterExecutorMixedSplitFirstLevel(t *testing.T) {
 		t.Fatalf("len(outputs) = %d, want 1", len(out.Outputs))
 	}
 
-	items, ok := out.Outputs[0].([]ProcessingItem)
+	items, ok := out.Outputs["items"].Value.([]ProcessingItem)
 	if !ok {
-		t.Fatalf("output type = %T, want []ProcessingItem", out.Outputs[0])
+		t.Fatalf("output type = %T, want []ProcessingItem", out.Outputs["items"].Value)
 	}
 	if len(items) != 2 {
 		t.Fatalf("len(items) = %d, want 2", len(items))
@@ -80,7 +80,7 @@ func TestCategoryRouterExecutorPortPlacement(t *testing.T) {
 
 	executor := newCategoryRouterExecutor()
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
-		Inputs: map[string]any{
+		Inputs: testInputs(map[string]any{
 			"items": []ProcessingItem{
 				{FolderName: "v", Category: "video"},
 				{FolderName: "m", Category: "manga"},
@@ -88,7 +88,7 @@ func TestCategoryRouterExecutorPortPlacement(t *testing.T) {
 				{FolderName: "o", Category: "other"},
 				{FolderName: "x", Category: "mixed"},
 			},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -100,27 +100,71 @@ func TestCategoryRouterExecutorPortPlacement(t *testing.T) {
 		t.Fatalf("len(outputs) = %d, want 5", len(out.Outputs))
 	}
 
-	for i := 0; i < 5; i++ {
-		list, ok := out.Outputs[i].([]ProcessingItem)
+	for _, key := range []string{"video", "manga", "photo", "other", "mixed_leaf"} {
+		list, ok := out.Outputs[key].Value.([]ProcessingItem)
 		if !ok || len(list) != 1 {
-			t.Fatalf("port %d type/count = %T/%d, want []ProcessingItem/1", i, out.Outputs[i], len(list))
+			t.Fatalf("port %s type/count = %T/%d, want []ProcessingItem/1", key, out.Outputs[key].Value, len(list))
 		}
 	}
 
-	if out.Outputs[0].([]ProcessingItem)[0].Category != "video" {
-		t.Fatalf("video port category = %q, want video", out.Outputs[0].([]ProcessingItem)[0].Category)
+	if out.Outputs["video"].Value.([]ProcessingItem)[0].Category != "video" {
+		t.Fatalf("video port category = %q, want video", out.Outputs["video"].Value.([]ProcessingItem)[0].Category)
 	}
-	if out.Outputs[1].([]ProcessingItem)[0].Category != "manga" {
-		t.Fatalf("manga port category = %q, want manga", out.Outputs[1].([]ProcessingItem)[0].Category)
+	if out.Outputs["manga"].Value.([]ProcessingItem)[0].Category != "manga" {
+		t.Fatalf("manga port category = %q, want manga", out.Outputs["manga"].Value.([]ProcessingItem)[0].Category)
 	}
-	if out.Outputs[2].([]ProcessingItem)[0].Category != "photo" {
-		t.Fatalf("photo port category = %q, want photo", out.Outputs[2].([]ProcessingItem)[0].Category)
+	if out.Outputs["photo"].Value.([]ProcessingItem)[0].Category != "photo" {
+		t.Fatalf("photo port category = %q, want photo", out.Outputs["photo"].Value.([]ProcessingItem)[0].Category)
 	}
-	if out.Outputs[3].([]ProcessingItem)[0].Category != "other" {
-		t.Fatalf("other port category = %q, want other", out.Outputs[3].([]ProcessingItem)[0].Category)
+	if out.Outputs["other"].Value.([]ProcessingItem)[0].Category != "other" {
+		t.Fatalf("other port category = %q, want other", out.Outputs["other"].Value.([]ProcessingItem)[0].Category)
 	}
-	if out.Outputs[4].([]ProcessingItem)[0].Category != "mixed" {
-		t.Fatalf("mixed_leaf port category = %q, want mixed", out.Outputs[4].([]ProcessingItem)[0].Category)
+	if out.Outputs["mixed_leaf"].Value.([]ProcessingItem)[0].Category != "mixed" {
+		t.Fatalf("mixed_leaf port category = %q, want mixed", out.Outputs["mixed_leaf"].Value.([]ProcessingItem)[0].Category)
+	}
+}
+
+func TestCategoryRouterExecutorEmptyBranchesReturnEmptyLists(t *testing.T) {
+	t.Parallel()
+
+	executor := newCategoryRouterExecutor()
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{
+			"items": []ProcessingItem{{FolderName: "v", Category: "video"}},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	for _, key := range []string{"video", "manga", "photo", "other", "mixed_leaf"} {
+		list, ok := out.Outputs[key].Value.([]ProcessingItem)
+		if !ok {
+			t.Fatalf("port %s type = %T, want []ProcessingItem", key, out.Outputs[key].Value)
+		}
+		if key == "video" {
+			if len(list) != 1 {
+				t.Fatalf("video len = %d, want 1", len(list))
+			}
+			continue
+		}
+		if len(list) != 0 {
+			t.Fatalf("port %s len = %d, want 0", key, len(list))
+		}
+	}
+
+	out, err = executor.Execute(context.Background(), NodeExecutionInput{})
+	if err != nil {
+		t.Fatalf("Execute() without input error = %v", err)
+	}
+	for _, key := range []string{"video", "manga", "photo", "other", "mixed_leaf"} {
+		list, ok := out.Outputs[key].Value.([]ProcessingItem)
+		if !ok {
+			t.Fatalf("empty-input port %s type = %T, want []ProcessingItem", key, out.Outputs[key].Value)
+		}
+		if len(list) != 0 {
+			t.Fatalf("empty-input port %s len = %d, want 0", key, len(list))
+		}
 	}
 }
 
@@ -137,15 +181,15 @@ func TestRenameNodeExecutorTemplateRegexAndConditionalDefault(t *testing.T) {
 				"strategy": "template",
 				"template": "{title} ({year})",
 			}},
-			Inputs: map[string]any{"item": ProcessingItem{FolderName: "Blade Runner 2049", TargetName: "Blade Runner 2049"}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{FolderName: "Blade Runner 2049", TargetName: "Blade Runner 2049"}}),
 		})
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		item, ok := out.Outputs[0].(ProcessingItem)
+		item, ok := out.Outputs["items"].Value.(ProcessingItem)
 		if !ok {
-			t.Fatalf("output type = %T, want ProcessingItem", out.Outputs[0])
+			t.Fatalf("output type = %T, want ProcessingItem", out.Outputs["items"].Value)
 		}
 		if item.TargetName != "Blade Runner (2049)" {
 			t.Fatalf("TargetName = %q, want %q", item.TargetName, "Blade Runner (2049)")
@@ -161,13 +205,13 @@ func TestRenameNodeExecutorTemplateRegexAndConditionalDefault(t *testing.T) {
 				"regex":    `^(?P<title>.+?)\[(?P<year>\d{4})\]$`,
 				"template": "{title} ({year})",
 			}},
-			Inputs: map[string]any{"item": ProcessingItem{FolderName: "Dune[2021]", TargetName: "Dune[2021]"}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{FolderName: "Dune[2021]", TargetName: "Dune[2021]"}}),
 		})
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		item := out.Outputs[0].(ProcessingItem)
+		item := out.Outputs["items"].Value.(ProcessingItem)
 		if item.TargetName != "Dune (2021)" {
 			t.Fatalf("TargetName = %q, want %q", item.TargetName, "Dune (2021)")
 		}
@@ -185,13 +229,13 @@ func TestRenameNodeExecutorTemplateRegexAndConditionalDefault(t *testing.T) {
 					map[string]any{"condition": "DEFAULT", "template": "DEFAULT-{name}"},
 				},
 			}},
-			Inputs: map[string]any{"item": ProcessingItem{FolderName: "Sample", TargetName: "Sample", Category: "photo"}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{FolderName: "Sample", TargetName: "Sample", Category: "photo"}}),
 		})
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		item := out.Outputs[0].(ProcessingItem)
+		item := out.Outputs["items"].Value.(ProcessingItem)
 		if item.TargetName != "DEFAULT-Sample" {
 			t.Fatalf("TargetName = %q, want %q", item.TargetName, "DEFAULT-Sample")
 		}
@@ -220,15 +264,15 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 				"move_unit":             "folder",
 				"preserve_substructure": true,
 			}},
-			Inputs: map[string]any{"item": ProcessingItem{SourcePath: sourcePath, FolderName: "album", TargetName: "album"}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{SourcePath: sourcePath, FolderName: "album", TargetName: "album"}}),
 		})
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		results, ok := out.Outputs[1].([]MoveResult)
+		results, ok := out.Outputs["results"].Value.([]MoveResult)
 		if !ok || len(results) != 1 {
-			t.Fatalf("results output = %T/%d, want []MoveResult/1", out.Outputs[1], len(results))
+			t.Fatalf("results output = %T/%d, want []MoveResult/1", out.Outputs["results"].Value, len(results))
 		}
 		if results[0].Status != "skipped" {
 			t.Fatalf("result status = %q, want skipped", results[0].Status)
@@ -257,15 +301,15 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 				"target_dir":      targetDir,
 				"conflict_policy": "auto_rename",
 			}},
-			Inputs: map[string]any{"item": ProcessingItem{SourcePath: sourcePath, FolderName: "album"}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{SourcePath: sourcePath, FolderName: "album"}}),
 		})
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		results, ok := out.Outputs[1].([]MoveResult)
+		results, ok := out.Outputs["results"].Value.([]MoveResult)
 		if !ok || len(results) != 1 {
-			t.Fatalf("results output = %T/%d, want []MoveResult/1", out.Outputs[1], len(results))
+			t.Fatalf("results output = %T/%d, want []MoveResult/1", out.Outputs["results"].Value, len(results))
 		}
 		if results[0].TargetPath != dstRenamed {
 			t.Fatalf("target path = %q, want %q", results[0].TargetPath, dstRenamed)
@@ -283,6 +327,60 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 	})
 }
 
+func TestPhase4MoveNodeExecutorRollbackMovesFolderBackAndRestoresFolderPath(t *testing.T) {
+	t.Parallel()
+
+	database := newServiceTestDB(t)
+	folderRepo := repository.NewFolderRepository(database)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source", "album")
+	targetPath := filepath.Join(root, "target", "album")
+	mustMkdirAll(t, filepath.Dir(sourcePath))
+	mustMkdirAll(t, targetPath)
+	if err := os.WriteFile(filepath.Join(targetPath, "001.jpg"), []byte("img"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target) error = %v", err)
+	}
+
+	folder := &repository.Folder{ID: "folder-move-rb-1", Path: targetPath, Name: "album", Category: "photo", CategorySource: "workflow", Status: "pending"}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
+		"items":   {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: targetPath, FolderName: "album", TargetName: "album"}}},
+		"results": {Type: PortTypeMoveResultList, Value: []MoveResult{{SourcePath: sourcePath, TargetPath: targetPath, Status: "moved"}}},
+	}, NewTypeRegistry())
+	if err != nil {
+		t.Fatalf("typedValueMapToJSON() error = %v", err)
+	}
+
+	executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), folderRepo)
+	err = executor.Rollback(ctx, NodeRollbackInput{
+		NodeRun: &repository.NodeRun{ID: "node-run-move-rb-1", OutputJSON: mustJSONMarshal(t, map[string]any{"outputs": encodedOutputs})},
+		Folder:  folder,
+	})
+	if err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	if !pathExists(t, sourcePath) {
+		t.Fatalf("source path %q should exist after rollback", sourcePath)
+	}
+	if pathExists(t, targetPath) {
+		t.Fatalf("target path %q should not exist after rollback", targetPath)
+	}
+
+	updated, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() error = %v", err)
+	}
+	if updated.Path != sourcePath {
+		t.Fatalf("folder path = %q, want %q", updated.Path, sourcePath)
+	}
+}
+
 func TestCompressNodeExecutorUnsupportedAndArchiveNaming(t *testing.T) {
 	t.Parallel()
 
@@ -292,7 +390,7 @@ func TestCompressNodeExecutorUnsupportedAndArchiveNaming(t *testing.T) {
 		executor := newCompressNodeExecutor(fs.NewMockAdapter())
 		_, err := executor.Execute(context.Background(), NodeExecutionInput{
 			Node:   repository.WorkflowGraphNode{Config: map[string]any{"scope": "files"}},
-			Inputs: map[string]any{"item": ProcessingItem{SourcePath: "/x", FolderName: "x"}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{SourcePath: "/x", FolderName: "x"}}),
 		})
 		if err == nil {
 			t.Fatalf("Execute() error = nil, want unsupported scope error")
@@ -380,10 +478,10 @@ func TestAuditLogNodeExecutorWritesLog(t *testing.T) {
 	_, err := executor.Execute(context.Background(), NodeExecutionInput{
 		WorkflowRun: &repository.WorkflowRun{ID: "run-1", JobID: "job-1"},
 		Node:        repository.WorkflowGraphNode{ID: "node-audit", Type: "audit-log", Config: map[string]any{"action": "phase4.move"}},
-		Inputs: map[string]any{
+		Inputs: testInputs(map[string]any{
 			"item":   ProcessingItem{FolderID: "folder-1", SourcePath: "/source/folder-1", FolderName: "folder-1"},
 			"result": MoveResult{Status: "moved"},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -430,7 +528,7 @@ func TestThumbnailNodeHelpersAndFfmpegMissing(t *testing.T) {
 		}
 
 		_, err := executor.Execute(context.Background(), NodeExecutionInput{
-			Inputs: map[string]any{"item": ProcessingItem{SourcePath: "/source/album", FolderName: "album"}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{SourcePath: "/source/album", FolderName: "album"}}),
 		})
 		if err == nil {
 			t.Fatalf("Execute() error = nil, want ffmpeg missing error")
@@ -473,9 +571,9 @@ func TestThumbnailNodeExecutorPersistsCoverImagePath(t *testing.T) {
 
 	_, err := executor.Execute(ctx, NodeExecutionInput{
 		Node: repository.WorkflowGraphNode{Config: map[string]any{"output_dir": "/out"}},
-		Inputs: map[string]any{
+		Inputs: testInputs(map[string]any{
 			"item": ProcessingItem{FolderID: folder.ID, SourcePath: "/source/album", FolderName: "album", Category: "video"},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)

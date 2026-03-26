@@ -14,6 +14,7 @@ type FolderTree struct {
 }
 
 type ClassificationSignal struct {
+	SourcePath string   `json:"source_path"`
 	Category   string   `json:"category"`
 	Confidence float64  `json:"confidence"`
 	Reason     string   `json:"reason"`
@@ -22,15 +23,15 @@ type ClassificationSignal struct {
 }
 
 type ClassifiedEntry struct {
-	FolderID   string                     `json:"folder_id"`
-	Path       string                     `json:"path"`
-	Name       string                     `json:"name"`
-	Category   string                     `json:"category"`
-	Confidence float64                    `json:"confidence"`
-	Reason     string                     `json:"reason"`
-	Classifier string                     `json:"classifier"`
-	Files      []FileEntry                `json:"files"`
-	Subtree    map[string]ClassifiedEntry `json:"subtree,omitempty"`
+	FolderID   string            `json:"folder_id"`
+	Path       string            `json:"path"`
+	Name       string            `json:"name"`
+	Category   string            `json:"category"`
+	Confidence float64           `json:"confidence"`
+	Reason     string            `json:"reason"`
+	Classifier string            `json:"classifier"`
+	Files      []FileEntry       `json:"files"`
+	Subtree    []ClassifiedEntry `json:"subtree,omitempty"`
 }
 
 type ProcessingItem struct {

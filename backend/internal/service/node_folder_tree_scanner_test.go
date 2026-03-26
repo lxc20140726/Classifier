@@ -42,7 +42,7 @@ func TestFolderTreeScannerExecutorSchema(t *testing.T) {
 	if schema.Label != "目录树扫描器" {
 		t.Fatalf("schema.Label = %q, want 目录树扫描器", schema.Label)
 	}
-	if schema.Description != "递归扫描源目录，为每个顶层子目录输出 FolderTree" {
+	if schema.Description != "递归扫描源目录，输出顶层子目录 FolderTree 列表" {
 		t.Fatalf("schema.Description = %q, want expected Chinese description", schema.Description)
 	}
 
@@ -94,9 +94,9 @@ func TestFolderTreeScannerExecutorExecuteUsesInputFallbackAndDefaultExcludes(t *
 	executor := newFolderTreeScannerExecutor(adapter)
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
 		Node: repository.WorkflowGraphNode{Config: map[string]any{"source_dir": " "}},
-		Inputs: map[string]any{
+		Inputs: testInputs(map[string]any{
 			"source_dir": root,
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -109,10 +109,14 @@ func TestFolderTreeScannerExecutorExecuteUsesInputFallbackAndDefaultExcludes(t *
 		t.Fatalf("len(outputs) = %d, want 1", len(out.Outputs))
 	}
 
-	tree, ok := out.Outputs[0].(FolderTree)
+	trees, ok := out.Outputs["tree"].Value.([]FolderTree)
 	if !ok {
-		t.Fatalf("output type = %T, want FolderTree", out.Outputs[0])
+		t.Fatalf("output type = %T, want []FolderTree", out.Outputs["tree"].Value)
 	}
+	if len(trees) != 1 {
+		t.Fatalf("len(trees) = %d, want 1", len(trees))
+	}
+	tree := trees[0]
 	if tree.Name != "album" || tree.Path != albumPath {
 		t.Fatalf("tree name/path = %q/%q, want album/%q", tree.Name, tree.Path, albumPath)
 	}
@@ -151,8 +155,15 @@ func TestFolderTreeScannerExecutorExecuteRespectsMaxDepthAndMinFileCount(t *test
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if len(out.Outputs) != 0 {
-		t.Fatalf("len(outputs) = %d, want 0 because max_depth=0 drops deep files and min_file_count=2 filters all", len(out.Outputs))
+	if len(out.Outputs) != 1 {
+		t.Fatalf("len(outputs) = %d, want 1", len(out.Outputs))
+	}
+	trees, ok := out.Outputs["tree"].Value.([]FolderTree)
+	if !ok {
+		t.Fatalf("output type = %T, want []FolderTree", out.Outputs["tree"].Value)
+	}
+	if len(trees) != 0 {
+		t.Fatalf("len(trees) = %d, want 0 because max_depth=0 drops deep files and min_file_count=2 filters all", len(trees))
 	}
 
 	out, err = executor.Execute(context.Background(), NodeExecutionInput{Node: repository.WorkflowGraphNode{Config: map[string]any{
@@ -167,10 +178,14 @@ func TestFolderTreeScannerExecutorExecuteRespectsMaxDepthAndMinFileCount(t *test
 	if len(out.Outputs) != 1 {
 		t.Fatalf("len(outputs) = %d, want 1", len(out.Outputs))
 	}
-	tree, ok := out.Outputs[0].(FolderTree)
+	trees, ok = out.Outputs["tree"].Value.([]FolderTree)
 	if !ok {
-		t.Fatalf("output type = %T, want FolderTree", out.Outputs[0])
+		t.Fatalf("output type = %T, want []FolderTree", out.Outputs["tree"].Value)
 	}
+	if len(trees) != 1 {
+		t.Fatalf("len(trees) = %d, want 1", len(trees))
+	}
+	tree := trees[0]
 	if tree.Name != "big" {
 		t.Fatalf("tree.Name = %q, want big", tree.Name)
 	}

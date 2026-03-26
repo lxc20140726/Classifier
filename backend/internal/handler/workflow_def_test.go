@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,9 +13,17 @@ import (
 	"github.com/liqiye/classifier/internal/repository"
 )
 
-func setupWorkflowDefRouter(repo repository.WorkflowDefinitionRepository) *gin.Engine {
+type stubGraphValidator struct {
+	err error
+}
+
+func (s *stubGraphValidator) ValidateWorkflowGraph(_ string) error {
+	return s.err
+}
+
+func setupWorkflowDefRouter(repo repository.WorkflowDefinitionRepository, validator GraphValidator) *gin.Engine {
 	r := gin.New()
-	h := NewWorkflowDefHandler(repo)
+	h := NewWorkflowDefHandler(repo, validator)
 	r.GET("/workflow-defs", h.List)
 	r.POST("/workflow-defs", h.Create)
 	r.GET("/workflow-defs/:id", h.Get)
@@ -28,7 +37,7 @@ func TestWorkflowDefHandler_CRUDRoundTrip(t *testing.T) {
 
 	database := newHandlerTestDB(t)
 	repo := repository.NewWorkflowDefinitionRepository(database)
-	router := setupWorkflowDefRouter(repo)
+	router := setupWorkflowDefRouter(repo, nil)
 
 	createBody := `{"name":"测试工作流","graph_json":"{\"nodes\":[{\"id\":\"n1\",\"type\":\"trigger\",\"config\":{},\"enabled\":true}],\"edges\":[]}"}`
 	createReq := httptest.NewRequest(http.MethodPost, "/workflow-defs", bytes.NewBufferString(createBody))
@@ -102,4 +111,44 @@ func TestWorkflowDefHandler_CRUDRoundTrip(t *testing.T) {
 	if getDeletedResp.Code != http.StatusNotFound {
 		t.Fatalf("get deleted status = %d, want %d body=%s", getDeletedResp.Code, http.StatusNotFound, getDeletedResp.Body.String())
 	}
+}
+
+func TestWorkflowDefHandler_GraphValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("create rejects invalid graph", func(t *testing.T) {
+		database := newHandlerTestDB(t)
+		repo := repository.NewWorkflowDefinitionRepository(database)
+		router := setupWorkflowDefRouter(repo, &stubGraphValidator{err: errors.New("unknown node type \"ghost\"")})
+
+		body := `{"name":"测试工作流","graph_json":"{\"nodes\":[{\"id\":\"n1\",\"type\":\"ghost\",\"config\":{},\"enabled\":true}],\"edges\":[]}"}`
+		req := httptest.NewRequest(http.MethodPost, "/workflow-defs", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d body=%s", resp.Code, http.StatusBadRequest, resp.Body.String())
+		}
+	})
+
+	t.Run("update rejects invalid graph", func(t *testing.T) {
+		database := newHandlerTestDB(t)
+		repo := repository.NewWorkflowDefinitionRepository(database)
+		seed := &repository.WorkflowDefinition{ID: "wf-1", Name: "wf-1", GraphJSON: `{"nodes":[{"id":"n1","type":"trigger","config":{},"enabled":true}],"edges":[]}`, IsActive: true, Version: 1}
+		if err := repo.Create(t.Context(), seed); err != nil {
+			t.Fatalf("repo.Create() error = %v", err)
+		}
+
+		router := setupWorkflowDefRouter(repo, &stubGraphValidator{err: errors.New("cycle detected")})
+		body := `{"graph_json":"{\"nodes\":[{\"id\":\"a\",\"type\":\"rename-node\",\"enabled\":true}],\"edges\":[]}"}`
+		req := httptest.NewRequest(http.MethodPut, "/workflow-defs/"+seed.ID, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d body=%s", resp.Code, http.StatusBadRequest, resp.Body.String())
+		}
+	})
 }

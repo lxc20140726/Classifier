@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/liqiye/classifier/internal/repository"
 )
 
@@ -32,89 +36,225 @@ func (e *subtreeAggregatorNodeExecutor) Schema() NodeSchema {
 		Label:       "Subtree Aggregator",
 		Description: "Aggregate classification signals and persist folder category",
 		InputPorts: []NodeSchemaPort{
-			{Name: "node", Description: "FOLDER_TREE_NODE", Required: false},
-			{Name: "signal_kw", Description: "CLASSIFICATION_SIGNAL from name-keyword-classifier", Required: false},
-			{Name: "signal_ft", Description: "CLASSIFICATION_SIGNAL from file-tree-classifier", Required: false},
-			{Name: "signal_ext", Description: "CLASSIFICATION_SIGNAL from ext-ratio-classifier", Required: false},
-			{Name: "signal_high", Description: "CLASSIFICATION_SIGNAL from confidence-check high port", Required: false},
-			{Name: "signal_manual", Description: "CLASSIFICATION_SIGNAL from manual-classifier", Required: false},
+			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
+			{Name: "node", Description: "FOLDER_TREE_NODE legacy input", Required: false},
+			{Name: "signal_kw", Description: "CLASSIFICATION_SIGNAL_LIST from name-keyword-classifier", Required: false, Lazy: true},
+			{Name: "signal_ft", Description: "CLASSIFICATION_SIGNAL_LIST from file-tree-classifier", Required: false, Lazy: true},
+			{Name: "signal_ext", Description: "CLASSIFICATION_SIGNAL_LIST from ext-ratio-classifier", Required: false, Lazy: true},
+			{Name: "signal_high", Description: "CLASSIFICATION_SIGNAL_LIST from confidence-check high port", Required: false, Lazy: true},
+			{Name: "signal_manual", Description: "CLASSIFICATION_SIGNAL_LIST from manual-classifier", Required: false, Lazy: true},
 		},
 		OutputPorts: []NodeSchemaPort{
-			{Name: "entry", Description: "CLASSIFIED_ENTRY", Required: false},
+			{Name: "entry", Description: "CLASSIFIED_ENTRY_LIST", Required: false},
 		},
 	}
 }
 
 func (e *subtreeAggregatorNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	if input.Folder == nil || input.Folder.ID == "" {
-		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder is required", e.Type())
-	}
-
 	if e.folders == nil {
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder repository is required", e.Type())
 	}
 
-	selectedSignal := firstAvailableSignal(input.Inputs)
-
-	category := selectedSignal.Category
-	if category == "" {
-		category = input.Folder.Category
+	rawInputs := typedInputsToAny(input.Inputs)
+	rawTrees, hasTrees := firstPresent(rawInputs, "trees", "node")
+	var (
+		trees []FolderTree
+		err   error
+	)
+	if hasTrees {
+		trees, _, err = parseFolderTreesInput(rawTrees)
+		if err != nil {
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute parse trees: %w", e.Type(), err)
+		}
 	}
-	if category == "" {
-		category = "other"
+	if len(trees) == 0 && input.Folder != nil && strings.TrimSpace(input.Folder.Path) != "" {
+		trees = []FolderTree{{Path: input.Folder.Path, Name: input.Folder.Name}}
+	}
+	if len(trees) == 0 {
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder trees are required", e.Type())
 	}
 
-	if err := e.folders.UpdateCategory(ctx, input.Folder.ID, category, "workflow"); err != nil {
-		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute update category for folder %q: %w", e.Type(), input.Folder.ID, err)
+	signalsBySource, err := buildSignalIndex(rawInputs)
+	if err != nil {
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute build signal index: %w", e.Type(), err)
+	}
+
+	entries := make([]ClassifiedEntry, 0, len(trees))
+	for _, tree := range trees {
+		entry, err := e.aggregateTree(ctx, input, tree, signalsBySource)
+		if err != nil {
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute aggregate tree %q: %w", e.Type(), tree.Path, err)
+		}
+		entries = append(entries, entry)
+	}
+
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"entry": {Type: PortTypeClassifiedEntryList, Value: entries}}, Status: ExecutionSuccess}, nil
+}
+
+func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input NodeExecutionInput, tree FolderTree, signalsBySource map[string]map[string]ClassificationSignal) (ClassifiedEntry, error) {
+	folder, err := e.ensureFolderForTree(ctx, input, tree)
+	if err != nil {
+		return ClassifiedEntry{}, err
+	}
+
+	subtreeEntries := make([]ClassifiedEntry, 0, len(tree.Subdirs))
+	for _, subdir := range tree.Subdirs {
+		childEntry, err := e.aggregateTree(ctx, input, subdir, signalsBySource)
+		if err != nil {
+			return ClassifiedEntry{}, err
+		}
+		subtreeEntries = append(subtreeEntries, childEntry)
+	}
+
+	bestSignal := pickBestSignalByPath(tree.Path, signalsBySource)
+	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, subtreeEntries)
+	if finalCategory == "" {
+		finalCategory = folder.Category
+	}
+	if finalCategory == "" {
+		finalCategory = "other"
+	}
+
+	if err := e.folders.UpdateCategory(ctx, folder.ID, finalCategory, "workflow"); err != nil {
+		return ClassifiedEntry{}, fmt.Errorf("update category for folder %q: %w", folder.ID, err)
 	}
 
 	entry := ClassifiedEntry{
-		FolderID:   input.Folder.ID,
-		Path:       input.Folder.Path,
-		Name:       input.Folder.Name,
-		Category:   category,
-		Confidence: selectedSignal.Confidence,
-		Reason:     selectedSignal.Reason,
+		FolderID:   folder.ID,
+		Path:       folder.Path,
+		Name:       folder.Name,
+		Category:   finalCategory,
+		Confidence: confidence,
+		Reason:     reason,
 		Classifier: e.Type(),
+		Files:      append([]FileEntry(nil), tree.Files...),
+		Subtree:    subtreeEntries,
 	}
-
-	if rawNode, ok := input.Inputs["node"]; ok {
-		switch v := rawNode.(type) {
-		case FolderTree:
-			if v.Path != "" {
-				entry.Path = v.Path
-			}
-			if v.Name != "" {
-				entry.Name = v.Name
-			}
-			entry.Files = append([]FileEntry(nil), v.Files...)
-		case *FolderTree:
-			if v != nil {
-				if v.Path != "" {
-					entry.Path = v.Path
-				}
-				if v.Name != "" {
-					entry.Name = v.Name
-				}
-				entry.Files = append([]FileEntry(nil), v.Files...)
-			}
-		}
+	if strings.TrimSpace(tree.Path) != "" {
+		entry.Path = tree.Path
+	}
+	if strings.TrimSpace(tree.Name) != "" {
+		entry.Name = tree.Name
 	}
 
 	if e.audit != nil {
 		log := &repository.AuditLog{
 			JobID:      workflowRunID(input.WorkflowRun),
-			FolderID:   input.Folder.ID,
+			FolderID:   folder.ID,
 			FolderPath: entry.Path,
 			Action:     e.Type(),
 			Result:     "success",
 		}
 		if err := e.audit.Write(ctx, log); err != nil {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute write audit for folder %q: %w", e.Type(), input.Folder.ID, err)
+			return ClassifiedEntry{}, fmt.Errorf("write audit for folder %q: %w", folder.ID, err)
 		}
 	}
 
-	return NodeExecutionOutput{Outputs: []any{entry}, Status: ExecutionSuccess}, nil
+	return entry, nil
+}
+
+func aggregateTreeCategory(bestSignal ClassificationSignal, subtreeEntries []ClassifiedEntry) (string, float64, string) {
+	if len(subtreeEntries) == 0 {
+		if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) != "" {
+			return bestSignal.Category, bestSignal.Confidence, bestSignal.Reason
+		}
+		return "other", 0, "no signal"
+	}
+
+	childCategories := make(map[string]struct{}, len(subtreeEntries))
+	for _, child := range subtreeEntries {
+		category := strings.TrimSpace(child.Category)
+		if category == "" {
+			category = "other"
+		}
+		childCategories[category] = struct{}{}
+	}
+
+	inferredCategory := "other"
+	if len(childCategories) == 1 {
+		for category := range childCategories {
+			inferredCategory = category
+		}
+	} else {
+		inferredCategory = "mixed"
+	}
+
+	if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) != "" && bestSignal.Confidence >= 0.8 {
+		return bestSignal.Category, bestSignal.Confidence, bestSignal.Reason
+	}
+
+	if inferredCategory == "mixed" {
+		return inferredCategory, 1, "subtree:mixed"
+	}
+	return inferredCategory, 1, "subtree:uniform"
+}
+
+func (e *subtreeAggregatorNodeExecutor) ensureFolderForTree(ctx context.Context, input NodeExecutionInput, tree FolderTree) (*repository.Folder, error) {
+	if input.Folder != nil && strings.TrimSpace(input.Folder.ID) != "" && strings.TrimSpace(input.Folder.Path) == strings.TrimSpace(tree.Path) {
+		return input.Folder, nil
+	}
+
+	if strings.TrimSpace(tree.Path) == "" {
+		if input.Folder != nil && strings.TrimSpace(input.Folder.ID) != "" {
+			return input.Folder, nil
+		}
+		return nil, fmt.Errorf("folder path is required")
+	}
+
+	existing, err := e.folders.GetByPath(ctx, tree.Path)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+
+	folder := &repository.Folder{
+		ID:             uuid.NewString(),
+		Path:           tree.Path,
+		SourceDir:      strings.TrimSpace(input.SourceDir),
+		RelativePath:   relativePathFromSourceDir(input.SourceDir, tree.Path),
+		Name:           strings.TrimSpace(tree.Name),
+		Category:       "other",
+		CategorySource: "auto",
+		Status:         "pending",
+		TotalFiles:     countTreeFiles(tree),
+	}
+	if folder.Name == "" {
+		folder.Name = filepath.Base(tree.Path)
+	}
+
+	if err := e.folders.Upsert(ctx, folder); err != nil {
+		return nil, err
+	}
+
+	return folder, nil
+}
+
+func relativePathFromSourceDir(sourceDir, path string) string {
+	trimmedSource := strings.TrimSpace(sourceDir)
+	if trimmedSource == "" {
+		return ""
+	}
+
+	rel, err := filepath.Rel(trimmedSource, path)
+	if err != nil {
+		return ""
+	}
+	if rel == "." {
+		return ""
+	}
+
+	return rel
+}
+
+func countTreeFiles(tree FolderTree) int {
+	total := len(tree.Files)
+	for _, sub := range tree.Subdirs {
+		total += countTreeFiles(sub)
+	}
+
+	return total
 }
 
 func (e *subtreeAggregatorNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -125,67 +265,55 @@ func (e *subtreeAggregatorNodeExecutor) Rollback(_ context.Context, _ NodeRollba
 	return nil
 }
 
-func firstAvailableSignal(inputs map[string]any) ClassificationSignal {
-	for _, key := range []string{"signal_kw", "signal_ft", "signal_ext", "signal_manual", "signal_high"} {
-		raw, ok := inputs[key]
+func buildSignalIndex(inputs map[string]any) (map[string]map[string]ClassificationSignal, error) {
+	portKeys := []string{"signal_kw", "signal_ft", "signal_manual", "signal_high", "signal_ext"}
+	index := make(map[string]map[string]ClassificationSignal)
+
+	for _, key := range portKeys {
+		raw, exists := inputs[key]
+		if !exists || raw == nil {
+			continue
+		}
+		signals, _, err := parseSignalListInput(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", key, err)
+		}
+		for _, signal := range signals {
+			if signal.IsEmpty || strings.TrimSpace(signal.Category) == "" {
+				continue
+			}
+			path := strings.TrimSpace(signal.SourcePath)
+			if path == "" {
+				continue
+			}
+			if _, ok := index[path]; !ok {
+				index[path] = make(map[string]ClassificationSignal)
+			}
+			index[path][key] = signal
+		}
+	}
+
+	return index, nil
+}
+
+func pickBestSignalByPath(path string, indexed map[string]map[string]ClassificationSignal) ClassificationSignal {
+	byPath, ok := indexed[strings.TrimSpace(path)]
+	if !ok {
+		return ClassificationSignal{}
+	}
+
+	for _, key := range []string{"signal_kw", "signal_ft", "signal_manual", "signal_high", "signal_ext"} {
+		signal, ok := byPath[key]
 		if !ok {
 			continue
 		}
-
-		signal, ok := toSignal(raw)
-		if !ok {
+		if signal.IsEmpty || strings.TrimSpace(signal.Category) == "" {
 			continue
 		}
-
-		if signal.IsEmpty || signal.Category == "" {
-			continue
-		}
-
 		return signal
 	}
 
 	return ClassificationSignal{}
-}
-
-func toSignal(raw any) (ClassificationSignal, bool) {
-	switch v := raw.(type) {
-	case ClassificationSignal:
-		return v, true
-	case *ClassificationSignal:
-		if v == nil {
-			return ClassificationSignal{}, false
-		}
-		return *v, true
-	case map[string]any:
-		category, _ := v["category"].(string)
-		reason, _ := v["reason"].(string)
-		isEmpty, _ := v["is_empty"].(bool)
-		return ClassificationSignal{
-			Category:   category,
-			Confidence: asFloat64(v["confidence"]),
-			Reason:     reason,
-			IsEmpty:    isEmpty,
-		}, true
-	default:
-		return ClassificationSignal{}, false
-	}
-}
-
-func asFloat64(value any) float64 {
-	switch v := value.(type) {
-	case float64:
-		return v
-	case float32:
-		return float64(v)
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case int32:
-		return float64(v)
-	default:
-		return 0
-	}
 }
 
 func workflowRunID(run *repository.WorkflowRun) string {

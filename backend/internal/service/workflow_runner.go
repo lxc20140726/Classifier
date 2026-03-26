@@ -21,6 +21,7 @@ import (
 type StartWorkflowJobInput struct {
 	WorkflowDefID string
 	FolderIDs     []string
+	SourceDir     string
 }
 
 type WorkflowRunDetail struct {
@@ -33,7 +34,8 @@ type NodeExecutionInput struct {
 	NodeRun     *repository.NodeRun
 	Node        repository.WorkflowGraphNode
 	Folder      *repository.Folder
-	Inputs      map[string]any
+	SourceDir   string
+	Inputs      map[string]*TypedValue
 }
 
 type ExecutionStatus string
@@ -45,24 +47,81 @@ const (
 )
 
 type NodeExecutionOutput struct {
-	Outputs       []any
+	Outputs       map[string]TypedValue
 	Status        ExecutionStatus
 	PendingReason string
 }
 
-type NodeSchemaPort struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Required    bool   `json:"required"`
+type PortDef struct {
+	Name        string   `json:"name"`
+	Type        PortType `json:"type"`
+	Required    bool     `json:"required"`
+	Lazy        bool     `json:"lazy"`
+	Description string   `json:"description"`
 }
 
+type NodeSchemaPort = PortDef
+
 type NodeSchema struct {
-	Type         string           `json:"type"`
-	Label        string           `json:"label"`
+	Type         string           `json:"type,omitempty"`
+	TypeID       string           `json:"type_id,omitempty"`
+	Label        string           `json:"label,omitempty"`
+	DisplayName  string           `json:"display_name,omitempty"`
 	Description  string           `json:"description"`
-	InputPorts   []NodeSchemaPort `json:"input_ports"`
-	OutputPorts  []NodeSchemaPort `json:"output_ports"`
+	Category     string           `json:"category,omitempty"`
+	InputPorts   []NodeSchemaPort `json:"input_ports,omitempty"`
+	OutputPorts  []NodeSchemaPort `json:"output_ports,omitempty"`
+	Inputs       []PortDef        `json:"inputs,omitempty"`
+	Outputs      []PortDef        `json:"outputs,omitempty"`
 	ConfigSchema map[string]any   `json:"config_schema,omitempty"`
+}
+
+func (s NodeSchema) TypeName() string {
+	if s.TypeID != "" {
+		return s.TypeID
+	}
+	return s.Type
+}
+
+func (s NodeSchema) DisplayLabel() string {
+	if s.DisplayName != "" {
+		return s.DisplayName
+	}
+	return s.Label
+}
+
+func (s NodeSchema) InputDefs() []PortDef {
+	if len(s.Inputs) > 0 {
+		return s.Inputs
+	}
+	return s.InputPorts
+}
+
+func (s NodeSchema) OutputDefs() []PortDef {
+	if len(s.Outputs) > 0 {
+		return s.Outputs
+	}
+	return s.OutputPorts
+}
+
+func (s NodeSchema) InputPort(name string) *PortDef {
+	for _, port := range s.InputDefs() {
+		if port.Name == name {
+			candidate := port
+			return &candidate
+		}
+	}
+	return nil
+}
+
+func (s NodeSchema) OutputPort(name string) *PortDef {
+	for _, port := range s.OutputDefs() {
+		if port.Name == name {
+			candidate := port
+			return &candidate
+		}
+	}
+	return nil
 }
 
 type NodeRollbackInput struct {
@@ -90,8 +149,7 @@ type WorkflowRunnerService struct {
 	executors         map[string]WorkflowNodeExecutor
 	broker            *sse.Broker
 	auditSvc          *AuditService
-	pendingResumeData map[string]map[string]any
-	pendingResumeMu   sync.Mutex
+	typeRegistry      *TypeRegistry
 	folderConcurrency int
 }
 
@@ -116,13 +174,18 @@ func NewWorkflowRunnerService(
 		executors:         make(map[string]WorkflowNodeExecutor),
 		broker:            broker,
 		auditSvc:          auditSvc,
-		pendingResumeData: make(map[string]map[string]any),
+		typeRegistry:      NewTypeRegistry(),
 		folderConcurrency: defaultWorkflowFolderConcurrency(),
 	}
 
 	svc.RegisterExecutor(&triggerNodeExecutor{})
+	svc.RegisterExecutor(newFolderTreeScannerExecutor(fsAdapter))
+	svc.RegisterExecutor(newNameKeywordClassifierExecutor())
+	svc.RegisterExecutor(newFileTreeClassifierExecutor())
+	svc.RegisterExecutor(newConfidenceCheckExecutor())
 	svc.RegisterExecutor(&extRatioClassifierNodeExecutor{fs: fsAdapter})
 	svc.RegisterExecutor(newManualClassifierExecutor())
+	svc.RegisterExecutor(newSubtreeAggregatorExecutor(folderRepo, auditSvc))
 	svc.RegisterExecutor(newClassificationReaderExecutor())
 	svc.RegisterExecutor(newFolderSplitterExecutor())
 	svc.RegisterExecutor(newCategoryRouterExecutor())
@@ -151,7 +214,7 @@ func (s *WorkflowRunnerService) ListNodeSchemas() []NodeSchema {
 	}
 
 	sort.Slice(schemas, func(i, j int) bool {
-		return schemas[i].Type < schemas[j].Type
+		return schemas[i].TypeName() < schemas[j].TypeName()
 	})
 
 	return schemas
@@ -161,8 +224,8 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 	if input.WorkflowDefID == "" {
 		return "", fmt.Errorf("workflowRunner.StartJob: workflow_def_id is required")
 	}
-	if len(input.FolderIDs) == 0 {
-		return "", fmt.Errorf("workflowRunner.StartJob: folder_ids is required")
+	if len(input.FolderIDs) == 0 && strings.TrimSpace(input.SourceDir) == "" {
+		return "", fmt.Errorf("workflowRunner.StartJob: folder_ids or source_dir is required")
 	}
 
 	if _, err := s.workflowDefs.GetByID(ctx, input.WorkflowDefID); err != nil {
@@ -175,23 +238,51 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 	}
 
 	jobID := uuid.NewString()
+	total := len(input.FolderIDs)
+	if total == 0 {
+		total = 1
+	}
 	if err := s.jobs.Create(ctx, &repository.Job{
 		ID:            jobID,
 		Type:          "workflow",
 		WorkflowDefID: input.WorkflowDefID,
+		SourceDir:     strings.TrimSpace(input.SourceDir),
 		Status:        "pending",
 		FolderIDs:     string(folderIDsJSON),
-		Total:         len(input.FolderIDs),
+		Total:         total,
 	}); err != nil {
 		return "", fmt.Errorf("workflowRunner.StartJob create job: %w", err)
 	}
 
-	go s.runJob(context.Background(), jobID, input.WorkflowDefID, append([]string(nil), input.FolderIDs...))
+	go s.runJob(context.Background(), jobID, input.WorkflowDefID, append([]string(nil), input.FolderIDs...), strings.TrimSpace(input.SourceDir))
 	return jobID, nil
 }
 
-func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID string, folderIDs []string) {
+func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID string, folderIDs []string, sourceDir string) {
 	_ = s.jobs.UpdateStatus(ctx, jobID, "running", "")
+
+	if len(folderIDs) == 0 {
+		run := &repository.WorkflowRun{
+			ID:            uuid.NewString(),
+			JobID:         jobID,
+			SourceDir:     sourceDir,
+			WorkflowDefID: workflowDefID,
+			Status:        "pending",
+		}
+		if err := s.workflowRuns.Create(ctx, run); err != nil {
+			_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+			_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+			return
+		}
+		if err := s.executeWorkflowRun(ctx, run.ID, false); err != nil {
+			_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+			_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+			return
+		}
+		_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
+		_ = s.jobs.UpdateStatus(ctx, jobID, "succeeded", "")
+		return
+	}
 
 	var failed atomic.Int64
 	concurrency := s.folderConcurrency
@@ -288,17 +379,30 @@ func (s *WorkflowRunnerService) ResumeWorkflowRun(ctx context.Context, workflowR
 }
 
 func (s *WorkflowRunnerService) ResumeWorkflowRunWithData(ctx context.Context, workflowRunID string, resumeData map[string]any) error {
-	s.pendingResumeMu.Lock()
-	if resumeData == nil {
-		delete(s.pendingResumeData, workflowRunID)
-	} else {
-		copied := make(map[string]any, len(resumeData))
-		for key, value := range resumeData {
-			copied[key] = value
+	if resumeData != nil {
+		waitingNodeRun, err := s.nodeRuns.GetWaitingInputByWorkflowRunID(ctx, workflowRunID)
+		if err != nil {
+			return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData get waiting node run for %q: %w", workflowRunID, err)
 		}
-		s.pendingResumeData[workflowRunID] = copied
+
+		persisted := make(map[string]any)
+		if strings.TrimSpace(waitingNodeRun.ResumeData) != "" {
+			if err := json.Unmarshal([]byte(waitingNodeRun.ResumeData), &persisted); err != nil {
+				return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData unmarshal resume data for node run %q: %w", waitingNodeRun.ID, err)
+			}
+		}
+		for key, value := range resumeData {
+			persisted[key] = value
+		}
+
+		encoded, err := json.Marshal(persisted)
+		if err != nil {
+			return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData marshal resume data for node run %q: %w", waitingNodeRun.ID, err)
+		}
+		if err := s.nodeRuns.UpdateResumeData(ctx, waitingNodeRun.ID, string(encoded)); err != nil {
+			return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData persist resume data for node run %q: %w", waitingNodeRun.ID, err)
+		}
 	}
-	s.pendingResumeMu.Unlock()
 
 	if err := s.executeWorkflowRun(ctx, workflowRunID, true); err != nil {
 		return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData: %w", err)
@@ -321,9 +425,12 @@ func (s *WorkflowRunnerService) RollbackWorkflowRun(ctx context.Context, workflo
 		return nodeRuns[i].Sequence > nodeRuns[j].Sequence
 	})
 
-	folder, err := s.folders.GetByID(ctx, run.FolderID)
-	if err != nil {
-		return fmt.Errorf("workflowRunner.RollbackWorkflowRun get folder %q: %w", run.FolderID, err)
+	var folder *repository.Folder
+	if strings.TrimSpace(run.FolderID) != "" {
+		folder, err = s.folders.GetByID(ctx, run.FolderID)
+		if err != nil {
+			return fmt.Errorf("workflowRunner.RollbackWorkflowRun get folder %q: %w", run.FolderID, err)
+		}
 	}
 
 	for _, nodeRun := range nodeRuns {
@@ -348,9 +455,11 @@ func (s *WorkflowRunnerService) RollbackWorkflowRun(ctx context.Context, workflo
 		}
 		_ = s.writeNodeRollbackAudit(ctx, run, nodeRun, folder, snaps)
 
-		folder, err = s.folders.GetByID(ctx, run.FolderID)
-		if err != nil {
-			return fmt.Errorf("workflowRunner.RollbackWorkflowRun reload folder %q: %w", run.FolderID, err)
+		if strings.TrimSpace(run.FolderID) != "" {
+			folder, err = s.folders.GetByID(ctx, run.FolderID)
+			if err != nil {
+				return fmt.Errorf("workflowRunner.RollbackWorkflowRun reload folder %q: %w", run.FolderID, err)
+			}
 		}
 	}
 
@@ -380,15 +489,19 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	if err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun parse graph for workflow def %q: %w", def.ID, err)
 	}
+	s.normalizeGraphPortReferences(graph)
 
 	nodes, err := topologicalNodes(graph)
 	if err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun topo sort for workflow def %q: %w", def.ID, err)
 	}
 
-	folder, err := s.folders.GetByID(ctx, run.FolderID)
-	if err != nil {
-		return fmt.Errorf("workflowRunner.executeWorkflowRun get folder %q: %w", run.FolderID, err)
+	var folder *repository.Folder
+	if strings.TrimSpace(run.FolderID) != "" {
+		folder, err = s.folders.GetByID(ctx, run.FolderID)
+		if err != nil {
+			return fmt.Errorf("workflowRunner.executeWorkflowRun get folder %q: %w", run.FolderID, err)
+		}
 	}
 
 	runStartedAt := time.Now()
@@ -405,12 +518,13 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	if err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun list node runs for workflow run %q: %w", run.ID, err)
 	}
-	outputCache := make(map[string][]any)
+	outputCache := make(map[string]map[string]TypedValue)
 	for _, existingRun := range existingRuns {
 		if existingRun.NodeID == "" || strings.TrimSpace(existingRun.OutputJSON) == "" {
 			continue
 		}
-		outputs, parseErr := parseNodeOutputs(existingRun.OutputJSON)
+		schema := s.schemaForNode(existingRun.NodeType)
+		outputs, parseErr := s.parseNodeOutputsForSchema(existingRun.OutputJSON, schema)
 		if parseErr != nil {
 			continue
 		}
@@ -426,10 +540,12 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 
 	var resumeData map[string]any
 	if resume {
-		s.pendingResumeMu.Lock()
-		resumeData = s.pendingResumeData[workflowRunID]
-		delete(s.pendingResumeData, workflowRunID)
-		s.pendingResumeMu.Unlock()
+		waitingNodeRun, waitErr := s.nodeRuns.GetWaitingInputByWorkflowRunID(ctx, workflowRunID)
+		if waitErr == nil && strings.TrimSpace(waitingNodeRun.ResumeData) != "" {
+			if err := json.Unmarshal([]byte(waitingNodeRun.ResumeData), &resumeData); err != nil {
+				return fmt.Errorf("workflowRunner.executeWorkflowRun unmarshal resume data for node run %q: %w", waitingNodeRun.ID, err)
+			}
+		}
 	}
 
 	for _, node := range nodes {
@@ -441,27 +557,9 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			}
 		}
 
-		inputs := make(map[string]any)
-		for portName, spec := range node.Inputs {
-			if spec.ConstValue != nil {
-				inputs[portName] = *spec.ConstValue
-				continue
-			}
-			if spec.LinkSource == nil {
-				continue
-			}
+		inputs := s.resolveNodeInputs(node, outputCache, run.SourceDir)
 
-			sourceOutputs := outputCache[spec.LinkSource.SourceNodeID]
-			if spec.LinkSource.OutputPortIndex < 0 || spec.LinkSource.OutputPortIndex >= len(sourceOutputs) {
-				inputs[portName] = nil
-				continue
-			}
-
-			inputs[portName] = sourceOutputs[spec.LinkSource.OutputPortIndex]
-		}
-
-		// Skip nodes whose required inputs resolved to nil (upstream chose the other branch)
-		if len(inputs) > 0 && hasNilRequiredInput(inputs) {
+		if shouldSkipNode(node, inputs, s.schemaForNode(node.Type)) {
 			seq++
 			skippedRun := &repository.NodeRun{
 				ID:            uuid.NewString(),
@@ -479,7 +577,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 				return fmt.Errorf("workflowRunner.executeWorkflowRun finish skipped node run %q: %w", node.ID, err)
 			}
-			outputCache[node.ID] = nil
+			outputCache[node.ID] = map[string]TypedValue{}
 			continue
 		}
 
@@ -497,13 +595,17 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			return fmt.Errorf("workflowRunner.executeWorkflowRun create node run for node %q: %w", node.ID, err)
 		}
 
-		inputJSON, err := json.Marshal(map[string]any{
+		inputPayload := map[string]any{
 			"workflow_run_id": run.ID,
-			"folder_id":       folder.ID,
-			"folder_path":     folder.Path,
+			"source_dir":      run.SourceDir,
 			"node":            node,
-			"inputs":          inputs,
-		})
+			"inputs":          typedInputValuesForJSON(inputs),
+		}
+		if folder != nil {
+			inputPayload["folder_id"] = folder.ID
+			inputPayload["folder_path"] = folder.Path
+		}
+		inputJSON, err := json.Marshal(inputPayload)
 		if err != nil {
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return fmt.Errorf("workflowRunner.executeWorkflowRun marshal node input for node %q: %w", node.ID, err)
@@ -533,7 +635,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		if !ok {
 			err := fmt.Errorf("workflowRunner.executeWorkflowRun: executor not found for node type %q", node.Type)
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", err.Error())
-			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": err.Error()}})
+			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]TypedValue{"error": {Type: PortTypeString, Value: err.Error()}})
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
@@ -552,6 +654,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			NodeRun:     nodeRun,
 			Node:        node,
 			Folder:      folder,
+			SourceDir:   run.SourceDir,
 			Inputs:      inputs,
 		}
 
@@ -565,7 +668,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		}
 		if execErr != nil {
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", execErr.Error())
-			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": execErr.Error()}})
+			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]TypedValue{"error": {Type: PortTypeString, Value: execErr.Error()}})
 			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, nil, execErr, nodeStartedAt)
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
@@ -583,8 +686,11 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		if execOutput.Status == "" {
 			execOutput.Status = ExecutionSuccess
 		}
+		if execOutput.Outputs == nil {
+			execOutput.Outputs = map[string]TypedValue{}
+		}
 
-		outputJSON, marshalErr := json.Marshal(execOutput.Outputs)
+		outputJSON, marshalErr := s.marshalTypedValuesJSON(execOutput.Outputs)
 		if marshalErr != nil {
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return fmt.Errorf("workflowRunner.executeWorkflowRun marshal node output for node %q: %w", node.ID, marshalErr)
@@ -592,6 +698,27 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 
 		if execOutput.Status == ExecutionPending {
 			errMsg := execOutput.PendingReason
+			persistedResumeData := make(map[string]any)
+			for key, value := range resumeData {
+				persistedResumeData[key] = value
+			}
+			if pendingState := pendingResumeState(execOutput.Outputs); len(pendingState) > 0 {
+				for key, value := range pendingState {
+					persistedResumeData[key] = value
+				}
+			}
+
+			if len(persistedResumeData) > 0 {
+				encodedResumeData, encodeErr := json.Marshal(persistedResumeData)
+				if encodeErr != nil {
+					_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+					return fmt.Errorf("workflowRunner.executeWorkflowRun marshal resume data for node %q: %w", node.ID, encodeErr)
+				}
+				if err := s.nodeRuns.UpdateResumeData(ctx, nodeRun.ID, string(encodedResumeData)); err != nil {
+					_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+					return fmt.Errorf("workflowRunner.executeWorkflowRun persist resume data for node run %q: %w", nodeRun.ID, err)
+				}
+			}
 			if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "waiting_input", string(outputJSON), errMsg); err != nil {
 				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 				return fmt.Errorf("workflowRunner.executeWorkflowRun update waiting_input for node run %q: %w", nodeRun.ID, err)
@@ -619,7 +746,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 				errMsg = "node returned failure status"
 			}
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", string(outputJSON), errMsg)
-			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, []any{map[string]any{"error": errMsg}})
+			_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]TypedValue{"error": {Type: PortTypeString, Value: errMsg}})
 			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, fmt.Errorf("%s", errMsg), nodeStartedAt)
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			s.publish("workflow_run.node_failed", map[string]any{
@@ -639,12 +766,14 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			return fmt.Errorf("workflowRunner.executeWorkflowRun update finish for node run %q: %w", nodeRun.ID, err)
 		}
 
-		outputCache[node.ID] = append([]any(nil), execOutput.Outputs...)
+		outputCache[node.ID] = cloneTypedValueMap(execOutput.Outputs)
 
-		folder, err = s.folders.GetByID(ctx, run.FolderID)
-		if err != nil {
-			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-			return fmt.Errorf("workflowRunner.executeWorkflowRun reload folder %q after node %q: %w", run.FolderID, node.ID, err)
+		if strings.TrimSpace(run.FolderID) != "" {
+			folder, err = s.folders.GetByID(ctx, run.FolderID)
+			if err != nil {
+				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+				return fmt.Errorf("workflowRunner.executeWorkflowRun reload folder %q after node %q: %w", run.FolderID, node.ID, err)
+			}
 		}
 
 		if err := s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, execOutput.Outputs); err != nil {
@@ -672,7 +801,29 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	return nil
 }
 
-func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, input NodeExecutionInput, currentFolder *repository.Folder, outputs []any, execErr error, startedAt time.Time) error {
+func pendingResumeState(outputs map[string]TypedValue) map[string]any {
+	if len(outputs) == 0 {
+		return nil
+	}
+
+	stateOutput, ok := outputs["state"]
+	if !ok {
+		return nil
+	}
+	state, ok := stateOutput.Value.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	copyState := make(map[string]any, len(state))
+	for key, value := range state {
+		copyState[key] = value
+	}
+
+	return copyState
+}
+
+func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, input NodeExecutionInput, currentFolder *repository.Folder, outputs map[string]TypedValue, execErr error, startedAt time.Time) error {
 	if s.auditSvc == nil {
 		return nil
 	}
@@ -704,13 +855,13 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 			}
 		}
 	case compressNodeExecutorType:
-		archives := stringSliceOutput(outputs, 1)
+		archives := stringSliceOutput(outputs, "archives")
 		detail["archive_paths"] = archives
 		if len(archives) > 0 {
 			folderPath = archives[0]
 		}
 	case thumbnailNodeExecutorType:
-		thumbnails := stringSliceOutput(outputs, 1)
+		thumbnails := stringSliceOutput(outputs, "thumbnail_paths")
 		detail["thumbnail_paths"] = thumbnails
 		if len(thumbnails) > 0 {
 			folderPath = thumbnails[0]
@@ -771,8 +922,8 @@ func (s *WorkflowRunnerService) writeWorkflowRunAudit(ctx context.Context, run *
 	}
 
 	detail := map[string]any{
-		"workflow_run_id":  workflowRunIDFromInput(run),
-		"workflow_def_id":  run.WorkflowDefID,
+		"workflow_run_id": workflowRunIDFromInput(run),
+		"workflow_def_id": run.WorkflowDefID,
 	}
 	if auditErr != nil {
 		detail["error"] = auditErr.Error()
@@ -825,12 +976,17 @@ func folderPathForAudit(primary *repository.Folder, fallback *repository.Folder)
 	return ""
 }
 
-func moveResultsForAudit(outputs []any) []MoveResult {
-	if len(outputs) < 2 {
+func moveResultsForAudit(outputs map[string]TypedValue) []MoveResult {
+	if len(outputs) == 0 {
 		return nil
 	}
 
-	switch typed := outputs[1].(type) {
+	resultOutput, ok := outputs["results"]
+	if !ok {
+		return nil
+	}
+
+	switch typed := resultOutput.Value.(type) {
 	case []MoveResult:
 		return append([]MoveResult(nil), typed...)
 	case MoveResult:
@@ -840,12 +996,13 @@ func moveResultsForAudit(outputs []any) []MoveResult {
 	}
 }
 
-func stringSliceOutput(outputs []any, index int) []string {
-	if index < 0 || index >= len(outputs) {
+func stringSliceOutput(outputs map[string]TypedValue, key string) []string {
+	output, ok := outputs[key]
+	if !ok {
 		return nil
 	}
 
-	return uniqueCompactStringSlice(anyToStringSlice(outputs[index]))
+	return uniqueCompactStringSlice(anyToStringSlice(output.Value))
 }
 
 func errorString(err error) string {
@@ -856,28 +1013,98 @@ func errorString(err error) string {
 	return err.Error()
 }
 
+func (s *WorkflowRunnerService) schemaForNode(nodeType string) NodeSchema {
+	executor, ok := s.executors[nodeType]
+	if !ok {
+		return NodeSchema{}
+	}
+	return executor.Schema()
+}
+
+func (s *WorkflowRunnerService) resolveNodeInputs(node repository.WorkflowGraphNode, outputCache map[string]map[string]TypedValue, sourceDir string) map[string]*TypedValue {
+	schema := s.schemaForNode(node.Type)
+	inputs := make(map[string]*TypedValue, len(schema.InputDefs()))
+	for _, port := range schema.InputDefs() {
+		inputs[port.Name] = nil
+	}
+
+	for portName, spec := range node.Inputs {
+		if spec.ConstValue != nil {
+			portType := inferPortTypeForInput(schema, portName)
+			inputs[portName] = &TypedValue{Type: portType, Value: *spec.ConstValue}
+			continue
+		}
+		if spec.LinkSource == nil {
+			continue
+		}
+
+		sourceOutputs := outputCache[spec.LinkSource.SourceNodeID]
+		sourcePort := strings.TrimSpace(spec.LinkSource.SourcePort)
+		if sourcePort == "" {
+			inputs[portName] = nil
+			continue
+		}
+		value, ok := sourceOutputs[sourcePort]
+		if !ok {
+			inputs[portName] = nil
+			continue
+		}
+		copied := value
+		inputs[portName] = &copied
+	}
+
+	if strings.TrimSpace(sourceDir) != "" {
+		if _, exists := inputs["source_dir"]; exists && inputs["source_dir"] == nil {
+			inputs["source_dir"] = &TypedValue{Type: PortTypePath, Value: sourceDir}
+		}
+	}
+
+	return inputs
+}
+
+func shouldSkipNode(node repository.WorkflowGraphNode, inputs map[string]*TypedValue, schema NodeSchema) bool {
+	for _, port := range schema.InputDefs() {
+		if !port.Required || port.Lazy {
+			continue
+		}
+		if _, exists := node.Inputs[port.Name]; !exists {
+			continue
+		}
+		if value, ok := inputs[port.Name]; !ok || value == nil || value.Value == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *WorkflowRunnerService) createNodeSnapshot(
 	ctx context.Context,
 	run *repository.WorkflowRun,
 	nodeRun *repository.NodeRun,
 	kind string,
 	folder *repository.Folder,
-	outputs []any,
+	outputs map[string]TypedValue,
 ) error {
-	manifestJSON, err := json.Marshal(map[string]any{
-		"folder_id":   folder.ID,
-		"folder_path": folder.Path,
-		"name":        folder.Name,
-		"category":    folder.Category,
-		"status":      folder.Status,
-	})
+	manifest := map[string]any{}
+	if folder != nil {
+		manifest["folder_id"] = folder.ID
+		manifest["folder_path"] = folder.Path
+		manifest["name"] = folder.Name
+		manifest["category"] = folder.Category
+		manifest["status"] = folder.Status
+	}
+	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("workflowRunner.createNodeSnapshot marshal fs manifest for node run %q: %w", nodeRun.ID, err)
 	}
 
 	outputJSON := ""
 	if outputs != nil {
-		data, marshalErr := json.Marshal(map[string]any{"outputs": outputs})
+		encodedOutputs, encodeErr := typedValueMapToJSON(outputs, s.typeRegistry)
+		if encodeErr != nil {
+			return fmt.Errorf("workflowRunner.createNodeSnapshot encode typed outputs for node run %q: %w", nodeRun.ID, encodeErr)
+		}
+		data, marshalErr := json.Marshal(map[string]any{"outputs": encodedOutputs})
 		if marshalErr != nil {
 			return fmt.Errorf("workflowRunner.createNodeSnapshot marshal output for node run %q: %w", nodeRun.ID, marshalErr)
 		}
@@ -961,6 +1188,155 @@ func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {
 	return graph, nil
 }
 
+func (s *WorkflowRunnerService) normalizeGraphPortReferences(graph *repository.WorkflowGraph) {
+	if graph == nil {
+		return
+	}
+
+	nodeTypeByID := make(map[string]string, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		nodeTypeByID[node.ID] = node.Type
+	}
+
+	for nodeIndex := range graph.Nodes {
+		node := &graph.Nodes[nodeIndex]
+		for inputName, spec := range node.Inputs {
+			if spec.LinkSource == nil {
+				continue
+			}
+			if strings.TrimSpace(spec.LinkSource.SourcePort) != "" {
+				spec.LinkSource.OutputPortIndex = 0
+				node.Inputs[inputName] = spec
+				continue
+			}
+
+			sourceType := nodeTypeByID[spec.LinkSource.SourceNodeID]
+			sourceSchema := s.schemaForNode(sourceType)
+			index := spec.LinkSource.OutputPortIndex
+			if index < 0 || index >= len(sourceSchema.OutputDefs()) {
+				continue
+			}
+
+			spec.LinkSource.SourcePort = sourceSchema.OutputDefs()[index].Name
+			spec.LinkSource.OutputPortIndex = 0
+			node.Inputs[inputName] = spec
+		}
+	}
+}
+
+func typedInputValuesForJSON(inputs map[string]*TypedValue) map[string]any {
+	if len(inputs) == 0 {
+		return map[string]any{}
+	}
+
+	out := make(map[string]any, len(inputs))
+	for key, value := range inputs {
+		if value == nil {
+			out[key] = nil
+			continue
+		}
+		out[key] = value.Value
+	}
+
+	return out
+}
+
+func cloneTypedValueMap(values map[string]TypedValue) map[string]TypedValue {
+	if len(values) == 0 {
+		return map[string]TypedValue{}
+	}
+
+	out := make(map[string]TypedValue, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+
+	return out
+}
+
+func inferPortTypeForInput(schema NodeSchema, portName string) PortType {
+	if port := schema.InputPort(portName); port != nil {
+		if port.Type != "" {
+			return port.Type
+		}
+	}
+
+	return PortTypeJSON
+}
+
+func inferPortTypeForOutput(schema NodeSchema, portName string) PortType {
+	if port := schema.OutputPort(portName); port != nil {
+		if port.Type != "" {
+			return port.Type
+		}
+	}
+
+	return PortTypeJSON
+}
+
+func typedValueMapToJSON(values map[string]TypedValue, registry *TypeRegistry) (map[string]TypedValueJSON, error) {
+	out := make(map[string]TypedValueJSON, len(values))
+	for key, value := range values {
+		encoded, err := registry.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("encode output %q: %w", key, err)
+		}
+		out[key] = encoded
+	}
+
+	return out, nil
+}
+
+func typedValueMapFromJSON(values map[string]TypedValueJSON, registry *TypeRegistry) (map[string]TypedValue, error) {
+	out := make(map[string]TypedValue, len(values))
+	for key, value := range values {
+		decoded, err := registry.Unmarshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("decode output %q: %w", key, err)
+		}
+		out[key] = decoded
+	}
+
+	return out, nil
+}
+
+func (s *WorkflowRunnerService) marshalTypedValuesJSON(values map[string]TypedValue) (string, error) {
+	encoded, err := typedValueMapToJSON(values, s.typeRegistry)
+	if err != nil {
+		return "", err
+	}
+
+	raw, err := json.Marshal(encoded)
+	if err != nil {
+		return "", err
+	}
+
+	return string(raw), nil
+}
+
+func (s *WorkflowRunnerService) parseNodeOutputsForSchema(rawOutput string, schema NodeSchema) (map[string]TypedValue, error) {
+	var typedEncoded map[string]TypedValueJSON
+	if err := json.Unmarshal([]byte(rawOutput), &typedEncoded); err == nil && len(typedEncoded) > 0 {
+		return typedValueMapFromJSON(typedEncoded, s.typeRegistry)
+	}
+
+	legacy, err := parseNodeOutputs(rawOutput)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]TypedValue, len(schema.OutputDefs()))
+	for index, value := range legacy {
+		if index < 0 || index >= len(schema.OutputDefs()) {
+			continue
+		}
+		port := schema.OutputDefs()[index]
+		out[port.Name] = TypedValue{Type: inferPortTypeForOutput(schema, port.Name), Value: value}
+	}
+
+	return out, nil
+}
+
 func parseNodeOutputs(rawOutput string) ([]any, error) {
 	var outputs []any
 	if err := json.Unmarshal([]byte(rawOutput), &outputs); err == nil {
@@ -975,6 +1351,32 @@ func parseNodeOutputs(rawOutput string) ([]any, error) {
 	}
 
 	return wrapped.Outputs, nil
+}
+
+func parseTypedNodeOutputs(rawOutput string) (map[string]TypedValue, bool, error) {
+	registry := NewTypeRegistry()
+
+	var direct map[string]TypedValueJSON
+	if err := json.Unmarshal([]byte(rawOutput), &direct); err == nil && len(direct) > 0 {
+		decoded, decodeErr := typedValueMapFromJSON(direct, registry)
+		if decodeErr != nil {
+			return nil, false, decodeErr
+		}
+		return decoded, true, nil
+	}
+
+	var wrapped struct {
+		Outputs map[string]TypedValueJSON `json:"outputs"`
+	}
+	if err := json.Unmarshal([]byte(rawOutput), &wrapped); err == nil && len(wrapped.Outputs) > 0 {
+		decoded, decodeErr := typedValueMapFromJSON(wrapped.Outputs, registry)
+		if decodeErr != nil {
+			return nil, false, decodeErr
+		}
+		return decoded, true, nil
+	}
+
+	return nil, false, nil
 }
 
 func topologicalNodes(graph *repository.WorkflowGraph) ([]repository.WorkflowGraphNode, error) {
@@ -1045,10 +1447,10 @@ func (e *triggerNodeExecutor) Schema() NodeSchema {
 
 func (e *triggerNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
 	if input.Folder == nil {
-		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder": {Type: PortTypeJSON, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
-	return NodeExecutionOutput{Outputs: []any{input.Folder}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder": {Type: PortTypeJSON, Value: input.Folder}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *triggerNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -1068,39 +1470,58 @@ func (e *extRatioClassifierNodeExecutor) Type() string {
 }
 
 func (e *extRatioClassifierNodeExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Ext Ratio Classifier", Description: "Classify folder by extension ratio"}
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "Ext Ratio Classifier",
+		Description: "Classify folder trees by extension ratio",
+		InputPorts: []NodeSchemaPort{
+			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
+			{Name: "folder", Description: "FOLDER_TREE legacy input", Required: false},
+		},
+		OutputPorts: []NodeSchemaPort{{
+			Name:        "signal",
+			Description: "CLASSIFICATION_SIGNAL_LIST",
+		}},
+	}
 }
 
-func (e *extRatioClassifierNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	if input.Folder == nil {
-		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+func (e *extRatioClassifierNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
+	rawTrees, ok := firstPresentTyped(input.Inputs, "trees", "folder")
+	if !ok {
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
-	entries, err := e.fs.ReadDir(ctx, input.Folder.Path)
+	trees, found, err := parseFolderTreesInput(rawTrees)
 	if err != nil {
-		return NodeExecutionOutput{}, fmt.Errorf("extRatioClassifier.Execute read dir %q: %w", input.Folder.Path, err)
+		return NodeExecutionOutput{}, fmt.Errorf("extRatioClassifier.Execute parse trees: %w", err)
+	}
+	if !found {
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
-	fileNames := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir {
-			continue
+	signals := make([]ClassificationSignal, 0, len(trees))
+	for _, tree := range trees {
+		fileNames := make([]string, 0, len(tree.Files))
+		for _, file := range tree.Files {
+			fileNames = append(fileNames, file.Name)
 		}
-		fileNames = append(fileNames, entry.Name)
+
+		category := Classify(tree.Name, fileNames)
+		confidence := 0.85
+		if category == "other" {
+			confidence = 0.5
+		}
+		reason := fmt.Sprintf("ext-ratio: %s", category)
+
+		signals = append(signals, ClassificationSignal{
+			SourcePath: tree.Path,
+			Category:   category,
+			Confidence: confidence,
+			Reason:     reason,
+		})
 	}
 
-	category := Classify(input.Folder.Name, fileNames)
-	confidence := 0.85
-	if category == "other" {
-		confidence = 0.5
-	}
-	reason := fmt.Sprintf("ext-ratio: %s", category)
-
-	return NodeExecutionOutput{Outputs: []any{ClassificationSignal{
-		Category:   category,
-		Confidence: confidence,
-		Reason:     reason,
-	}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: signals}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *extRatioClassifierNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -1148,10 +1569,22 @@ func (e *moveNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput
 	input.Folder.Path = dst
 
 	if input.Folder == nil {
-		return NodeExecutionOutput{Outputs: []any{nil}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder": {Type: PortTypeJSON, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
 
-	return NodeExecutionOutput{Outputs: []any{input.Folder}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder": {Type: PortTypeJSON, Value: input.Folder}}, Status: ExecutionSuccess}, nil
+}
+
+func firstPresentTyped(inputs map[string]*TypedValue, keys ...string) (any, bool) {
+	for _, key := range keys {
+		value, ok := inputs[key]
+		if !ok || value == nil || value.Value == nil {
+			continue
+		}
+		return value.Value, true
+	}
+
+	return nil, false
 }
 
 func (e *moveNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

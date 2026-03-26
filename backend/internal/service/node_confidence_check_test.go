@@ -2,140 +2,50 @@ package service
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"github.com/liqiye/classifier/internal/repository"
 )
 
-type WorkflowGraphNode = repository.WorkflowGraphNode
-
-func makeConfidenceCheckInput(signal any, threshold *float64) NodeExecutionInput {
-	cfg := map[string]any{}
-	if threshold != nil {
-		cfg["threshold"] = *threshold
-	}
-
-	return NodeExecutionInput{
-		Node:   WorkflowGraphNode{Config: cfg},
-		Inputs: map[string]any{"signal": signal},
-	}
-}
-
-func TestConfidenceCheckExecutor(t *testing.T) {
+func TestConfidenceCheckExecutorBatch(t *testing.T) {
 	t.Parallel()
 
 	executor := newConfidenceCheckExecutor()
-	threshold := 0.75
-
-	tests := []struct {
-		name            string
-		input           NodeExecutionInput
-		expectedStatus  ExecutionStatus
-		expectedOutput0 any
-		expectedOutput1 any
-	}{
-		{
-			name: "high_confidence",
-			input: makeConfidenceCheckInput(ClassificationSignal{
-				Category:   "video",
-				Confidence: 0.9,
-				Reason:     "high",
-			}, &threshold),
-			expectedStatus: ExecutionSuccess,
-			expectedOutput0: ClassificationSignal{
-				Category:   "video",
-				Confidence: 0.9,
-				Reason:     "high",
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{Config: map[string]any{"threshold": 0.75}},
+		Inputs: testInputs(map[string]any{
+			"signals": []ClassificationSignal{
+				{SourcePath: "/src/high", Category: "video", Confidence: 0.9, Reason: "high"},
+				{SourcePath: "/src/low", Category: "photo", Confidence: 0.5, Reason: "low"},
+				{SourcePath: "/src/empty", IsEmpty: true},
 			},
-			expectedOutput1: nil,
-		},
-		{
-			name: "low_confidence",
-			input: makeConfidenceCheckInput(ClassificationSignal{
-				Category:   "photo",
-				Confidence: 0.5,
-				Reason:     "low",
-			}, &threshold),
-			expectedStatus:  ExecutionSuccess,
-			expectedOutput0: nil,
-			expectedOutput1: ClassificationSignal{
-				Category:   "photo",
-				Confidence: 0.5,
-				Reason:     "low",
-			},
-		},
-		{
-			name: "exactly_threshold",
-			input: makeConfidenceCheckInput(ClassificationSignal{
-				Category:   "manga",
-				Confidence: 0.75,
-				Reason:     "exact",
-			}, &threshold),
-			expectedStatus: ExecutionSuccess,
-			expectedOutput0: ClassificationSignal{
-				Category:   "manga",
-				Confidence: 0.75,
-				Reason:     "exact",
-			},
-			expectedOutput1: nil,
-		},
-		{
-			name:            "nil_signal",
-			input:           makeConfidenceCheckInput(nil, &threshold),
-			expectedStatus:  ExecutionSuccess,
-			expectedOutput0: nil,
-			expectedOutput1: nil,
-		},
-		{
-			name: "default_threshold",
-			input: makeConfidenceCheckInput(ClassificationSignal{
-				Category:   "video",
-				Confidence: 0.8,
-				Reason:     "default-threshold",
-			}, nil),
-			expectedStatus: ExecutionSuccess,
-			expectedOutput0: ClassificationSignal{
-				Category:   "video",
-				Confidence: 0.8,
-				Reason:     "default-threshold",
-			},
-			expectedOutput1: nil,
-		},
-		{
-			name:            "wrong_type",
-			input:           makeConfidenceCheckInput("not-a-signal", &threshold),
-			expectedStatus:  ExecutionSuccess,
-			expectedOutput0: nil,
-			expectedOutput1: nil,
-		},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out.Status != ExecutionSuccess {
+		t.Fatalf("status = %q, want success", out.Status)
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			out, err := executor.Execute(context.Background(), tt.input)
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-
-			if out.Status != tt.expectedStatus {
-				t.Fatalf("status = %q, want %q", out.Status, tt.expectedStatus)
-			}
-
-			if len(out.Outputs) != 2 {
-				t.Fatalf("len(outputs) = %d, want 2", len(out.Outputs))
-			}
-
-			if !reflect.DeepEqual(out.Outputs[0], tt.expectedOutput0) {
-				t.Fatalf("port0 = %#v, want %#v", out.Outputs[0], tt.expectedOutput0)
-			}
-
-			if !reflect.DeepEqual(out.Outputs[1], tt.expectedOutput1) {
-				t.Fatalf("port1 = %#v, want %#v", out.Outputs[1], tt.expectedOutput1)
-			}
-		})
+	high, ok := out.Outputs["high"].Value.([]ClassificationSignal)
+	if !ok {
+		t.Fatalf("high type = %T, want []ClassificationSignal", out.Outputs["high"].Value)
+	}
+	low, ok := out.Outputs["low"].Value.([]ClassificationSignal)
+	if !ok {
+		t.Fatalf("low type = %T, want []ClassificationSignal", out.Outputs["low"].Value)
+	}
+	if len(high) != 3 || len(low) != 3 {
+		t.Fatalf("len(high/low) = %d/%d, want 3/3", len(high), len(low))
+	}
+	if high[0].Category != "video" || high[0].SourcePath != "/src/high" || low[0].IsEmpty != true {
+		t.Fatalf("high[0]/low[0] = %+v / %+v, want high retained and low empty", high[0], low[0])
+	}
+	if low[1].Category != "photo" || low[1].SourcePath != "/src/low" || high[1].IsEmpty != true {
+		t.Fatalf("high[1]/low[1] = %+v / %+v, want low retained and high empty", high[1], low[1])
+	}
+	if !high[2].IsEmpty || !low[2].IsEmpty {
+		t.Fatalf("high[2]/low[2] = %+v / %+v, want both empty", high[2], low[2])
 	}
 }

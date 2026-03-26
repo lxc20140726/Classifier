@@ -23,7 +23,7 @@ func (e *stubCustomExecutor) Schema() NodeSchema {
 }
 
 func (e *stubCustomExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
-	return NodeExecutionOutput{Outputs: []any{true}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"ok": {Type: PortTypeBoolean, Value: true}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *stubCustomExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -41,11 +41,11 @@ func (e *produceInputExecutor) Type() string {
 }
 
 func (e *produceInputExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Produce Input", Description: "Produce a fixed output for tests"}
+	return NodeSchema{Type: e.Type(), Label: "Produce Input", Description: "Produce a fixed output for tests", OutputPorts: []NodeSchemaPort{{Name: "out", Type: PortTypeString}}}
 }
 
 func (e *produceInputExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
-	return NodeExecutionOutput{Outputs: []any{"hello-port"}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"out": {Type: PortTypeString, Value: "hello-port"}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *produceInputExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -69,7 +69,29 @@ type slowParallelExecutor struct {
 
 type auditOutputExecutor struct {
 	nodeType string
-	outputs  []any
+	outputs  map[string]TypedValue
+}
+
+type namedPortProducerExecutor struct{}
+
+type namedPortConsumerExecutor struct {
+	seen string
+}
+
+type requiredInputProbeExecutor struct {
+	nodeType  string
+	portName  string
+	lazy      bool
+	executed  int32
+	lastValue any
+}
+
+type resumeDataMergeExecutor struct {
+	lastResume map[string]any
+}
+
+type processingItemSourceExecutor struct {
+	items []ProcessingItem
 }
 
 func (e *consumeInputExecutor) Type() string {
@@ -77,7 +99,7 @@ func (e *consumeInputExecutor) Type() string {
 }
 
 func (e *consumeInputExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Consume Input", Description: "Consume upstream output for tests"}
+	return NodeSchema{Type: e.Type(), Label: "Consume Input", Description: "Consume upstream output for tests", InputPorts: []NodeSchemaPort{{Name: "upstream", Type: PortTypeString, Required: true}}, OutputPorts: []NodeSchemaPort{{Name: "echo", Type: PortTypeString}}}
 }
 
 func (e *consumeInputExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
@@ -85,9 +107,12 @@ func (e *consumeInputExecutor) Execute(_ context.Context, input NodeExecutionInp
 	if !ok {
 		return NodeExecutionOutput{}, nil
 	}
-	text, _ := raw.(string)
+	if raw == nil {
+		return NodeExecutionOutput{}, nil
+	}
+	text, _ := raw.Value.(string)
 	e.seen = text
-	return NodeExecutionOutput{Outputs: []any{text}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"echo": {Type: PortTypeString, Value: text}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *consumeInputExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -124,7 +149,7 @@ func (e *slowParallelExecutor) Execute(_ context.Context, input NodeExecutionInp
 
 	time.Sleep(50 * time.Millisecond)
 	atomic.AddInt32(&e.active, -1)
-	return NodeExecutionOutput{Outputs: []any{input.Folder.ID}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder_id": {Type: PortTypeString, Value: input.Folder.ID}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *slowParallelExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -152,6 +177,140 @@ func (e *auditOutputExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ 
 }
 
 func (e *auditOutputExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *namedPortProducerExecutor) Type() string {
+	return "named-port-producer"
+}
+
+func (e *namedPortProducerExecutor) Schema() NodeSchema {
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "Named Port Producer",
+		Description: "Emit multi-port outputs for named-port compatibility tests",
+		OutputPorts: []NodeSchemaPort{{Name: "first"}, {Name: "second"}},
+	}
+}
+
+func (e *namedPortProducerExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"first": {Type: PortTypeString, Value: "first-value"}, "second": {Type: PortTypeString, Value: "second-value"}}, Status: ExecutionSuccess}, nil
+}
+
+func (e *namedPortProducerExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *namedPortProducerExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *namedPortConsumerExecutor) Type() string {
+	return "named-port-consumer"
+}
+
+func (e *namedPortConsumerExecutor) Schema() NodeSchema {
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "Named Port Consumer",
+		Description: "Consume upstream output through named source port",
+		InputPorts:  []NodeSchemaPort{{Name: "upstream", Required: true}},
+	}
+}
+
+func (e *namedPortConsumerExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
+	if input.Inputs["upstream"] != nil {
+		if value, ok := input.Inputs["upstream"].Value.(string); ok {
+			e.seen = value
+		}
+	}
+
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"seen": {Type: PortTypeString, Value: e.seen}}, Status: ExecutionSuccess}, nil
+}
+
+func (e *namedPortConsumerExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *namedPortConsumerExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *requiredInputProbeExecutor) Type() string {
+	return e.nodeType
+}
+
+func (e *requiredInputProbeExecutor) Schema() NodeSchema {
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       e.Type(),
+		Description: "Probe skip behavior for required inputs",
+		InputPorts:  []NodeSchemaPort{{Name: e.portName, Required: true, Lazy: e.lazy}},
+	}
+}
+
+func (e *requiredInputProbeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
+	atomic.AddInt32(&e.executed, 1)
+	if input.Inputs[e.portName] != nil {
+		e.lastValue = input.Inputs[e.portName].Value
+	}
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"value": {Type: PortTypeJSON, Value: e.lastValue}}, Status: ExecutionSuccess}, nil
+}
+
+func (e *requiredInputProbeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *requiredInputProbeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *resumeDataMergeExecutor) Type() string {
+	return "resume-data-merge"
+}
+
+func (e *resumeDataMergeExecutor) Schema() NodeSchema {
+	return NodeSchema{Type: e.Type(), Label: "Resume Data Merge", Description: "Verify DB-backed resume-data merge behavior"}
+}
+
+func (e *resumeDataMergeExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{Status: ExecutionPending, PendingReason: "need resume data"}, nil
+}
+
+func (e *resumeDataMergeExecutor) Resume(_ context.Context, _ NodeExecutionInput, resumeData map[string]any) (NodeExecutionOutput, error) {
+	e.lastResume = make(map[string]any, len(resumeData))
+	for key, value := range resumeData {
+		e.lastResume[key] = value
+	}
+
+	if _, ok := resumeData["category"]; !ok {
+		return NodeExecutionOutput{Status: ExecutionPending, PendingReason: "category is required"}, nil
+	}
+
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"category": {Type: PortTypeString, Value: resumeData["category"]}}, Status: ExecutionSuccess}, nil
+}
+
+func (e *resumeDataMergeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *processingItemSourceExecutor) Type() string {
+	return "processing-item-source"
+}
+
+func (e *processingItemSourceExecutor) Schema() NodeSchema {
+	return NodeSchema{Type: e.Type(), Label: "Processing Item Source", Description: "Emit processing items for rollback tests", OutputPorts: []NodeSchemaPort{{Name: "items", Type: PortTypeProcessingItemList}}}
+}
+
+func (e *processingItemSourceExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), e.items...)}}, Status: ExecutionSuccess}, nil
+}
+
+func (e *processingItemSourceExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *processingItemSourceExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
 }
 
@@ -301,7 +460,7 @@ func TestWorkflowRunnerServicePortInputPropagation(t *testing.T) {
 				},
 			}},
 		},
-		Edges: []repository.WorkflowGraphEdge{{Source: "n1", SourcePort: 0, Target: "n2", TargetPort: 0}},
+		Edges: []repository.WorkflowGraphEdge{{Source: "n1", SourcePortIndex: 0, Target: "n2", TargetPortIndex: 0}},
 	}
 	graphJSON, err := json.Marshal(graph)
 	if err != nil {
@@ -432,7 +591,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 	testCases := []struct {
 		name       string
 		nodeType   string
-		outputs    []any
+		outputs    map[string]TypedValue
 		action     string
 		result     string
 		folderPath string
@@ -440,7 +599,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 		{
 			name:       "move-node",
 			nodeType:   "move-node",
-			outputs:    []any{[]ProcessingItem{{FolderID: folder.ID, SourcePath: "/target/folder-audit", FolderName: folder.Name}}, []MoveResult{{SourcePath: folder.Path, TargetPath: "/target/folder-audit", Status: "moved"}}},
+			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/target/folder-audit", FolderName: folder.Name}}}, "results": {Type: PortTypeMoveResultList, Value: []MoveResult{{SourcePath: folder.Path, TargetPath: "/target/folder-audit", Status: "moved"}}}},
 			action:     "workflow.move-node",
 			result:     "moved",
 			folderPath: "/target/folder-audit",
@@ -448,7 +607,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 		{
 			name:       "compress-node",
 			nodeType:   "compress-node",
-			outputs:    []any{[]ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}, []string{"/archives/folder-audit.cbz"}},
+			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}}, "archives": {Type: PortTypeStringList, Value: []string{"/archives/folder-audit.cbz"}}},
 			action:     "workflow.compress-node",
 			result:     "success",
 			folderPath: "/archives/folder-audit.cbz",
@@ -456,7 +615,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 		{
 			name:       "thumbnail-node",
 			nodeType:   "thumbnail-node",
-			outputs:    []any{[]ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}, []string{"/thumbs/folder-audit.jpg"}},
+			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}}, "thumbnail_paths": {Type: PortTypeStringList, Value: []string{"/thumbs/folder-audit.jpg"}}},
 			action:     "workflow.thumbnail-node",
 			result:     "success",
 			folderPath: "/thumbs/folder-audit.jpg",
@@ -505,6 +664,301 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 				t.Fatalf("audit folder_path = %q, want %q", logs[0].FolderPath, tc.folderPath)
 			}
 		})
+	}
+}
+
+func TestWorkflowRunnerServiceNamedSourcePortCompatibility(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "n1", Type: "named-port-producer", Enabled: true},
+			{ID: "n2", Type: "named-port-consumer", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"upstream": {
+					LinkSource: &repository.NodeLinkSource{SourceNodeID: "n1", SourcePort: "second", OutputPortIndex: 0},
+				},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{{Source: "n1", SourcePort: "second", Target: "n2", TargetPort: "upstream"}},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+
+	def := &repository.WorkflowDefinition{ID: "wf-named-port", Name: "wf-named-port", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	consumer := &namedPortConsumerExecutor{}
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc.RegisterExecutor(&namedPortProducerExecutor{})
+	svc.RegisterExecutor(consumer)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+	if consumer.seen != "second-value" {
+		t.Fatalf("consumer input = %q, want second-value", consumer.seen)
+	}
+}
+
+func TestWorkflowRunnerServiceLazyRequiredInputSkipSemantics(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	strict := &requiredInputProbeExecutor{nodeType: "required-strict", portName: "upstream", lazy: false}
+	lazy := &requiredInputProbeExecutor{nodeType: "required-lazy", portName: "upstream", lazy: true}
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "trigger", Type: "trigger", Enabled: true},
+			{ID: "strict", Type: strict.Type(), Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"upstream": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "trigger", OutputPortIndex: 0}},
+			}},
+			{ID: "lazy", Type: lazy.Type(), Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"upstream": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "trigger", OutputPortIndex: 0}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{Source: "trigger", SourcePortIndex: 0, Target: "strict", TargetPortIndex: 0},
+			{Source: "trigger", SourcePortIndex: 0, Target: "lazy", TargetPortIndex: 0},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+
+	def := &repository.WorkflowDefinition{ID: "wf-lazy-skip", Name: "wf-lazy-skip", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc.RegisterExecutor(strict)
+	svc.RegisterExecutor(lazy)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	nodeRuns, _, err := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 20})
+	if err != nil {
+		t.Fatalf("nodeRunRepo.List() error = %v", err)
+	}
+
+	if got := nodeRunStatusByID(nodeRuns, "strict"); got != "skipped" {
+		t.Fatalf("strict node status = %q, want skipped", got)
+	}
+	if got := nodeRunStatusByID(nodeRuns, "lazy"); got != "succeeded" {
+		t.Fatalf("lazy node status = %q, want succeeded", got)
+	}
+
+	if atomic.LoadInt32(&strict.executed) != 0 {
+		t.Fatalf("strict executed = %d, want 0", atomic.LoadInt32(&strict.executed))
+	}
+	if atomic.LoadInt32(&lazy.executed) != 1 {
+		t.Fatalf("lazy executed = %d, want 1", atomic.LoadInt32(&lazy.executed))
+	}
+}
+
+func TestWorkflowRunnerServiceResumeDataPersistence(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	resumeExecutor := &resumeDataMergeExecutor{}
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{{ID: "resume", Type: resumeExecutor.Type(), Enabled: true}},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+
+	def := &repository.WorkflowDefinition{ID: "wf-resume-persist", Name: "wf-resume-persist", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc.RegisterExecutor(resumeExecutor)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	run := waitWorkflowRunStatus(t, workflowRunRepo, jobID, "waiting_input")
+	if run.ResumeNodeID != "resume" {
+		t.Fatalf("resume node id = %q, want resume", run.ResumeNodeID)
+	}
+
+	if err := svc.ResumeWorkflowRunWithData(ctx, run.ID, map[string]any{"note": "first-pass"}); err != nil {
+		t.Fatalf("ResumeWorkflowRunWithData(first) error = %v", err)
+	}
+
+	run = waitWorkflowRunIDStatus(t, workflowRunRepo, run.ID, "waiting_input")
+	waitingNodeRun, err := nodeRunRepo.GetWaitingInputByWorkflowRunID(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("nodeRunRepo.GetWaitingInputByWorkflowRunID() error = %v", err)
+	}
+
+	var persisted map[string]any
+	if err := json.Unmarshal([]byte(waitingNodeRun.ResumeData), &persisted); err != nil {
+		t.Fatalf("json.Unmarshal(resume_data) error = %v", err)
+	}
+	if persisted["note"] != "first-pass" {
+		t.Fatalf("persisted note = %#v, want first-pass", persisted["note"])
+	}
+
+	if err := svc.ResumeWorkflowRunWithData(ctx, run.ID, map[string]any{"category": "video"}); err != nil {
+		t.Fatalf("ResumeWorkflowRunWithData(second) error = %v", err)
+	}
+
+	run = waitWorkflowRunIDStatus(t, workflowRunRepo, run.ID, "succeeded")
+	if run.Status != "succeeded" {
+		t.Fatalf("workflow run status = %q, want succeeded", run.Status)
+	}
+
+	if resumeExecutor.lastResume["note"] != "first-pass" {
+		t.Fatalf("resume note = %#v, want first-pass", resumeExecutor.lastResume["note"])
+	}
+	if resumeExecutor.lastResume["category"] != "video" {
+		t.Fatalf("resume category = %#v, want video", resumeExecutor.lastResume["category"])
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+}
+
+func TestWorkflowRunnerServicePhase4MoveRollback(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	adapter := fs.NewMockAdapter()
+	adapter.AddDir("/source", []fs.DirEntry{{Name: "album", IsDir: true}})
+	adapter.AddDir("/source/album", []fs.DirEntry{{Name: "001.jpg", IsDir: false, Size: 10}})
+
+	folder := &repository.Folder{ID: "folder-phase4-move-rb", Path: "/source/album", Name: "album", Category: "photo", CategorySource: "workflow", Status: "pending"}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	producer := &processingItemSourceExecutor{items: []ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name, Category: folder.Category}}}
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "source", Type: producer.Type(), Enabled: true},
+			{ID: "move", Type: phase4MoveNodeExecutorType, Enabled: true, Config: map[string]any{"target_dir": "/target"}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "source", SourcePort: "items"}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{{ID: "e1", Source: "source", SourcePort: "items", Target: "move", TargetPort: "items"}},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-phase4-move-rb", Name: "wf-phase4-move-rb", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc.RegisterExecutor(producer)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+
+	moved, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() after move error = %v", err)
+	}
+	if moved.Path != "/target/album" {
+		t.Fatalf("folder path after move = %q, want /target/album", moved.Path)
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	if err := svc.RollbackWorkflowRun(ctx, run.ID); err != nil {
+		t.Fatalf("RollbackWorkflowRun() error = %v", err)
+	}
+
+	rolledBack, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() after rollback error = %v", err)
+	}
+	if rolledBack.Path != "/source/album" {
+		t.Fatalf("folder path after rollback = %q, want /source/album", rolledBack.Path)
+	}
+
+	existsTarget, err := adapter.Exists(ctx, "/target/album")
+	if err != nil {
+		t.Fatalf("adapter.Exists(target) error = %v", err)
+	}
+	if existsTarget {
+		t.Fatalf("target path should not exist after rollback")
+	}
+	existsSource, err := adapter.Exists(ctx, "/source/album")
+	if err != nil {
+		t.Fatalf("adapter.Exists(source) error = %v", err)
+	}
+	if !existsSource {
+		t.Fatalf("source path should exist after rollback")
 	}
 }
 

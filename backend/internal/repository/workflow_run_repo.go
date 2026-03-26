@@ -20,11 +20,12 @@ func (r *SQLiteWorkflowRunRepository) Create(ctx context.Context, item *Workflow
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO workflow_runs (
-	id, job_id, folder_id, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	id, job_id, folder_id, source_dir, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		item.ID,
 		item.JobID,
 		item.FolderID,
+		item.SourceDir,
 		item.WorkflowDefID,
 		item.Status,
 		nullableString(item.ResumeNodeID),
@@ -43,7 +44,7 @@ func (r *SQLiteWorkflowRunRepository) Create(ctx context.Context, item *Workflow
 
 func (r *SQLiteWorkflowRunRepository) GetByID(ctx context.Context, id string) (*WorkflowRun, error) {
 	item, err := scanWorkflowRun(r.db.QueryRowContext(ctx, `
-SELECT id, job_id, folder_id, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
+SELECT id, job_id, folder_id, source_dir, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
 FROM workflow_runs
 WHERE id = ?`, id))
 	if err != nil {
@@ -92,7 +93,7 @@ func (r *SQLiteWorkflowRunRepository) List(ctx context.Context, filter WorkflowR
 	listArgs := append(append([]any{}, args...), limit, offset)
 
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, job_id, folder_id, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
+SELECT id, job_id, folder_id, source_dir, workflow_def_id, status, resume_node_id, last_node_id, external_blocks, error, started_at, finished_at, created_at, updated_at
 FROM workflow_runs`+whereClause+`
 ORDER BY created_at DESC
 LIMIT ? OFFSET ?`, listArgs...)
@@ -169,6 +170,7 @@ func scanWorkflowRun(scanner interface{ Scan(dest ...any) error }) (*WorkflowRun
 	item := &WorkflowRun{}
 	var resumeNodeID sql.NullString
 	var lastNodeID sql.NullString
+	var sourceDir sql.NullString
 	var errMsg sql.NullString
 	var startedAt any
 	var finishedAt any
@@ -179,6 +181,7 @@ func scanWorkflowRun(scanner interface{ Scan(dest ...any) error }) (*WorkflowRun
 		&item.ID,
 		&item.JobID,
 		&item.FolderID,
+		&sourceDir,
 		&item.WorkflowDefID,
 		&item.Status,
 		&resumeNodeID,
@@ -197,6 +200,9 @@ func scanWorkflowRun(scanner interface{ Scan(dest ...any) error }) (*WorkflowRun
 		return nil, err
 	}
 
+	if sourceDir.Valid {
+		item.SourceDir = sourceDir.String
+	}
 	if resumeNodeID.Valid {
 		item.ResumeNodeID = resumeNodeID.String
 	}

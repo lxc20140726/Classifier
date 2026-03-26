@@ -61,8 +61,10 @@ type NodeRunRepository interface {
 	GetByID(ctx context.Context, id string) (*NodeRun, error)
 	List(ctx context.Context, filter NodeRunListFilter) ([]*NodeRun, int, error)
 	GetLatestByNodeID(ctx context.Context, workflowRunID, nodeID string) (*NodeRun, error)
+	GetWaitingInputByWorkflowRunID(ctx context.Context, workflowRunID string) (*NodeRun, error)
 	UpdateStart(ctx context.Context, id, inputJSON string) error
 	UpdateFinish(ctx context.Context, id, status, outputJSON, errMsg string) error
+	UpdateResumeData(ctx context.Context, nodeRunID, resumeData string) error
 	SetResumeToken(ctx context.Context, nodeRunID, token string) error
 }
 

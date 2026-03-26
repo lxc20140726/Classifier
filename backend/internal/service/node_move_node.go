@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -130,21 +131,215 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 	}
 
 	if isList {
-		return NodeExecutionOutput{Outputs: []any{movedItems, results}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: movedItems}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
 	}
 	if len(movedItems) == 0 {
-		return NodeExecutionOutput{Outputs: []any{nil, results}, Status: ExecutionSuccess}, nil
+		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: nil}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
 	}
 
-	return NodeExecutionOutput{Outputs: []any{movedItems[0], results}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: movedItems[0]}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *phase4MoveNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
 	return NodeExecutionOutput{}, fmt.Errorf("%s: Resume not supported", e.Type())
 }
 
-func (e *phase4MoveNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {
+	entries, err := phase4MoveCollectRollbackEntries(input)
+	if err != nil {
+		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
+	}
+
+	fallbackFolderID := ""
+	if input.Folder != nil {
+		fallbackFolderID = strings.TrimSpace(input.Folder.ID)
+	}
+
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.TargetPath) == "" || strings.TrimSpace(entry.SourcePath) == "" || entry.TargetPath == entry.SourcePath {
+			continue
+		}
+
+		exists, err := e.fs.Exists(ctx, entry.TargetPath)
+		if err != nil {
+			return fmt.Errorf("check moved path %q: %w", entry.TargetPath, err)
+		}
+		if !exists {
+			continue
+		}
+
+		if err := e.fs.MoveDir(ctx, entry.TargetPath, entry.SourcePath); err != nil {
+			return fmt.Errorf("move back %q to %q: %w", entry.TargetPath, entry.SourcePath, err)
+		}
+
+		folderID := strings.TrimSpace(entry.FolderID)
+		if folderID == "" && len(entries) == 1 {
+			folderID = fallbackFolderID
+		}
+		if e.folders != nil && folderID != "" {
+			if err := e.folders.UpdatePath(ctx, folderID, entry.SourcePath); err != nil {
+				return fmt.Errorf("update folder path for %q: %w", folderID, err)
+			}
+		}
+	}
+
 	return nil
+}
+
+type phase4MoveRollbackEntry struct {
+	FolderID   string
+	SourcePath string
+	TargetPath string
+}
+
+func phase4MoveCollectRollbackEntries(input NodeRollbackInput) ([]phase4MoveRollbackEntry, error) {
+	entryByTarget := make(map[string]phase4MoveRollbackEntry)
+	collect := func(raw string, source string) error {
+		entries, err := phase4MoveRollbackEntriesFromOutput(raw)
+		if err != nil {
+			return fmt.Errorf("parse %s output: %w", source, err)
+		}
+		for _, entry := range entries {
+			key := strings.TrimSpace(entry.TargetPath)
+			if key == "" {
+				continue
+			}
+			entryByTarget[key] = entry
+		}
+		return nil
+	}
+
+	if input.NodeRun != nil && strings.TrimSpace(input.NodeRun.OutputJSON) != "" {
+		if err := collect(input.NodeRun.OutputJSON, fmt.Sprintf("node run %q", input.NodeRun.ID)); err != nil {
+			return nil, err
+		}
+	}
+	for _, snapshot := range input.Snapshots {
+		if snapshot == nil || snapshot.Kind != "post" || strings.TrimSpace(snapshot.OutputJSON) == "" {
+			continue
+		}
+		if err := collect(snapshot.OutputJSON, fmt.Sprintf("snapshot %q", snapshot.ID)); err != nil {
+			return nil, err
+		}
+	}
+
+	entries := make([]phase4MoveRollbackEntry, 0, len(entryByTarget))
+	for _, entry := range entryByTarget {
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func phase4MoveRollbackEntriesFromOutput(raw string) ([]phase4MoveRollbackEntry, error) {
+	var wrapped struct {
+		Outputs map[string]TypedValueJSON `json:"outputs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && len(wrapped.Outputs) > 0 {
+		decoded, err := typedValueMapFromJSON(wrapped.Outputs, NewTypeRegistry())
+		if err != nil {
+			return nil, err
+		}
+		return phase4MoveRollbackEntriesFromValues(decoded["items"].Value, decoded["results"].Value), nil
+	}
+
+	if typedOutputs, typed, err := parseTypedNodeOutputs(raw); err != nil {
+		return nil, err
+	} else if typed {
+		return phase4MoveRollbackEntriesFromValues(typedOutputs["items"].Value, typedOutputs["results"].Value), nil
+	}
+
+	legacy, err := parseNodeOutputs(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var itemsValue any
+	var resultsValue any
+	if len(legacy) > 0 {
+		itemsValue = legacy[0]
+	}
+	if len(legacy) > 1 {
+		resultsValue = legacy[1]
+	}
+	return phase4MoveRollbackEntriesFromValues(itemsValue, resultsValue), nil
+}
+
+func phase4MoveRollbackEntriesFromValues(itemsValue any, resultsValue any) []phase4MoveRollbackEntry {
+	items, _, _ := categoryRouterToItems(itemsValue)
+	results := phase4MoveResultsFromAny(resultsValue)
+	entries := make([]phase4MoveRollbackEntry, 0, len(results))
+	for index, result := range results {
+		if !strings.EqualFold(strings.TrimSpace(result.Status), "moved") {
+			continue
+		}
+		entry := phase4MoveRollbackEntry{
+			SourcePath: strings.TrimSpace(result.SourcePath),
+			TargetPath: strings.TrimSpace(result.TargetPath),
+		}
+		if index < len(items) {
+			entry.FolderID = strings.TrimSpace(items[index].FolderID)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func phase4MoveResultsFromAny(raw any) []MoveResult {
+	switch typed := raw.(type) {
+	case nil:
+		return nil
+	case MoveResult:
+		return []MoveResult{typed}
+	case *MoveResult:
+		if typed == nil {
+			return nil
+		}
+		return []MoveResult{*typed}
+	case []MoveResult:
+		return append([]MoveResult(nil), typed...)
+	case []*MoveResult:
+		out := make([]MoveResult, 0, len(typed))
+		for _, item := range typed {
+			if item != nil {
+				out = append(out, *item)
+			}
+		}
+		return out
+	case []map[string]any:
+		out := make([]MoveResult, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, phase4MoveResultFromMap(item))
+		}
+		return out
+	case []any:
+		out := make([]MoveResult, 0, len(typed))
+		for _, item := range typed {
+			switch converted := item.(type) {
+			case MoveResult:
+				out = append(out, converted)
+			case *MoveResult:
+				if converted != nil {
+					out = append(out, *converted)
+				}
+			case map[string]any:
+				out = append(out, phase4MoveResultFromMap(converted))
+			}
+		}
+		return out
+	case map[string]any:
+		return []MoveResult{phase4MoveResultFromMap(typed)}
+	default:
+		return nil
+	}
+}
+
+func phase4MoveResultFromMap(raw map[string]any) MoveResult {
+	return MoveResult{
+		SourcePath: stringConfig(raw, "source_path"),
+		TargetPath: stringConfig(raw, "target_path"),
+		Status:     stringConfig(raw, "status"),
+		Error:      stringConfig(raw, "error"),
+	}
 }
 
 func (e *phase4MoveNodeExecutor) resolveDestinationPath(ctx context.Context, destinationPath, conflictPolicy string) (string, bool, error) {

@@ -19,8 +19,8 @@ func (r *SQLiteNodeRunRepository) Create(ctx context.Context, item *NodeRun) err
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO node_runs (
-	id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, error, started_at, finished_at, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+	id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, resume_data, error, started_at, finished_at, created_at
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		item.ID,
 		item.WorkflowRunID,
 		item.NodeID,
@@ -31,6 +31,7 @@ func (r *SQLiteNodeRunRepository) Create(ctx context.Context, item *NodeRun) err
 		nullableString(item.OutputJSON),
 		nullableString(item.InputSignature),
 		nullableString(item.ResumeToken),
+		item.ResumeData,
 		nullableString(item.Error),
 		nullableTime(item.StartedAt),
 		nullableTime(item.FinishedAt),
@@ -44,7 +45,7 @@ func (r *SQLiteNodeRunRepository) Create(ctx context.Context, item *NodeRun) err
 
 func (r *SQLiteNodeRunRepository) GetByID(ctx context.Context, id string) (*NodeRun, error) {
 	item, err := scanNodeRun(r.db.QueryRowContext(ctx, `
-SELECT id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, error, started_at, finished_at, created_at
+SELECT id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, resume_data, error, started_at, finished_at, created_at
 FROM node_runs
 WHERE id = ?`, id))
 	if err != nil {
@@ -79,7 +80,7 @@ func (r *SQLiteNodeRunRepository) List(ctx context.Context, filter NodeRunListFi
 	offset := (page - 1) * limit
 
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, error, started_at, finished_at, created_at
+SELECT id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, resume_data, error, started_at, finished_at, created_at
 FROM node_runs
 WHERE workflow_run_id = ?
 ORDER BY sequence ASC, created_at ASC
@@ -106,7 +107,7 @@ LIMIT ? OFFSET ?`, filter.WorkflowRunID, limit, offset)
 
 func (r *SQLiteNodeRunRepository) GetLatestByNodeID(ctx context.Context, workflowRunID, nodeID string) (*NodeRun, error) {
 	item, err := scanNodeRun(r.db.QueryRowContext(ctx, `
-SELECT id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, error, started_at, finished_at, created_at
+SELECT id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, resume_data, error, started_at, finished_at, created_at
 FROM node_runs
 WHERE workflow_run_id = ? AND node_id = ?
 ORDER BY sequence DESC, created_at DESC
@@ -160,6 +161,40 @@ WHERE id = ?`,
 	return nil
 }
 
+func (r *SQLiteNodeRunRepository) UpdateResumeData(ctx context.Context, nodeRunID, resumeData string) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		`UPDATE node_runs
+SET resume_data = ?
+WHERE id = ?`,
+		resumeData,
+		nodeRunID,
+	)
+	if err != nil {
+		return fmt.Errorf("nodeRunRepo.UpdateResumeData: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("nodeRunRepo.UpdateResumeData: %w", err)
+	}
+
+	return nil
+}
+
+func (r *SQLiteNodeRunRepository) GetWaitingInputByWorkflowRunID(ctx context.Context, workflowRunID string) (*NodeRun, error) {
+	item, err := scanNodeRun(r.db.QueryRowContext(ctx, `
+SELECT id, workflow_run_id, node_id, node_type, sequence, status, input_json, output_json, input_signature, resume_token, resume_data, error, started_at, finished_at, created_at
+FROM node_runs
+WHERE workflow_run_id = ? AND status = 'waiting_input'
+ORDER BY sequence DESC, created_at DESC
+LIMIT 1`, workflowRunID))
+	if err != nil {
+		return nil, fmt.Errorf("nodeRunRepo.GetWaitingInputByWorkflowRunID: %w", err)
+	}
+
+	return item, nil
+}
+
 func (r *SQLiteNodeRunRepository) SetResumeToken(ctx context.Context, nodeRunID, token string) error {
 	res, err := r.db.ExecContext(
 		ctx,
@@ -186,6 +221,7 @@ func scanNodeRun(scanner interface{ Scan(dest ...any) error }) (*NodeRun, error)
 	var outputJSON sql.NullString
 	var inputSignature sql.NullString
 	var resumeToken sql.NullString
+	var resumeData sql.NullString
 	var errMsg sql.NullString
 	var startedAt any
 	var finishedAt any
@@ -202,6 +238,7 @@ func scanNodeRun(scanner interface{ Scan(dest ...any) error }) (*NodeRun, error)
 		&outputJSON,
 		&inputSignature,
 		&resumeToken,
+		&resumeData,
 		&errMsg,
 		&startedAt,
 		&finishedAt,
@@ -225,6 +262,9 @@ func scanNodeRun(scanner interface{ Scan(dest ...any) error }) (*NodeRun, error)
 	}
 	if resumeToken.Valid {
 		item.ResumeToken = resumeToken.String
+	}
+	if resumeData.Valid {
+		item.ResumeData = resumeData.String
 	}
 	if errMsg.Valid {
 		item.Error = errMsg.String

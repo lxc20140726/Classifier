@@ -37,7 +37,8 @@ func (e *classificationReaderNodeExecutor) Schema() NodeSchema {
 }
 
 func (e *classificationReaderNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	entry, ok := classificationReaderResolveInputEntry(input.Inputs)
+	rawInputs := typedInputsToAny(input.Inputs)
+	entry, ok := classificationReaderResolveInputEntry(rawInputs)
 	if !ok {
 		if input.Folder == nil || input.Folder.ID == "" {
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder is required when entry input is missing", e.Type())
@@ -72,7 +73,7 @@ func (e *classificationReaderNodeExecutor) Execute(_ context.Context, input Node
 		entry.Classifier = e.Type()
 	}
 
-	return NodeExecutionOutput{Outputs: []any{entry}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"entry": {Type: PortTypeJSON, Value: entry}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *classificationReaderNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

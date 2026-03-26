@@ -30,6 +30,7 @@ type Job struct {
 	ID            string     `db:"id"`
 	Type          string     `db:"type"`
 	WorkflowDefID string     `db:"workflow_def_id"`
+	SourceDir     string     `db:"source_dir"`
 	Status        string     `db:"status"`
 	FolderIDs     string     `db:"folder_ids"`
 	Total         int        `db:"total"`
@@ -147,6 +148,7 @@ type WorkflowRun struct {
 	ID             string     `db:"id"              json:"id"`
 	JobID          string     `db:"job_id"          json:"job_id"`
 	FolderID       string     `db:"folder_id"       json:"folder_id"`
+	SourceDir      string     `db:"source_dir"      json:"source_dir"`
 	WorkflowDefID  string     `db:"workflow_def_id" json:"workflow_def_id"`
 	Status         string     `db:"status"          json:"status"`
 	ResumeNodeID   string     `db:"resume_node_id"  json:"resume_node_id"`
@@ -170,6 +172,7 @@ type NodeRun struct {
 	OutputJSON     string     `db:"output_json"     json:"output_json"`
 	InputSignature string     `db:"input_signature" json:"input_signature"`
 	ResumeToken    string     `db:"resume_token"    json:"resume_token"`
+	ResumeData     string     `db:"resume_data"     json:"resume_data"`
 	Error          string     `db:"error"           json:"error"`
 	StartedAt      *time.Time `db:"started_at"      json:"started_at"`
 	FinishedAt     *time.Time `db:"finished_at"     json:"finished_at"`
@@ -203,11 +206,13 @@ type WorkflowGraphNode struct {
 }
 
 type WorkflowGraphEdge struct {
-	ID         string `json:"id,omitempty"`
-	Source     string `json:"source"`
-	SourcePort int    `json:"source_port"`
-	Target     string `json:"target"`
-	TargetPort int    `json:"target_port"`
+	ID              string `json:"id,omitempty"`
+	Source          string `json:"source"`
+	SourcePort      string `json:"source_port,omitempty"`
+	SourcePortIndex int    `json:"-"`
+	Target          string `json:"target"`
+	TargetPort      string `json:"target_port,omitempty"`
+	TargetPortIndex int    `json:"-"`
 }
 
 type NodeInputSpec struct {
@@ -217,7 +222,119 @@ type NodeInputSpec struct {
 
 type NodeLinkSource struct {
 	SourceNodeID    string `json:"source_node_id"`
-	OutputPortIndex int    `json:"output_port_index"`
+	SourcePort      string `json:"source_port,omitempty"`
+	OutputPortIndex int    `json:"output_port_index,omitempty"`
+}
+
+func (e *WorkflowGraphEdge) UnmarshalJSON(data []byte) error {
+	type rawEdge struct {
+		ID         string          `json:"id,omitempty"`
+		Source     string          `json:"source"`
+		SourcePort json.RawMessage `json:"source_port"`
+		Target     string          `json:"target"`
+		TargetPort json.RawMessage `json:"target_port"`
+	}
+
+	var raw rawEdge
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	e.ID = raw.ID
+	e.Source = raw.Source
+	e.Target = raw.Target
+
+	if err := unmarshalPortReference(raw.SourcePort, &e.SourcePort, &e.SourcePortIndex); err != nil {
+		return err
+	}
+	if err := unmarshalPortReference(raw.TargetPort, &e.TargetPort, &e.TargetPortIndex); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (e WorkflowGraphEdge) MarshalJSON() ([]byte, error) {
+	type rawEdge struct {
+		ID         string `json:"id,omitempty"`
+		Source     string `json:"source"`
+		SourcePort any    `json:"source_port,omitempty"`
+		Target     string `json:"target"`
+		TargetPort any    `json:"target_port,omitempty"`
+	}
+
+	return json.Marshal(rawEdge{
+		ID:         e.ID,
+		Source:     e.Source,
+		SourcePort: marshalPortReference(e.SourcePort, e.SourcePortIndex),
+		Target:     e.Target,
+		TargetPort: marshalPortReference(e.TargetPort, e.TargetPortIndex),
+	})
+}
+
+func (n *NodeLinkSource) UnmarshalJSON(data []byte) error {
+	type rawNodeLinkSource struct {
+		SourceNodeID    string          `json:"source_node_id"`
+		SourcePort      json.RawMessage `json:"source_port"`
+		OutputPortIndex int             `json:"output_port_index"`
+	}
+
+	var raw rawNodeLinkSource
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	n.SourceNodeID = raw.SourceNodeID
+	n.OutputPortIndex = raw.OutputPortIndex
+	if err := unmarshalPortReference(raw.SourcePort, &n.SourcePort, &n.OutputPortIndex); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (n NodeLinkSource) MarshalJSON() ([]byte, error) {
+	type rawNodeLinkSource struct {
+		SourceNodeID    string `json:"source_node_id"`
+		SourcePort      any    `json:"source_port,omitempty"`
+		OutputPortIndex int    `json:"output_port_index,omitempty"`
+	}
+
+	return json.Marshal(rawNodeLinkSource{
+		SourceNodeID:    n.SourceNodeID,
+		SourcePort:      marshalPortReference(n.SourcePort, n.OutputPortIndex),
+		OutputPortIndex: n.OutputPortIndex,
+	})
+}
+
+func unmarshalPortReference(raw json.RawMessage, name *string, index *int) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+
+	var portName string
+	if err := json.Unmarshal(raw, &portName); err == nil {
+		*name = portName
+		return nil
+	}
+
+	var portIndex int
+	if err := json.Unmarshal(raw, &portIndex); err == nil {
+		*index = portIndex
+		return nil
+	}
+
+	return nil
+}
+
+func marshalPortReference(name string, index int) any {
+	if name != "" {
+		return name
+	}
+	if index > 0 {
+		return index
+	}
+	return nil
 }
 
 type NodeUIPosition struct {

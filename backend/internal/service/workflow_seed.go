@@ -37,7 +37,7 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 				},
 				Inputs: map[string]repository.NodeInputSpec{
 					"source_dir": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-trigger", OutputPortIndex: 0},
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-trigger", SourcePort: "folder"},
 					},
 				},
 				Enabled: true,
@@ -47,8 +47,8 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 				Type:   "name-keyword-classifier",
 				Config: map[string]any{},
 				Inputs: map[string]repository.NodeInputSpec{
-					"folder": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-scanner", OutputPortIndex: 0},
+					"trees": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-scanner", SourcePort: "tree"},
 					},
 				},
 				Enabled: true,
@@ -58,8 +58,8 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 				Type:   "file-tree-classifier",
 				Config: map[string]any{},
 				Inputs: map[string]repository.NodeInputSpec{
-					"folder": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-kw", OutputPortIndex: 1},
+					"trees": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-scanner", SourcePort: "tree"},
 					},
 				},
 				Enabled: true,
@@ -69,8 +69,8 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 				Type:   "ext-ratio-classifier",
 				Config: map[string]any{},
 				Inputs: map[string]repository.NodeInputSpec{
-					"folder": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-ft", OutputPortIndex: 1},
+					"trees": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-scanner", SourcePort: "tree"},
 					},
 				},
 				Enabled: true,
@@ -82,8 +82,8 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 					"threshold": 0.75,
 				},
 				Inputs: map[string]repository.NodeInputSpec{
-					"signal": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-ext", OutputPortIndex: 0},
+					"signals": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-ext", SourcePort: "signal"},
 					},
 				},
 				Enabled: true,
@@ -93,8 +93,11 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 				Type:   "manual-classifier",
 				Config: map[string]any{},
 				Inputs: map[string]repository.NodeInputSpec{
-					"signal": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-cc", OutputPortIndex: 1},
+					"trees": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-scanner", SourcePort: "tree"},
+					},
+					"hint": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-cc", SourcePort: "low"},
 					},
 				},
 				Enabled: true,
@@ -104,17 +107,20 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 				Type:   "subtree-aggregator",
 				Config: map[string]any{},
 				Inputs: map[string]repository.NodeInputSpec{
+					"trees": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-scanner", SourcePort: "tree"},
+					},
 					"signal_kw": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-kw", OutputPortIndex: 0},
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-kw", SourcePort: "signal"},
 					},
 					"signal_ft": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-ft", OutputPortIndex: 0},
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-ft", SourcePort: "signal"},
 					},
 					"signal_ext": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-cc", OutputPortIndex: 0},
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-cc", SourcePort: "high"},
 					},
 					"signal_manual": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-manual", OutputPortIndex: 0},
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-manual", SourcePort: "signal"},
 					},
 				},
 				Enabled: true,
@@ -167,7 +173,7 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 				},
 				Inputs: map[string]repository.NodeInputSpec{
 					"entry": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-reader", OutputPortIndex: 0},
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-reader", SourcePort: "entry"},
 					},
 				},
 				Enabled: true,
@@ -176,7 +182,7 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 				ID:      "p-router",
 				Type:    "category-router",
 				Config:  map[string]any{},
-				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-split", OutputPortIndex: 0}}},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-split", SourcePort: "items"}}},
 				Enabled: true,
 			},
 			{
@@ -185,7 +191,7 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 				Config: map[string]any{
 					"output_dir": ".thumbnails",
 				},
-				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-router", OutputPortIndex: 0}}},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-router", SourcePort: "video"}}},
 				Enabled: true,
 			},
 			{
@@ -195,7 +201,7 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 					"strategy": "template",
 					"template": "{name}",
 				},
-				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-thumbnail", OutputPortIndex: 0}}},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-thumbnail", SourcePort: "items"}}},
 				Enabled: true,
 			},
 			{
@@ -206,7 +212,7 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 					"format":     "cbz",
 					"target_dir": ".archives",
 				},
-				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-rename", OutputPortIndex: 0}}},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-rename", SourcePort: "items"}}},
 				Enabled: true,
 			},
 			{
@@ -217,7 +223,7 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 					"move_unit":       "folder",
 					"conflict_policy": "auto_rename",
 				},
-				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-compress", OutputPortIndex: 0}}},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-compress", SourcePort: "items"}}},
 				Enabled: true,
 			},
 			{
@@ -228,21 +234,21 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 					"level":  "info",
 				},
 				Inputs: map[string]repository.NodeInputSpec{
-					"item":   {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-move", OutputPortIndex: 0}},
-					"result": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-move", OutputPortIndex: 1}},
+					"item":   {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-move", SourcePort: "items"}},
+					"result": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-move", SourcePort: "results"}},
 				},
 				Enabled: true,
 			},
 		},
 		Edges: []repository.WorkflowGraphEdge{
-			{ID: "e-reader-split", Source: "p-reader", SourcePort: 0, Target: "p-split", TargetPort: 0},
-			{ID: "e-split-router", Source: "p-split", SourcePort: 0, Target: "p-router", TargetPort: 0},
-			{ID: "e-router-thumbnail", Source: "p-router", SourcePort: 0, Target: "p-thumbnail", TargetPort: 0},
-			{ID: "e-thumbnail-rename", Source: "p-thumbnail", SourcePort: 0, Target: "p-rename", TargetPort: 0},
-			{ID: "e-rename-compress", Source: "p-rename", SourcePort: 0, Target: "p-compress", TargetPort: 0},
-			{ID: "e-compress-move", Source: "p-compress", SourcePort: 0, Target: "p-move", TargetPort: 0},
-			{ID: "e-move-audit-item", Source: "p-move", SourcePort: 0, Target: "p-audit", TargetPort: 0},
-			{ID: "e-move-audit-result", Source: "p-move", SourcePort: 1, Target: "p-audit", TargetPort: 1},
+			{ID: "e-reader-split", Source: "p-reader", SourcePort: "entry", Target: "p-split", TargetPort: "entry"},
+			{ID: "e-split-router", Source: "p-split", SourcePort: "items", Target: "p-router", TargetPort: "items"},
+			{ID: "e-router-thumbnail", Source: "p-router", SourcePort: "video", Target: "p-thumbnail", TargetPort: "items"},
+			{ID: "e-thumbnail-rename", Source: "p-thumbnail", SourcePort: "items", Target: "p-rename", TargetPort: "items"},
+			{ID: "e-rename-compress", Source: "p-rename", SourcePort: "items", Target: "p-compress", TargetPort: "items"},
+			{ID: "e-compress-move", Source: "p-compress", SourcePort: "items", Target: "p-move", TargetPort: "items"},
+			{ID: "e-move-audit-item", Source: "p-move", SourcePort: "items", Target: "p-audit", TargetPort: "item"},
+			{ID: "e-move-audit-result", Source: "p-move", SourcePort: "results", Target: "p-audit", TargetPort: "result"},
 		},
 	}
 
