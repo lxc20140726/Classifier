@@ -70,68 +70,68 @@ export default function AuditLogsPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
-    <section className="mx-auto flex max-w-[1400px] flex-col gap-6 px-4 py-8">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+    <section className="mx-auto flex max-w-[1400px] flex-col gap-6 px-6 py-8">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between border-b-2 border-foreground pb-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Audit Trail</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">审计日志</h1>
-          <p className="mt-1 text-sm text-muted-foreground">支持按任务、时间范围、动作、结果和路径关键词检索。</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Audit Trail</p>
+          <h1 className="mt-1 text-3xl font-black tracking-tight uppercase">审计日志</h1>
+          <p className="mt-2 text-sm font-bold text-muted-foreground">支持按任务、时间范围、动作、结果和路径关键词检索。</p>
         </div>
         <button
           type="button"
           onClick={() => void fetchLogs(page, appliedFilters)}
           disabled={isLoading}
-          className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm transition hover:bg-accent disabled:opacity-60"
+          className="inline-flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
         >
           <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
           刷新
         </button>
       </div>
 
-      <div className="rounded-3xl border border-border bg-card p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+      <div className="border-2 border-foreground bg-card p-5 shadow-hard">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <input
             value={filters.jobId}
             onChange={(event) => setFilters((prev) => ({ ...prev, jobId: event.target.value }))}
             placeholder="任务 ID"
-            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+            className="border-2 border-foreground bg-background px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
           />
           <input
             value={filters.folderPath}
             onChange={(event) => setFilters((prev) => ({ ...prev, folderPath: event.target.value }))}
             placeholder="路径关键词"
-            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+            className="border-2 border-foreground bg-background px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
           />
           <input
             value={filters.action}
             onChange={(event) => setFilters((prev) => ({ ...prev, action: event.target.value }))}
             placeholder="动作，如 move-node"
-            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+            className="border-2 border-foreground bg-background px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
           />
           <input
             value={filters.result}
             onChange={(event) => setFilters((prev) => ({ ...prev, result: event.target.value }))}
             placeholder="结果，如 success"
-            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+            className="border-2 border-foreground bg-background px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
           />
           <input
             type="datetime-local"
             value={filters.from}
             onChange={(event) => setFilters((prev) => ({ ...prev, from: event.target.value }))}
-            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+            className="border-2 border-foreground bg-background px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
           />
           <input
             type="datetime-local"
             value={filters.to}
             onChange={(event) => setFilters((prev) => ({ ...prev, to: event.target.value }))}
-            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+            className="border-2 border-foreground bg-background px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
           />
         </div>
-        <div className="mt-3 flex justify-end">
+        <div className="mt-4 flex justify-end">
           <button
             type="button"
             onClick={() => void handleSearch()}
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90"
+            className="inline-flex items-center gap-2 border-2 border-foreground bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
           >
             <Search className="h-4 w-4" />
             搜索
@@ -140,50 +140,50 @@ export default function AuditLogsPage() {
       </div>
 
       {error && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
           {error}
         </div>
       )}
 
-      <div className="overflow-hidden rounded-3xl border border-border bg-card shadow-sm">
+      <div className="overflow-hidden border-2 border-foreground bg-card shadow-hard">
         <table className="w-full text-sm">
-          <thead className="bg-muted/40">
+          <thead className="bg-muted/50 border-b-2 border-foreground">
             <tr>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">时间</th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">动作</th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">结果</th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">路径</th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">目录ID</th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">耗时</th>
+              <th className="px-5 py-4 text-left font-black tracking-widest text-foreground">时间</th>
+              <th className="px-5 py-4 text-left font-black tracking-widest text-foreground">动作</th>
+              <th className="px-5 py-4 text-left font-black tracking-widest text-foreground">结果</th>
+              <th className="px-5 py-4 text-left font-black tracking-widest text-foreground">路径</th>
+              <th className="px-5 py-4 text-left font-black tracking-widest text-foreground">目录ID</th>
+              <th className="px-5 py-4 text-left font-black tracking-widest text-foreground">耗时</th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">正在加载审计日志...</td>
+                <td colSpan={6} className="px-5 py-12 text-center font-bold text-muted-foreground">正在加载审计日志...</td>
               </tr>
             ) : logs.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">没有匹配的审计记录。</td>
+                <td colSpan={6} className="px-5 py-12 text-center font-bold text-muted-foreground border-2 border-dashed border-foreground m-4">没有匹配的审计记录。</td>
               </tr>
             ) : (
               logs.map((log) => (
-                <tr key={log.id} className="border-t border-border/60 align-top">
-                  <td className="px-4 py-3 text-xs text-muted-foreground">{new Date(log.created_at).toLocaleString('zh-CN')}</td>
-                  <td className="px-4 py-3 font-medium">{log.action}</td>
-                  <td className="px-4 py-3">
+                <tr key={log.id} className="border-b-2 border-foreground last:border-0 align-top transition-colors hover:bg-muted/30">
+                  <td className="px-5 py-4 font-mono text-xs font-bold text-muted-foreground">{new Date(log.created_at).toLocaleString('zh-CN')}</td>
+                  <td className="px-5 py-4 font-black">{log.action}</td>
+                  <td className="px-5 py-4">
                     <span className={cn(
-                      'rounded-full px-2.5 py-1 text-xs font-medium',
+                      'inline-flex border-2 border-foreground px-2.5 py-1 text-[10px] font-black',
                       log.result === 'success' || log.result === 'moved'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : 'bg-amber-100 text-amber-700',
+                        ? 'bg-green-300 text-green-900'
+                        : 'bg-yellow-300 text-yellow-900',
                     )}>
                       {log.result || 'unknown'}
                     </span>
                   </td>
-                  <td className="max-w-[420px] px-4 py-3 font-mono text-xs text-muted-foreground">{log.folder_path || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{log.folder_id || '—'}</td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">{log.duration_ms} ms</td>
+                  <td className="max-w-[420px] px-5 py-4 font-mono text-xs font-bold text-muted-foreground break-all">{log.folder_path || '—'}</td>
+                  <td className="px-5 py-4 font-mono text-xs font-bold text-muted-foreground">{log.folder_id || '—'}</td>
+                  <td className="px-5 py-4 font-mono text-xs font-bold text-muted-foreground">{log.duration_ms} ms</td>
                 </tr>
               ))
             )}
@@ -191,14 +191,14 @@ export default function AuditLogsPage() {
         </table>
       </div>
 
-      <div className="flex items-center justify-between rounded-2xl border border-border bg-card px-4 py-3 text-sm">
-        <p className="text-muted-foreground">第 {page} / {totalPages} 页，共 {total} 条</p>
-        <div className="flex gap-2">
+      <div className="flex items-center justify-between border-2 border-foreground bg-card px-5 py-4 text-sm shadow-hard">
+        <p className="font-bold text-muted-foreground">第 <span className="text-foreground font-black">{page}</span> / {totalPages} 页，共 <span className="text-foreground font-black">{total}</span> 条</p>
+        <div className="flex gap-3">
           <button
             type="button"
             disabled={page <= 1 || isLoading}
             onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-            className="rounded-xl border border-border px-3 py-2 transition hover:bg-accent disabled:opacity-50"
+            className="border-2 border-foreground bg-background px-4 py-2 font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
           >
             上一页
           </button>
@@ -206,7 +206,7 @@ export default function AuditLogsPage() {
             type="button"
             disabled={page >= totalPages || isLoading}
             onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-            className="rounded-xl border border-border px-3 py-2 transition hover:bg-accent disabled:opacity-50"
+            className="border-2 border-foreground bg-background px-4 py-2 font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
           >
             下一页
           </button>

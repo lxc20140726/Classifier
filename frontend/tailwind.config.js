@@ -23,7 +23,14 @@ export default {
       },
       borderRadius: {
         lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
       },
+      boxShadow: {
+        'hard': '4px 4px 0px hsl(var(--foreground))',
+        'hard-hover': '6px 6px 0px hsl(var(--foreground))',
+        'hard-lg': '8px 8px 0px hsl(var(--foreground))',
+      }
     },
   },
   plugins: [],

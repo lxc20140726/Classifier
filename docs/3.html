@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<style>
+  body { background-color: #DDE3DF; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; cursor: crosshair; }
+  .particle { width: 8px; height: 8px; background-color: #1A1A1A; border-radius: 50%; position: absolute; pointer-events: none; }
+  .nav-item { border: 2px solid transparent; transition: all 0.3s; }
+  .nav-item:hover { border-color: #1A1A1A; background-color: #849C8A; color: #DDE3DF; }
+</style>
+</head>
+<body class="flex items-center justify-center h-screen">
+  <!-- 游离粒子容器 -->
+  <div id="particles" class="absolute inset-0 z-0"></div>
+  
+  <!-- 导航菜单 -->
+  <div class="flex gap-8 z-10 relative bg-[#E4E9E5] p-4 border-2 border-[#1A1A1A] shadow-[8px_8px_0px_#1A1A1A]">
+    <button class="nav-item px-6 py-3 text-lg font-black text-[#1A1A1A] tracking-wider">FOLDERS</button>
+    <button class="nav-item px-6 py-3 text-lg font-black text-[#1A1A1A] tracking-wider">WORKFLOWS</button>
+    <button class="nav-item px-6 py-3 text-lg font-black text-[#1A1A1A] tracking-wider">SETTINGS</button>
+  </div>
+
+  <script>
+    const container = document.getElementById('particles');
+    const particles = [];
+    // 初始化 40 个随机分布的黑点
+    for(let i=0; i<40; i++) {
+      let p = document.createElement('div');
+      p.className = 'particle';
+      gsap.set(p, { x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight });
+      container.appendChild(p);
+      particles.push(p);
+    }
+
+    // 磁吸交互动效
+    document.querySelectorAll('.nav-item').forEach(btn => {
+      btn.addEventListener('mouseenter', (e) => {
+        const rect = e.target.getBoundingClientRect();
+        gsap.to(particles, {
+          duration: 0.6,
+          x: () => rect.left + Math.random() * rect.width,
+          y: () => rect.top + Math.random() * rect.height,
+          stagger: 0.005,
+          ease: "back.out(1.2)"
+        });
+      });
+      btn.addEventListener('mouseleave', () => {
+        gsap.to(particles, {
+          duration: 1.5,
+          x: () => Math.random() * window.innerWidth,
+          y: () => Math.random() * window.innerHeight,
+          stagger: 0.01,
+          ease: "power2.out"
+        });
+      });
+    });
+  </script>
+</body>
+</html>

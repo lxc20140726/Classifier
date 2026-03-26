@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   Clock,
   FileText,
@@ -10,6 +10,7 @@ import {
   Search,
   X,
 } from 'lucide-react'
+import gsap from 'gsap'
 
 import { moveFolders } from '@/api/folders'
 import { SnapshotDrawer } from '@/components/SnapshotDrawer'
@@ -29,11 +30,11 @@ const CATEGORY_LABEL: Record<Category | '', string> = {
 }
 
 const CATEGORY_COLOR: Record<Category, string> = {
-  photo: 'bg-pink-100 text-pink-800',
-  video: 'bg-blue-100 text-blue-800',
-  mixed: 'bg-purple-100 text-purple-800',
-  manga: 'bg-orange-100 text-orange-800',
-  other: 'bg-gray-100 text-gray-700',
+  photo: 'bg-pink-200 text-pink-900 border-2 border-foreground',
+  video: 'bg-blue-200 text-blue-900 border-2 border-foreground',
+  mixed: 'bg-purple-200 text-purple-900 border-2 border-foreground',
+  manga: 'bg-orange-200 text-orange-900 border-2 border-foreground',
+  other: 'bg-gray-200 text-gray-900 border-2 border-foreground',
 }
 
 const STATUS_LABEL: Record<FolderStatus | '', string> = {
@@ -44,9 +45,9 @@ const STATUS_LABEL: Record<FolderStatus | '', string> = {
 }
 
 const STATUS_COLOR: Record<FolderStatus, string> = {
-  pending: 'bg-yellow-100 text-yellow-800',
-  done: 'bg-green-100 text-green-800',
-  skip: 'bg-gray-100 text-gray-500',
+  pending: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
+  done: 'bg-green-300 text-green-900 border-2 border-foreground',
+  skip: 'bg-gray-300 text-gray-900 border-2 border-foreground',
 }
 
 const JOB_STATUS_LABEL: Record<string, string> = {
@@ -59,12 +60,12 @@ const JOB_STATUS_LABEL: Record<string, string> = {
 }
 
 const JOB_STATUS_COLOR: Record<string, string> = {
-  pending: 'bg-gray-100 text-gray-600',
-  running: 'bg-blue-100 text-blue-700',
-  succeeded: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  partial: 'bg-yellow-100 text-yellow-700',
-  cancelled: 'bg-gray-100 text-gray-500',
+  pending: 'bg-gray-200 text-gray-900 border-2 border-foreground',
+  running: 'bg-blue-300 text-blue-900 border-2 border-foreground',
+  succeeded: 'bg-green-300 text-green-900 border-2 border-foreground',
+  failed: 'bg-red-300 text-red-900 border-2 border-foreground',
+  partial: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
+  cancelled: 'bg-gray-300 text-gray-900 border-2 border-foreground',
 }
 
 const ALL_CATEGORIES: Array<Category | ''> = ['', 'photo', 'video', 'mixed', 'manga', 'other']
@@ -98,16 +99,25 @@ function MoveModal({
   onCancel: () => void
 }) {
   const [targetDir, setTargetDir] = useState('')
+  const overlayRef = useRef<HTMLDivElement | null>(null)
+  const modalRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (overlayRef.current && modalRef.current) {
+      gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.2 })
+      gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.7)" })
+    }
+  }, [])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg">
-        <h2 className="text-lg font-semibold">移动文件夹</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+    <div ref={overlayRef} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div ref={modalRef} className="w-full max-w-md border-2 border-foreground bg-card p-6 shadow-hard-lg">
+        <h2 className="text-xl font-black tracking-tight">移动文件夹</h2>
+        <p className="mt-2 text-sm font-medium text-muted-foreground">
           将 {selectedIds.length} 个文件夹移动到新位置。
         </p>
-        <div className="mt-4 space-y-2">
-          <label htmlFor="target-dir" className="text-sm font-medium">
+        <div className="mt-5 space-y-2">
+          <label htmlFor="target-dir" className="text-sm font-bold">
             目标目录
           </label>
           <input
@@ -116,14 +126,14 @@ function MoveModal({
             value={targetDir}
             onChange={(e) => setTargetDir(e.target.value)}
             placeholder="/path/to/target"
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+            className="w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
           />
         </div>
         <div className="mt-6 flex justify-end gap-3">
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-border px-4 py-2 text-sm font-medium transition hover:bg-accent"
+            className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
           >
             取消
           </button>
@@ -131,7 +141,7 @@ function MoveModal({
             type="button"
             disabled={!targetDir.trim()}
             onClick={() => onConfirm(targetDir.trim())}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
+            className="border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
           >
             确认移动
           </button>
@@ -152,21 +162,21 @@ function ScanProgressBanner() {
   const pct = total > 0 ? Math.round((scanned / total) * 100) : 0
 
   return (
-    <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-      <div className="flex items-center gap-2 text-sm text-blue-800">
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-        <span className="font-medium">正在扫描</span>
+    <div className="border-2 border-foreground bg-blue-100 px-4 py-3 shadow-hard mb-4">
+      <div className="flex items-center gap-2 text-sm text-blue-900">
+        <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
+        <span className="font-black">正在扫描</span>
         {scanProgress?.currentFolderName != null && (
-          <span className="truncate text-blue-600">{scanProgress.currentFolderName}</span>
+          <span className="truncate font-mono font-bold">{scanProgress.currentFolderName}</span>
         )}
-        <span className="ml-auto shrink-0 text-xs tabular-nums">
+        <span className="ml-auto shrink-0 text-xs font-black tabular-nums">
           {scanned}&nbsp;/&nbsp;{total > 0 ? total : '?'}
         </span>
       </div>
       {total > 0 && (
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-blue-200">
+        <div className="mt-3 h-2 w-full overflow-hidden border-2 border-foreground bg-blue-200">
           <div
-            className="h-full rounded-full bg-blue-500 transition-all duration-300"
+            className="h-full bg-blue-600 transition-all duration-300"
             style={{ width: `${pct}%` }}
           />
         </div>
@@ -178,29 +188,29 @@ function ScanProgressBanner() {
 function JobItem({ job }: { job: Job }) {
   const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0
   const statusLabel = JOB_STATUS_LABEL[job.status] ?? job.status
-  const statusColor = JOB_STATUS_COLOR[job.status] ?? 'bg-gray-100 text-gray-600'
+  const statusColor = JOB_STATUS_COLOR[job.status] ?? 'bg-gray-200 text-gray-900 border-2 border-foreground'
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-xs font-medium">
+        <span className="truncate text-xs font-bold">
           {job.type === 'move' ? '移动任务' : job.type}
         </span>
-        <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', statusColor)}>
+        <span className={cn('shrink-0 px-2 py-0.5 text-[10px] font-black', statusColor)}>
           {statusLabel}
         </span>
       </div>
       {(job.status === 'running' || job.status === 'partial') && (
-        <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div className="h-1.5 w-full overflow-hidden border-2 border-foreground bg-muted">
           <div
-            className="h-full rounded-full bg-primary transition-all duration-300"
+            className="h-full bg-foreground transition-all duration-300"
             style={{ width: `${pct}%` }}
           />
         </div>
       )}
-      <p className="text-xs text-muted-foreground">
-        <span className="tabular-nums">{job.done}/{job.total} 个</span>
-        {job.failed > 0 && <span className="text-red-500"> · {job.failed} 失败</span>}
+      <p className="text-xs font-medium text-muted-foreground">
+        <span className="tabular-nums font-bold text-foreground">{job.done}/{job.total} 个</span>
+        {job.failed > 0 && <span className="text-red-600 font-bold"> · {job.failed} 失败</span>}
         {job.created_at ? <span> · {formatRelativeTime(job.created_at)}</span> : null}
       </p>
     </div>
@@ -216,15 +226,15 @@ function RecentJobsPanel() {
   }, [fetchJobs])
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Clock className="h-4 w-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold">最近任务</h3>
+    <section className="border-2 border-foreground bg-card p-4 shadow-hard">
+      <div className="mb-4 flex items-center gap-2 border-b-2 border-foreground pb-2">
+        <Clock className="h-5 w-5 text-foreground" />
+        <h3 className="text-base font-black tracking-tight">最近任务</h3>
       </div>
       {jobs.length === 0 ? (
-        <p className="text-xs text-muted-foreground">暂无任务记录</p>
+        <p className="text-xs font-medium text-muted-foreground py-4 text-center">暂无任务记录</p>
       ) : (
-        <ul className="divide-y divide-border">
+        <ul className="divide-y-2 divide-foreground">
           {jobs.slice(0, 5).map((job) => (
             <li key={job.id} className="py-3 first:pt-0 last:pb-0">
               <JobItem job={job} />
@@ -245,36 +255,36 @@ function RecentLogsPanel() {
   }, [fetchLogs])
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <FileText className="h-4 w-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold">最近日志</h3>
+    <section className="border-2 border-foreground bg-card p-4 shadow-hard">
+      <div className="mb-4 flex items-center gap-2 border-b-2 border-foreground pb-2">
+        <FileText className="h-5 w-5 text-foreground" />
+        <h3 className="text-base font-black tracking-tight">最近日志</h3>
       </div>
       {logs.length === 0 ? (
-        <p className="text-xs text-muted-foreground">暂无操作日志</p>
+        <p className="text-xs font-medium text-muted-foreground py-4 text-center">暂无操作日志</p>
       ) : (
-        <ul className="divide-y divide-border">
+        <ul className="divide-y-2 divide-foreground">
           {logs.slice(0, 5).map((log) => (
-            <li key={log.id} className="space-y-0.5 py-2 first:pt-0 last:pb-0">
+            <li key={log.id} className="space-y-1.5 py-3 first:pt-0 last:pb-0">
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-xs font-medium">{log.action}</span>
+                <span className="truncate text-xs font-bold">{log.action}</span>
                 <span
                   className={cn(
-                    'shrink-0 rounded px-1.5 py-0.5 text-xs',
+                    'shrink-0 border-2 border-foreground px-1.5 py-0.5 text-[10px] font-black',
                     log.result === 'success'
-                      ? 'bg-green-100 text-green-700'
+                      ? 'bg-green-300 text-green-900'
                       : log.result === 'failed'
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-gray-100 text-gray-600',
+                        ? 'bg-red-300 text-red-900'
+                        : 'bg-gray-200 text-gray-900',
                   )}
                 >
                   {log.result === 'success' ? '成功' : log.result === 'failed' ? '失败' : log.result}
                 </span>
               </div>
               {log.folder_path ? (
-                <p className="truncate text-xs text-muted-foreground">{log.folder_path}</p>
+                <p className="truncate font-mono text-[10px] text-muted-foreground">{log.folder_path}</p>
               ) : null}
-              <p className="text-xs text-muted-foreground">{formatRelativeTime(log.created_at)}</p>
+              <p className="text-[10px] font-bold text-muted-foreground">{formatRelativeTime(log.created_at)}</p>
             </li>
           ))}
         </ul>
@@ -309,62 +319,62 @@ function FolderCard({
   return (
     <div
       className={cn(
-        'flex flex-col rounded-xl border bg-card p-4 transition',
-        selected ? 'border-primary ring-1 ring-primary' : 'border-border hover:border-primary/40',
-        isDeleted && 'opacity-60',
+        'folder-card flex flex-col border-2 bg-card p-4 transition-all duration-200',
+        selected ? 'border-foreground shadow-hard-hover -translate-y-1' : 'border-foreground shadow-hard hover:-translate-y-0.5 hover:shadow-hard-hover',
+        isDeleted && 'opacity-60 bg-muted/50',
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <label className="flex min-w-0 cursor-pointer items-center gap-2">
+        <label className="flex min-w-0 cursor-pointer items-center gap-3">
           <input
             type="checkbox"
             checked={selected}
             onChange={onToggleSelect}
-            className="h-4 w-4 shrink-0 rounded border-gray-300"
+            className="h-4 w-4 shrink-0 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
           />
-          <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="truncate text-sm font-semibold" title={folder.name}>
+          <FolderOpen className="h-5 w-5 shrink-0 text-foreground" />
+          <span className="truncate text-base font-black tracking-tight" title={folder.name}>
             {folder.name}
           </span>
         </label>
         {isDeleted && (
-          <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700">已隐藏</span>
+          <span className="shrink-0 border-2 border-red-900 bg-red-200 px-1.5 py-0.5 text-[10px] font-black text-red-900">已隐藏</span>
         )}
       </div>
 
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', CATEGORY_COLOR[folder.category])}>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <span className={cn('px-2 py-0.5 text-xs font-bold', CATEGORY_COLOR[folder.category])}>
           {CATEGORY_LABEL[folder.category]}
         </span>
-        <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', STATUS_COLOR[folder.status])}>
+        <span className={cn('px-2 py-0.5 text-xs font-bold', STATUS_COLOR[folder.status])}>
           {STATUS_LABEL[folder.status]}
         </span>
         {folder.category_source === 'manual' && (
-          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs text-indigo-700">手动</span>
+          <span className="border-2 border-indigo-900 bg-indigo-200 px-2 py-0.5 text-xs font-bold text-indigo-900">手动</span>
         )}
       </div>
 
-      <div className="mt-3 grid grid-cols-3 gap-1 text-center">
-        <div>
-          <p className="text-xs text-muted-foreground">图片</p>
-          <p className="text-sm font-semibold tabular-nums">{folder.image_count}</p>
+      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <div className="border-2 border-foreground bg-muted/30 p-1.5">
+          <p className="text-[10px] font-bold text-muted-foreground">图片</p>
+          <p className="text-sm font-black tabular-nums">{folder.image_count}</p>
         </div>
-        <div>
-          <p className="text-xs text-muted-foreground">视频</p>
-          <p className="text-sm font-semibold tabular-nums">{folder.video_count}</p>
+        <div className="border-2 border-foreground bg-muted/30 p-1.5">
+          <p className="text-[10px] font-bold text-muted-foreground">视频</p>
+          <p className="text-sm font-black tabular-nums">{folder.video_count}</p>
         </div>
-        <div>
-          <p className="text-xs text-muted-foreground">大小</p>
-          <p className="text-sm font-semibold">{formatBytes(folder.total_size)}</p>
+        <div className="border-2 border-foreground bg-muted/30 p-1.5">
+          <p className="text-[10px] font-bold text-muted-foreground">大小</p>
+          <p className="text-sm font-black">{formatBytes(folder.total_size)}</p>
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border pt-3">
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t-2 border-foreground pt-4">
         {isDeleted ? (
           <button
             type="button"
             onClick={onRestore}
-            className="flex-1 rounded-lg border border-border px-2 py-1.5 text-xs font-medium transition hover:bg-accent"
+            className="flex-1 border-2 border-foreground bg-background px-2 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
           >
             恢复扫描
           </button>
@@ -373,7 +383,7 @@ function FolderCard({
             <select
               value={folder.category}
               onChange={(e) => onUpdateCategory(e.target.value as Category)}
-              className="flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+              className="flex-1 border-2 border-foreground bg-background px-2 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
               aria-label="更改分类"
             >
               {(['photo', 'video', 'mixed', 'manga', 'other'] as Category[]).map((c) => (
@@ -383,7 +393,7 @@ function FolderCard({
             <select
               value={folder.status}
               onChange={(e) => onUpdateStatus(e.target.value as FolderStatus)}
-              className="flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+              className="flex-1 border-2 border-foreground bg-background px-2 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
               aria-label="更改状态"
             >
               {(['pending', 'done', 'skip'] as FolderStatus[]).map((s) => (
@@ -394,17 +404,17 @@ function FolderCard({
               type="button"
               onClick={onSnapshot}
               title="查看快照时间线"
-              className="rounded-lg border border-border p-1.5 text-xs transition hover:bg-accent"
+              className="border-2 border-foreground bg-background p-1.5 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
             >
-              <History className="h-3.5 w-3.5" />
+              <History className="h-4 w-4" />
             </button>
             <button
               type="button"
               onClick={onRemove}
               title="从软件中隐藏，不改动实际文件"
-              className="rounded-lg border border-red-200 p-1.5 text-xs text-red-600 transition hover:bg-red-50"
+              className="border-2 border-red-900 bg-red-100 p-1.5 text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5"
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-4 w-4" />
             </button>
           </>
         )}
@@ -424,55 +434,79 @@ function FolderRow({
   onRestore,
 }: FolderActionProps) {
   const isDeleted = folder.deleted_at !== null
+  const dotRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (dotRef.current) {
+      // 粒子飞入成为列表圆点的动效
+      gsap.fromTo(dotRef.current, 
+        { 
+          scale: 0,
+          x: () => (Math.random() - 0.5) * 80,
+          y: () => (Math.random() - 0.5) * 80,
+          opacity: 0
+        }, 
+        { 
+          scale: 1, 
+          x: 0,
+          y: 0,
+          opacity: 1,
+          duration: 0.6, 
+          ease: "expo.out", 
+          delay: Math.random() * 0.2 
+        }
+      )
+    }
+  }, [])
 
   return (
     <tr
       className={cn(
-        'border-b border-border transition hover:bg-muted/40',
-        isDeleted && 'opacity-60',
+        'folder-row border-b-2 border-foreground transition-colors hover:bg-muted/30',
+        isDeleted && 'opacity-60 bg-muted/10',
       )}
     >
-      <td className="w-8 px-3 py-3">
+      <td className="w-12 px-4 py-4">
         <input
           type="checkbox"
           checked={selected}
           onChange={onToggleSelect}
-          className="h-4 w-4 rounded border-gray-300"
+          className="h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
         />
       </td>
-      <td className="px-3 py-3">
-        <div className="flex items-center gap-2">
-          <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="max-w-xs truncate text-sm font-medium" title={folder.name}>
+      <td className="px-4 py-4">
+        <div className="flex items-center gap-3">
+          <div ref={dotRef} className="h-2.5 w-2.5 rounded-full bg-foreground shrink-0 shadow-[2px_2px_0px_rgba(0,0,0,0.2)]" />
+          <span className="max-w-xs truncate text-sm font-black tracking-tight" title={folder.name}>
             {folder.name}
           </span>
         </div>
       </td>
-      <td className="px-3 py-3">
-        <div className="flex flex-wrap gap-1">
-          <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', CATEGORY_COLOR[folder.category])}>
+      <td className="px-4 py-4">
+        <div className="flex flex-wrap gap-2">
+          <span className={cn('px-2 py-0.5 text-xs font-bold', CATEGORY_COLOR[folder.category])}>
             {CATEGORY_LABEL[folder.category]}
           </span>
-          <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', STATUS_COLOR[folder.status])}>
+          <span className={cn('px-2 py-0.5 text-xs font-bold', STATUS_COLOR[folder.status])}>
             {STATUS_LABEL[folder.status]}
           </span>
         </div>
       </td>
-      <td className="hidden px-3 py-3 text-xs text-muted-foreground sm:table-cell">
-        <span className="tabular-nums">{folder.image_count} 图</span>
-        <span className="mx-1">·</span>
-        <span className="tabular-nums">{folder.video_count} 视</span>
+      <td className="hidden px-4 py-4 text-xs font-bold text-muted-foreground sm:table-cell">
+        <span className="tabular-nums text-foreground">{folder.image_count}</span> 图
+        <span className="mx-2">·</span>
+        <span className="tabular-nums text-foreground">{folder.video_count}</span> 视
       </td>
-      <td className="hidden px-3 py-3 text-xs text-muted-foreground md:table-cell">
+      <td className="hidden px-4 py-4 text-xs font-mono font-bold text-foreground md:table-cell">
         {formatBytes(folder.total_size)}
       </td>
-      <td className="px-3 py-3">
-        <div className="flex items-center gap-1.5">
+      <td className="px-4 py-4">
+        <div className="flex items-center gap-2">
           {isDeleted ? (
             <button
               type="button"
               onClick={onRestore}
-              className="rounded border border-border px-2 py-1 text-xs transition hover:bg-accent"
+              className="border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
             >
               恢复扫描
             </button>
@@ -481,7 +515,7 @@ function FolderRow({
               <select
                 value={folder.category}
                 onChange={(e) => onUpdateCategory(e.target.value as Category)}
-                className="rounded border border-border bg-background px-1.5 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+                className="border-2 border-foreground bg-background px-2 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
                 aria-label="更改分类"
               >
                 {(['photo', 'video', 'mixed', 'manga', 'other'] as Category[]).map((c) => (
@@ -491,7 +525,7 @@ function FolderRow({
               <select
                 value={folder.status}
                 onChange={(e) => onUpdateStatus(e.target.value as FolderStatus)}
-                className="rounded border border-border bg-background px-1.5 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+                className="border-2 border-foreground bg-background px-2 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
                 aria-label="更改状态"
               >
                 {(['pending', 'done', 'skip'] as FolderStatus[]).map((s) => (
@@ -502,17 +536,17 @@ function FolderRow({
                 type="button"
                 onClick={onSnapshot}
                 title="查看快照时间线"
-                className="rounded border border-border p-1 text-xs transition hover:bg-accent"
+                className="border-2 border-foreground bg-background p-1.5 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
               >
-                <History className="h-3.5 w-3.5" />
+                <History className="h-4 w-4" />
               </button>
               <button
                 type="button"
                 onClick={onRemove}
                 title="从软件中隐藏，不改动实际文件"
-                className="rounded border border-red-200 p-1 text-xs text-red-600 transition hover:bg-red-50"
+                className="border-2 border-red-900 bg-red-100 p-1.5 text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-4 w-4" />
               </button>
             </>
           )}
@@ -551,6 +585,18 @@ export default function FolderListPage() {
     void fetchFolders()
   }, [fetchFolders, filters, page])
 
+  // GSAP Stagger Animation for items
+  useEffect(() => {
+    if (!isLoading && folders.length > 0) {
+      const selector = viewMode === 'grid' ? '.folder-card' : '.folder-row'
+      gsap.fromTo(
+        selector,
+        { opacity: 0, x: -20 },
+        { opacity: 1, x: 0, duration: 0.4, stagger: 0.05, ease: 'power2.out', clearProps: 'all' }
+      )
+    }
+  }, [folders, viewMode, isLoading])
+
   const totalPages = Math.max(1, Math.ceil(total / limit))
 
   function toggleSelect(id: string) {
@@ -584,20 +630,20 @@ export default function FolderListPage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b-2 border-foreground pb-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">媒体文件夹</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            共 {total} 个文件夹
+          <h1 className="text-3xl font-black tracking-tight uppercase">媒体文件夹</h1>
+          <p className="mt-1 text-sm font-bold text-muted-foreground">
+            共 <span className="text-foreground">{total}</span> 个文件夹
             {selectedIds.size > 0 && <span className="ml-2 text-primary">· 已选 {selectedIds.size} 个</span>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           {selectedIds.size > 0 && (
             <button
               type="button"
               onClick={() => { setMoveError(null); setShowMoveModal(true) }}
-              className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+              className="flex items-center gap-2 border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
             >
               移动所选
             </button>
@@ -606,7 +652,7 @@ export default function FolderListPage() {
             type="button"
             onClick={() => void triggerScan()}
             disabled={isScanning}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+            className="flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
           >
             {isScanning ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -615,24 +661,25 @@ export default function FolderListPage() {
             )}
             {isScanning ? '扫描中' : '扫描'}
           </button>
-          <div className="flex rounded-lg border border-border">
+          <div className="flex border-2 border-foreground bg-background shadow-hard">
             <button
               type="button"
               onClick={() => setViewMode('grid')}
               className={cn(
-                'rounded-l-lg px-2.5 py-2 text-sm transition',
-                viewMode === 'grid' ? 'bg-accent' : 'hover:bg-accent',
+                'px-3 py-2 text-sm transition-colors',
+                viewMode === 'grid' ? 'bg-foreground text-background' : 'hover:bg-muted',
               )}
               title="网格视图"
             >
               <Grid2X2 className="h-4 w-4" />
             </button>
+            <div className="w-0.5 bg-foreground" />
             <button
               type="button"
               onClick={() => setViewMode('list')}
               className={cn(
-                'rounded-r-lg px-2.5 py-2 text-sm transition',
-                viewMode === 'list' ? 'bg-accent' : 'hover:bg-accent',
+                'px-3 py-2 text-sm transition-colors',
+                viewMode === 'list' ? 'bg-foreground text-background' : 'hover:bg-muted',
               )}
               title="列表视图"
             >
@@ -644,78 +691,78 @@ export default function FolderListPage() {
 
       <ScanProgressBanner />
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mb-6 flex flex-wrap gap-3">
         {ALL_CATEGORIES.map((c) => (
           <button
             key={c}
             type="button"
             onClick={() => { setPage(1); setFilters({ ...filters, category: c === '' ? undefined : c }) }}
             className={cn(
-              'rounded-full border px-3 py-1 text-xs font-medium transition',
+              'border-2 px-4 py-1.5 text-xs font-bold transition-all hover:-translate-y-0.5 hover:shadow-hard',
               filters.category === (c === '' ? undefined : c)
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-border hover:bg-accent',
+                ? 'border-foreground bg-foreground text-background shadow-hard -translate-y-0.5'
+                : 'border-foreground bg-background text-foreground',
             )}
           >
             {CATEGORY_LABEL[c]}
           </button>
         ))}
-        <div className="mx-1 w-px bg-border" />
+        <div className="mx-2 w-0.5 bg-foreground" />
         {ALL_STATUSES.map((s) => (
           <button
             key={s}
             type="button"
             onClick={() => { setPage(1); setFilters({ ...filters, status: s === '' ? undefined : s, onlyDeleted: undefined }) }}
             className={cn(
-              'rounded-full border px-3 py-1 text-xs font-medium transition',
+              'border-2 px-4 py-1.5 text-xs font-bold transition-all hover:-translate-y-0.5 hover:shadow-hard',
               !filters.onlyDeleted && filters.status === (s === '' ? undefined : s)
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-border hover:bg-accent',
+                ? 'border-foreground bg-foreground text-background shadow-hard -translate-y-0.5'
+                : 'border-foreground bg-background text-foreground',
             )}
           >
             {STATUS_LABEL[s]}
           </button>
         ))}
-        <div className="mx-1 w-px bg-border" />
+        <div className="mx-2 w-0.5 bg-foreground" />
         <button
           type="button"
           onClick={() => { setPage(1); setFilters({ onlyDeleted: filters.onlyDeleted ? undefined : true }) }}
           className={cn(
-            'rounded-full border px-3 py-1 text-xs font-medium transition',
+            'border-2 px-4 py-1.5 text-xs font-bold transition-all hover:-translate-y-0.5 hover:shadow-hard',
             filters.onlyDeleted
-              ? 'border-red-400 bg-red-100 text-red-700'
-              : 'border-border hover:bg-accent',
+              ? 'border-red-900 bg-red-900 text-white shadow-hard -translate-y-0.5'
+              : 'border-foreground bg-background text-foreground',
           )}
         >
           已隐藏
         </button>
       </div>
 
-      <div className="mt-4 flex flex-col gap-4 xl:flex-row">
+      <div className="flex flex-col gap-6 xl:flex-row">
         <div className="min-w-0 flex-1">
           {error != null && (
-            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="mb-6 border-2 border-foreground bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
               {error}
             </div>
           )}
           {moveError != null && (
-            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="mb-6 border-2 border-foreground bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
               {moveError}
             </div>
           )}
 
           {isLoading && folders.length === 0 ? (
-            <div className="flex items-center justify-center py-20 text-muted-foreground">
-              <Loader2 className="h-6 w-6 animate-spin" />
-              <span className="ml-2 text-sm">加载中...</span>
+            <div className="flex flex-col items-center justify-center py-32 text-foreground">
+              <Loader2 className="h-8 w-8 animate-spin" />
+              <span className="mt-4 text-sm font-bold tracking-widest">LOADING DATA...</span>
             </div>
           ) : folders.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-              <FolderOpen className="h-10 w-10 opacity-30" />
-              <p className="mt-2 text-sm">暂无文件夹，请先扫描</p>
+            <div className="flex flex-col items-center justify-center border-2 border-dashed border-foreground py-32 text-muted-foreground">
+              <FolderOpen className="h-12 w-12 opacity-50" />
+              <p className="mt-4 text-sm font-bold">暂无文件夹，请先扫描</p>
             </div>
           ) : viewMode === 'grid' ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {folders.map((folder) => (
                 <FolderCard
                   key={folder.id}
@@ -731,24 +778,24 @@ export default function FolderListPage() {
               ))}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-border">
+            <div className="overflow-x-auto border-2 border-foreground bg-card shadow-hard">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-border bg-muted/40">
-                    <th className="w-8 px-3 py-3">
+                  <tr className="border-b-2 border-foreground bg-muted/50">
+                    <th className="w-12 px-4 py-4">
                       <input
                         type="checkbox"
                         checked={selectedIds.size === folders.length && folders.length > 0}
                         onChange={toggleSelectAll}
-                        className="h-4 w-4 rounded border-gray-300"
+                        className="h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
                         aria-label="全选"
                       />
                     </th>
-                    <th className="px-3 py-3 text-left font-medium">名称</th>
-                    <th className="px-3 py-3 text-left font-medium">分类 / 状态</th>
-                    <th className="hidden px-3 py-3 text-left font-medium sm:table-cell">文件数</th>
-                    <th className="hidden px-3 py-3 text-left font-medium md:table-cell">大小</th>
-                    <th className="px-3 py-3 text-left font-medium">操作</th>
+                    <th className="px-4 py-4 text-left font-black tracking-widest">名称</th>
+                    <th className="px-4 py-4 text-left font-black tracking-widest">分类 / 状态</th>
+                    <th className="hidden px-4 py-4 text-left font-black tracking-widest sm:table-cell">文件数</th>
+                    <th className="hidden px-4 py-4 text-left font-black tracking-widest md:table-cell">大小</th>
+                    <th className="px-4 py-4 text-left font-black tracking-widest">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -771,23 +818,23 @@ export default function FolderListPage() {
           )}
 
           {totalPages > 1 && (
-            <div className="mt-4 flex items-center justify-center gap-2">
+            <div className="mt-8 flex items-center justify-center gap-4">
               <button
                 type="button"
                 disabled={page <= 1}
                 onClick={() => setPage(page - 1)}
-                className="rounded-lg border border-border px-3 py-1.5 text-sm transition hover:bg-accent disabled:opacity-40"
+                className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-40 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
                 上一页
               </button>
-              <span className="text-sm text-muted-foreground">
-                第 {page} / {totalPages} 页
+              <span className="text-sm font-black font-mono">
+                {page} / {totalPages}
               </span>
               <button
                 type="button"
                 disabled={page >= totalPages}
                 onClick={() => setPage(page + 1)}
-                className="rounded-lg border border-border px-3 py-1.5 text-sm transition hover:bg-accent disabled:opacity-40"
+                className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-40 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
                 下一页
               </button>
@@ -795,7 +842,7 @@ export default function FolderListPage() {
           )}
         </div>
 
-        <div className="flex w-full flex-col gap-4 xl:w-72 xl:shrink-0">
+        <div className="flex w-full flex-col gap-6 xl:w-80 xl:shrink-0">
           <RecentJobsPanel />
           <RecentLogsPanel />
         </div>

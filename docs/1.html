@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<style>
+  body { background-color: #E4E9E5; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; }
+  .dot { width: 6px; height: 6px; background-color: #1A1A1A; border-radius: 50%; position: absolute; }
+</style>
+</head>
+<body class="flex items-center justify-center h-screen">
+  <!-- 背景矩阵 -->
+  <div id="grid" class="absolute inset-0 z-0"></div>
+  
+  <!-- 扁平化卡片 -->
+  <div class="relative z-10 bg-[#849C8A] text-[#E4E9E5] p-8 w-80 border-2 border-[#1A1A1A] flex flex-col gap-4 shadow-[8px_8px_0px_#1A1A1A] transition-transform hover:-translate-y-1 hover:shadow-[12px_12px_0px_#1A1A1A]">
+    <h2 class="text-2xl font-bold tracking-tighter text-[#1A1A1A]">CLASSIFIER</h2>
+    <p class="text-sm font-medium">波浪矩阵风格：背景黑点随着时间产生律动，卡片极致扁平，采用硬朗的黑色粗边框与复古阴影。</p>
+    <button class="mt-4 bg-[#1A1A1A] text-[#E4E9E5] py-2 px-4 font-bold hover:bg-white hover:text-[#1A1A1A] transition-colors border-2 border-[#1A1A1A]">START SCAN</button>
+  </div>
+
+  <script>
+    const grid = document.getElementById('grid');
+    const cols = Math.floor(window.innerWidth / 40);
+    const rows = Math.floor(window.innerHeight / 40);
+    
+    // 生成矩阵点
+    for(let i=0; i<rows; i++) {
+      for(let j=0; j<cols; j++) {
+        let dot = document.createElement('div');
+        dot.className = 'dot';
+        dot.style.left = (j * 40 + 20) + 'px';
+        dot.style.top = (i * 40 + 20) + 'px';
+        grid.appendChild(dot);
+      }
+    }
+    
+    // GSAP 波浪动效
+    gsap.to('.dot', {
+      scale: 2, 
+      y: -10, 
+      duration: 1.5,
+      stagger: { amount: 2, grid: [rows, cols], from: "center", yoyo: true, repeat: -1 },
+      ease: "sine.inOut"
+    });
+  </script>
+</body>
+</html>

@@ -19,8 +19,9 @@ import {
   type OnConnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, FolderOpen, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2 } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, FolderOpen, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2, X } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
+import gsap from 'gsap'
 
 import { ApiRequestError } from '@/api/client'
 import { DirPicker } from '@/components/DirPicker'
@@ -465,9 +466,9 @@ function cfgJson(config: Record<string, unknown>, key: string): string {
 }
 
 const FIELD_CLS =
-  'w-full rounded-lg border border-border bg-background/80 px-2 py-1.5 text-sm outline-none ring-primary focus:ring-1'
+  'w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1'
 const TEXTAREA_FIELD_CLS =
-  'w-full rounded-lg border border-border bg-background/80 px-2 py-1.5 font-mono text-xs outline-none ring-primary focus:ring-1'
+  'w-full border-2 border-foreground bg-background px-3 py-2 font-mono text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1'
 
 interface ConfigFieldProps {
   label: string
@@ -478,10 +479,10 @@ interface ConfigFieldProps {
 function ConfigField({ label, hint, children }: ConfigFieldProps) {
   return (
     <div>
-      <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
+      <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-foreground">
         {label}
       </label>
-      {hint && <p className="mb-1 text-[10px] leading-relaxed text-muted-foreground">{hint}</p>}
+      {hint && <p className="mb-2 text-[10px] font-bold text-muted-foreground">{hint}</p>}
       {children}
     </div>
   )
@@ -489,8 +490,8 @@ function ConfigField({ label, hint, children }: ConfigFieldProps) {
 
 function NodeUsageHint({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed border-border bg-muted/20 p-2.5">
-      <p className="text-[11px] leading-relaxed text-muted-foreground">{children}</p>
+    <div className="border-2 border-dashed border-foreground bg-muted/30 p-3">
+      <p className="text-xs font-bold leading-relaxed text-muted-foreground">{children}</p>
     </div>
   )
 }
@@ -506,7 +507,7 @@ function DirPickerField({ value, onChange, placeholder, title }: DirPickerFieldP
   const [open, setOpen] = useState(false)
   return (
     <>
-      <div className="flex gap-1.5">
+      <div className="flex gap-2">
         <input
           type="text"
           value={value}
@@ -517,7 +518,7 @@ function DirPickerField({ value, onChange, placeholder, title }: DirPickerFieldP
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="shrink-0 rounded-lg border border-border bg-background/80 px-2 py-1.5 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+          className="shrink-0 border-2 border-foreground bg-background px-3 py-2 text-foreground transition-all hover:bg-foreground hover:text-background hover:-translate-y-0.5"
         >
           <FolderOpen className="h-4 w-4" />
         </button>
@@ -840,12 +841,12 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
 // ─── WorkflowNodeCard ─────────────────────────────────────────────────────────
 
 const NODE_STATUS_CFG: Record<NodeRunStatus, { label: string; cls: string; icon: ReactElement | null }> = {
-  running: { label: '执行中', cls: 'text-amber-700 bg-amber-50 border-amber-200 dark:text-amber-400 dark:bg-amber-900/30 dark:border-amber-700', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
-  succeeded: { label: '完成', cls: 'text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-400 dark:bg-emerald-900/30 dark:border-emerald-700', icon: <CheckCircle2 className="h-3 w-3" /> },
-  failed: { label: '失败', cls: 'text-red-700 bg-red-50 border-red-200 dark:text-red-400 dark:bg-red-900/30 dark:border-red-700', icon: <TriangleAlert className="h-3 w-3" /> },
-  pending: { label: '等待中', cls: 'text-muted-foreground bg-muted/40 border-border', icon: null },
-  skipped: { label: '已跳过', cls: 'text-slate-500 bg-slate-50 border-slate-200 dark:text-slate-400 dark:bg-slate-800/40 dark:border-slate-600', icon: null },
-  waiting_input: { label: '等待输入', cls: 'text-blue-700 bg-blue-50 border-blue-200 dark:text-blue-400 dark:bg-blue-900/30 dark:border-blue-700', icon: <Loader2 className="h-3 w-3 animate-pulse" /> },
+  running: { label: '执行中', cls: 'text-amber-900 bg-amber-200 border-2 border-foreground', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
+  succeeded: { label: '完成', cls: 'text-green-900 bg-green-200 border-2 border-foreground', icon: <CheckCircle2 className="h-3 w-3" /> },
+  failed: { label: '失败', cls: 'text-red-900 bg-red-200 border-2 border-foreground', icon: <TriangleAlert className="h-3 w-3" /> },
+  pending: { label: '等待中', cls: 'text-muted-foreground bg-muted border-2 border-foreground', icon: null },
+  skipped: { label: '已跳过', cls: 'text-slate-900 bg-slate-200 border-2 border-foreground', icon: null },
+  waiting_input: { label: '等待输入', cls: 'text-blue-900 bg-blue-200 border-2 border-foreground', icon: <Loader2 className="h-3 w-3 animate-pulse" /> },
 }
 
 function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
@@ -857,20 +858,43 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
   const inputPorts = data.schema?.input_ports ?? []
   const outputPorts = data.schema?.output_ports ?? []
   const category = getNodeCategory(data.type)
-  const accentClass = category.accentClass
 
   const renamePreview = useMemo(() => {
     if (!workflowNode || data.type !== 'rename-node') return null
     return buildRenamePreview(workflowNode.config)
   }, [workflowNode, data.type])
 
+  const nodeRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (nodeRef.current) {
+      gsap.fromTo(nodeRef.current, { scale: 0.8, opacity: 0, y: 20 }, { scale: 1, opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.5)" })
+    }
+  }, [])
+
+  // 差异化节点样式逻辑
+  const isTrigger = category.types.has('trigger')
+  const isRouter = category.types.has('category-router') || category.types.has('folder-splitter') || category.types.has('confidence-check')
+  
+  let nodeStyleClass = 'bg-card border-2 border-foreground rounded-none'
+  let headerStyleClass = 'bg-foreground text-background px-3 py-1.5 flex items-center justify-between'
+  
+  if (isTrigger) {
+    nodeStyleClass = 'bg-primary border-2 border-foreground rounded-l-full pl-2'
+    headerStyleClass = 'bg-transparent text-foreground px-3 py-1.5 flex items-center justify-between'
+  } else if (isRouter) {
+    nodeStyleClass = 'bg-muted border-2 border-foreground rounded-none'
+    headerStyleClass = 'bg-transparent border-b-2 border-foreground text-foreground px-3 py-1.5 flex items-center justify-between'
+  }
+
   return (
     <div
+      ref={nodeRef}
       className={cn(
-        'rounded-2xl border bg-gradient-to-br shadow-sm transition-shadow',
-        accentClass,
-        data.enabled ? 'opacity-100' : 'opacity-60 grayscale-[0.2]',
-        selected ? 'w-[300px] shadow-lg ring-2 ring-primary/60' : 'min-w-[200px]',
+        'relative shadow-hard transition-all duration-200 cursor-grab active:cursor-grabbing',
+        nodeStyleClass,
+        data.enabled ? 'opacity-100' : 'opacity-60 grayscale-[0.5]',
+        selected ? 'w-[320px] shadow-hard-hover -translate-y-1 ring-2 ring-foreground ring-offset-2 ring-offset-background' : 'min-w-[220px] hover:-translate-y-0.5 hover:shadow-hard-hover',
       )}
     >
       {inputPorts.map((port, index) => (
@@ -879,7 +903,8 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
           id={`in-${index}`}
           type="target"
           position={Position.Left}
-          style={{ top: `${((index + 1) / (inputPorts.length + 1)) * 100}%` }}
+          className="!w-3 !h-3 !bg-foreground !border-2 !border-background hover:!scale-150 transition-transform"
+          style={{ top: `${((index + 1) / (inputPorts.length + 1)) * 100}%`, left: isTrigger ? '8px' : '-7px' }}
         />
       ))}
       {outputPorts.map((port, index) => (
@@ -888,44 +913,59 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
           id={`out-${index}`}
           type="source"
           position={Position.Right}
-          style={{ top: `${((index + 1) / (outputPorts.length + 1)) * 100}%` }}
+          className="!w-3 !h-3 !bg-foreground !border-2 !border-background hover:!scale-150 transition-transform"
+          style={{ top: `${((index + 1) / (outputPorts.length + 1)) * 100}%`, right: '-7px' }}
         />
       ))}
 
-      {/* Collapsed header — always visible */}
-      <div className="px-3 py-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span
-                className={cn('h-1.5 w-1.5 shrink-0 rounded-full', category.iconColor.replace('text-', 'bg-'))}
-              />
-              <p className="truncate text-sm font-semibold leading-tight text-foreground">{data.label}</p>
+      {/* Header */}
+      <div className={headerStyleClass}>
+        <div className="flex items-center gap-2 min-w-0">
+          {isTrigger && (
+            <div className="w-8 h-8 rounded-full bg-foreground flex items-center justify-center text-background shrink-0">
+              <Play className="w-4 h-4 ml-0.5" />
             </div>
-            <p className="ml-3 mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{data.type}</p>
+          )}
+          {!isTrigger && !isRouter && (
+            <div className={cn('w-2 h-2 rounded-full shrink-0', category.iconColor.replace('text-', 'bg-'))} />
+          )}
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black tracking-widest">{data.label}</p>
+            {isTrigger && <p className="truncate font-mono text-[10px] font-bold opacity-80">{data.type}</p>}
           </div>
+        </div>
+        {!isTrigger && (
           <span
             className={cn(
-              'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
-              data.enabled ? 'bg-background/80 text-foreground' : 'bg-muted text-muted-foreground',
+              'shrink-0 border-2 px-1.5 py-0.5 text-[10px] font-bold',
+              data.enabled ? 'border-transparent' : 'border-foreground bg-background text-foreground',
             )}
           >
-            {data.enabled ? '启用' : '停用'}
+            {data.enabled ? '' : '停用'}
           </span>
-        </div>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="px-3 py-3">
+        {!isTrigger && (
+          <p className="mb-2 truncate font-mono text-[10px] font-bold text-muted-foreground">{data.type}</p>
+        )}
+        
         {(inputPorts.length > 0 || outputPorts.length > 0) && (
-          <div className="ml-3 mt-1.5 flex gap-2 text-[10px] text-muted-foreground">
-            {inputPorts.length > 0 && <span>↓ 输入 {inputPorts.length}</span>}
-            {outputPorts.length > 0 && <span>↑ 输出 {outputPorts.length}</span>}
+          <div className="flex gap-3 text-[10px] font-bold text-muted-foreground mb-2">
+            {inputPorts.length > 0 && <span>↓ IN {inputPorts.length}</span>}
+            {outputPorts.length > 0 && <span>↑ OUT {outputPorts.length}</span>}
           </div>
         )}
+        
         {nodeRun && (() => {
           const cfg = NODE_STATUS_CFG[nodeRun.status]
           return (
-            <div className={cn('ml-3 mt-1.5 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium', cfg.cls)}>
+            <div className={cn('mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold', cfg.cls)}>
               {cfg.icon}
               {cfg.label}
-              {nodeRun.error && <span className="ml-0.5 opacity-70">— {nodeRun.error}</span>}
+              {nodeRun.error && <span className="ml-1 opacity-80 truncate max-w-[150px]">— {nodeRun.error}</span>}
             </div>
           )
         })()}
@@ -933,36 +973,35 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
 
       {/* Expanded config form — only when selected */}
       {selected && (
-        <div className="nodrag nowheel nopan max-h-[55vh] overflow-y-auto border-t border-border/50 px-3 pb-3 pt-2.5">
-          <div className="space-y-3">
+        <div className="nodrag nowheel nopan max-h-[55vh] overflow-y-auto border-t-2 border-foreground bg-background px-4 pb-4 pt-4">
+          <div className="space-y-4">
             {/* Enable toggle */}
-            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-border bg-background/50 px-3 py-2">
-              <span className="text-sm font-medium">启用该节点</span>
+            <label className="flex cursor-pointer items-center justify-between border-2 border-foreground bg-muted/30 px-3 py-2 transition-colors hover:bg-muted/50">
+              <span className="text-sm font-bold">启用该节点</span>
               <input
                 type="checkbox"
                 checked={data.enabled}
                 onChange={(e) => updateNode(id, { enabled: e.target.checked })}
-                className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                className="h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
               />
             </label>
 
             {/* Rename preview */}
             {renamePreview && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5 dark:border-emerald-700 dark:bg-emerald-900/20">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-400">重命名预览</p>
-                  <span className="text-[10px] text-emerald-700 dark:text-emerald-500">策略：{renamePreview.strategy}</span>
+              <div className="border-2 border-foreground bg-card p-3 shadow-hard">
+                <div className="flex items-center justify-between border-b-2 border-foreground pb-2 mb-2">
+                  <p className="text-xs font-black tracking-widest">RENAME PREVIEW</p>
+                  <span className="text-[10px] font-bold bg-foreground text-background px-1.5 py-0.5">STRATEGY: {renamePreview.strategy}</span>
                 </div>
-                <p className="mt-1 text-[10px] text-emerald-700/80 dark:text-emerald-500/80">
-                  示例：
-                  <span className="font-mono">{RENAME_PREVIEW_SAMPLE.name}</span>
+                <p className="text-[10px] font-bold text-muted-foreground mb-1">
+                  SAMPLE: <span className="font-mono text-foreground">{RENAME_PREVIEW_SAMPLE.name}</span>
                 </p>
-                <div className="mt-1.5 rounded-lg border border-emerald-200 bg-white/80 px-2 py-1.5 dark:border-emerald-700/50 dark:bg-emerald-950/50">
-                  <p className="text-[10px] text-muted-foreground">预览目标名称</p>
-                  <p className="font-mono text-sm text-foreground">{renamePreview.targetName}</p>
+                <div className="border-2 border-foreground bg-muted/30 px-2 py-2">
+                  <p className="text-[10px] font-bold text-muted-foreground mb-0.5">TARGET</p>
+                  <p className="font-mono text-sm font-bold text-foreground break-all">{renamePreview.targetName}</p>
                 </div>
                 {renamePreview.warning && (
-                  <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">{renamePreview.warning}</p>
+                  <p className="mt-2 text-[10px] font-bold text-red-600 bg-red-100 border-2 border-red-900 px-2 py-1">{renamePreview.warning}</p>
                 )}
               </div>
             )}
@@ -980,7 +1019,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
               <button
                 type="button"
                 onClick={() => void onRollbackRun(nodeRun.workflow_run_id)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/40"
+                className="inline-flex w-full items-center justify-center gap-2 border-2 border-amber-900 bg-amber-200 px-3 py-2 text-sm font-bold text-amber-900 transition-all hover:bg-amber-900 hover:text-amber-100 hover:shadow-hard hover:-translate-y-0.5"
               >
                 <RotateCcw className="h-4 w-4" />
                 回退此节点的工作流运行
@@ -989,7 +1028,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
             <button
               type="button"
               onClick={() => deleteNode(id)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50/60 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 dark:border-red-700 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
+              className="inline-flex w-full items-center justify-center gap-2 border-2 border-red-900 bg-red-100 px-3 py-2 text-sm font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5"
             >
               <Trash2 className="h-4 w-4" />
               删除该节点
@@ -1018,12 +1057,20 @@ function RunWorkflowModal({ open, workflowDefId, onClose, onStarted }: RunWorkfl
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  
+  const overlayRef = useRef<HTMLDivElement | null>(null)
+  const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (open) {
       void fetchFolders()
       setSelected(new Set())
       setError(null)
+      
+      if (overlayRef.current && modalRef.current) {
+        gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.2 })
+        gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.7)" })
+      }
     }
   }, [open, fetchFolders])
 
@@ -1059,55 +1106,55 @@ function RunWorkflowModal({ open, workflowDefId, onClose, onStarted }: RunWorkfl
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex w-full max-w-md flex-col rounded-2xl border border-border bg-card shadow-2xl">
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 className="text-base font-semibold">运行工作流</h2>
-          <button type="button" onClick={onClose} className="rounded-lg border border-border p-1.5 transition hover:bg-accent">
-            <Trash2 className="h-4 w-4" />
+    <div ref={overlayRef} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div ref={modalRef} className="flex w-full max-w-md flex-col border-2 border-foreground bg-card shadow-hard-lg">
+        <div className="flex items-center justify-between border-b-2 border-foreground bg-primary px-5 py-4 text-primary-foreground">
+          <h2 className="text-lg font-black tracking-tight">运行工作流</h2>
+          <button type="button" onClick={onClose} className="border-2 border-transparent p-1.5 transition-all hover:border-primary-foreground hover:bg-foreground hover:text-background">
+            <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">选择要处理的文件夹（{selected.size}/{folders.length}）</p>
-            <button type="button" onClick={toggleAll} className="text-xs text-primary hover:underline">
+        <div className="flex-1 overflow-y-auto px-5 py-5 bg-background">
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-sm font-bold text-muted-foreground">选择要处理的文件夹（<span className="text-foreground">{selected.size}/{folders.length}</span>）</p>
+            <button type="button" onClick={toggleAll} className="text-xs font-black text-primary hover:underline">
               {selected.size === folders.length ? '取消全选' : '全选'}
             </button>
           </div>
           {folders.length === 0 && (
-            <p className="py-4 text-center text-sm text-muted-foreground">暂无文件夹，请先扫描</p>
+            <p className="py-8 text-center text-sm font-bold text-muted-foreground border-2 border-dashed border-foreground">暂无文件夹，请先扫描</p>
           )}
-          <div className="max-h-72 space-y-1.5 overflow-y-auto">
+          <div className="max-h-72 space-y-2 overflow-y-auto">
             {folders.map((folder) => (
               <label
                 key={folder.id}
                 className={cn(
-                  'flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition',
-                  selected.has(folder.id) ? 'border-primary/40 bg-primary/5' : 'border-border hover:bg-accent/50',
+                  'flex cursor-pointer items-center gap-3 border-2 border-foreground px-3 py-3 transition-colors',
+                  selected.has(folder.id) ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted/30',
                 )}
               >
                 <input
                   type="checkbox"
                   checked={selected.has(folder.id)}
                   onChange={() => toggleFolder(folder.id)}
-                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                  className="h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{folder.name}</p>
-                  <p className="truncate text-[10px] text-muted-foreground">{folder.path}</p>
+                  <p className="truncate text-sm font-black">{folder.name}</p>
+                  <p className="truncate font-mono text-[10px] font-bold opacity-80 mt-0.5">{folder.path}</p>
                 </div>
               </label>
             ))}
           </div>
-          {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+          {error && <p className="mt-4 border-2 border-red-900 bg-red-100 px-3 py-2 text-sm font-bold text-red-900">{error}</p>}
         </div>
-        <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
-          <button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm transition hover:bg-accent">取消</button>
+        <div className="flex justify-end gap-3 border-t-2 border-foreground bg-muted/30 px-5 py-4">
+          <button type="button" onClick={onClose} className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5">取消</button>
           <button
             type="button"
             disabled={selected.size === 0 || isSubmitting}
             onClick={() => void handleRun()}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-2 border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
           >
             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             {isSubmitting ? '启动中...' : '开始运行'}
@@ -1390,8 +1437,8 @@ function WorkflowEditorScreen() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
-        正在加载工作流编辑器...
+      <div className="flex h-screen items-center justify-center text-sm font-black tracking-widest text-foreground">
+        LOADING EDITOR...
       </div>
     )
   }
@@ -1401,34 +1448,34 @@ function WorkflowEditorScreen() {
       {/* overflow-hidden ensures the page itself never scrolls */}
       <div className="flex h-screen overflow-hidden flex-col bg-background text-foreground">
         {/* ── Header ─────────────────────────────────────────────────────── */}
-        <header className="shrink-0 border-b border-border/80 bg-background/90 backdrop-blur">
-          <div className="flex items-center justify-between gap-4 px-5 py-3">
-            <div className="flex items-center gap-3">
+        <header className="shrink-0 border-b-2 border-foreground bg-primary text-primary-foreground">
+          <div className="flex items-center justify-between gap-4 px-6 py-4">
+            <div className="flex items-center gap-4">
               <button
                 type="button"
                 onClick={() => navigate('/workflow-defs')}
-                className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm transition hover:bg-accent"
+                className="inline-flex items-center gap-2 border-2 border-transparent px-3 py-2 text-sm font-bold transition-all hover:border-primary-foreground hover:bg-foreground hover:text-background"
               >
                 <ArrowLeft className="h-4 w-4" />
                 返回列表
               </button>
               <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">
+                <p className="text-[10px] font-bold uppercase tracking-widest">
                   工作流编辑器
                 </p>
-                <h1 className="text-base font-semibold leading-tight">
+                <h1 className="text-xl font-black tracking-tight">
                   {workflowDef?.name ?? '未命名工作流'}
                 </h1>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
-              {error && <span className="text-sm text-red-600 dark:text-red-400">{error}</span>}
-              {notice && <span className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</span>}
+            <div className="flex items-center gap-4">
+              {error && <span className="text-sm font-bold text-red-300">{error}</span>}
+              {notice && <span className="text-sm font-bold text-green-300">{notice}</span>}
               <button
                 type="button"
                 onClick={() => setIsRunModalOpen(true)}
-                className="inline-flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
+                className="inline-flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold text-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
               >
                 <Play className="h-4 w-4" />
                 运行
@@ -1437,7 +1484,7 @@ function WorkflowEditorScreen() {
                 type="button"
                 onClick={() => void handleSave()}
                 disabled={isSaving}
-                className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+                className="inline-flex items-center gap-2 border-2 border-foreground bg-foreground px-4 py-2 text-sm font-bold text-background transition-all hover:bg-background hover:text-foreground hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-foreground disabled:hover:text-background disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
                 <Save className="h-4 w-4" />
                 {isSaving ? '保存中...' : '保存工作流'}
@@ -1451,8 +1498,8 @@ function WorkflowEditorScreen() {
           {/* ── Node panel sidebar (collapsible) ─────────────────────────── */}
           <aside
             className={cn(
-              'relative shrink-0 border-r border-border/80 bg-background/85 transition-[width] duration-200',
-              isNodePanelOpen ? 'w-64' : 'w-10',
+              'relative shrink-0 border-r-2 border-foreground bg-card transition-[width] duration-300 ease-out',
+              isNodePanelOpen ? 'w-72' : 'w-12',
             )}
           >
             {/* Toggle button */}
@@ -1461,8 +1508,8 @@ function WorkflowEditorScreen() {
               onClick={() => setIsNodePanelOpen((open) => !open)}
               title={isNodePanelOpen ? '收起节点面板' : '展开节点面板'}
               className={cn(
-                'absolute top-3 z-10 flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-foreground',
-                isNodePanelOpen ? 'right-3' : 'left-1.5',
+                'absolute top-4 z-10 flex h-8 w-8 items-center justify-center border-2 border-foreground bg-background text-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard',
+                isNodePanelOpen ? 'right-4' : 'left-2',
               )}
             >
               {isNodePanelOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -1470,41 +1517,38 @@ function WorkflowEditorScreen() {
 
             {/* Panel content — only rendered when open */}
             {isNodePanelOpen && (
-              <div className="flex h-full flex-col pt-12">
-                <div className="border-b border-border/70 px-4 pb-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <Wand2 className="h-4 w-4 text-sky-600" />
+              <div className="flex h-full flex-col pt-16">
+                <div className="border-b-2 border-foreground px-5 pb-4">
+                  <div className="flex items-center gap-2 text-base font-black tracking-tight">
+                    <Wand2 className="h-5 w-5 text-foreground" />
                     节点面板
                   </div>
-                  <p className="mt-0.5 text-xs text-muted-foreground">点击节点将其添加到画布。</p>
+                  <p className="mt-1 text-xs font-bold text-muted-foreground">点击节点将其添加到画布。</p>
                 </div>
-                <div className="flex-1 overflow-y-auto p-3">
+                <div className="flex-1 overflow-y-auto p-4 bg-muted/10">
                   {NODE_CATEGORIES.map((category) => {
                     const categorySchemas = schemas.filter((schema) => category.types.has(schema.type))
                     if (categorySchemas.length === 0) return null
                     return (
-                      <div key={category.label} className="mb-4">
-                        <div className="mb-1.5 flex items-center gap-1.5">
-                          <span className={cn('h-2 w-2 rounded-full', category.iconColor.replace('text-', 'bg-'))} />
-                          <p className={cn('text-[11px] font-semibold', category.iconColor)}>{category.label}</p>
+                      <div key={category.label} className="mb-6">
+                        <div className="mb-3 flex items-center gap-2">
+                          <span className={cn('h-2 w-2 rounded-full border-2 border-foreground', category.iconColor.replace('text-', 'bg-'))} />
+                          <p className="text-xs font-black tracking-widest text-foreground">{category.label}</p>
                         </div>
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                           {categorySchemas.map((schema) => (
                             <button
                               key={schema.type}
                               type="button"
                               onClick={() => addNode(schema)}
-                              className={cn(
-                                'w-full rounded-xl border border-border bg-card px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-sm',
-                                category.borderHoverClass,
-                              )}
+                              className="w-full border-2 border-foreground bg-background px-4 py-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-hard"
                             >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-sm font-medium">{schema.label}</span>
-                                <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                <span className="text-sm font-bold">{schema.label}</span>
+                                <Plus className="h-4 w-4 shrink-0 text-foreground" />
                               </div>
                               {schema.description && (
-                                <p className="mt-0.5 text-[10px] text-muted-foreground line-clamp-1">
+                                <p className="mt-1 text-[10px] font-medium text-muted-foreground line-clamp-2">
                                   {schema.description}
                                 </p>
                               )}
@@ -1520,22 +1564,22 @@ function WorkflowEditorScreen() {
                     const unknownSchemas = schemas.filter((schema) => !knownTypes.has(schema.type))
                     if (unknownSchemas.length === 0) return null
                     return (
-                      <div className="mb-4">
-                        <div className="mb-1.5 flex items-center gap-1.5">
-                          <span className="h-2 w-2 rounded-full bg-gray-400" />
-                          <p className="text-[11px] font-semibold text-gray-500">其他</p>
+                      <div className="mb-6">
+                        <div className="mb-3 flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full border-2 border-foreground bg-gray-400" />
+                          <p className="text-xs font-black tracking-widest text-foreground">其他</p>
                         </div>
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                           {unknownSchemas.map((schema) => (
                             <button
                               key={schema.type}
                               type="button"
                               onClick={() => addNode(schema)}
-                              className="w-full rounded-xl border border-border bg-card px-3 py-2 text-left transition hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-sm"
+                              className="w-full border-2 border-foreground bg-background px-4 py-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-hard"
                             >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-sm font-medium">{schema.label}</span>
-                                <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                <span className="text-sm font-bold">{schema.label}</span>
+                                <Plus className="h-4 w-4 shrink-0 text-foreground" />
                               </div>
                             </button>
                           ))}
@@ -1555,13 +1599,13 @@ function WorkflowEditorScreen() {
               onClick={() => setSelectionModeOn((v) => !v)}
               title={selectionModeOn ? '切换为拖拽模式' : '切换为框选模式'}
               className={cn(
-                'absolute right-4 top-4 z-10 flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium shadow-sm transition',
+                'absolute right-6 top-6 z-10 flex items-center gap-2 border-2 px-4 py-2 text-xs font-bold transition-all hover:shadow-hard hover:-translate-y-0.5',
                 selectionModeOn
-                  ? 'border-primary/40 bg-primary/10 text-primary'
-                  : 'border-border bg-background/90 text-muted-foreground hover:bg-accent',
+                  ? 'border-foreground bg-foreground text-background'
+                  : 'border-foreground bg-background text-foreground',
               )}
             >
-              <MousePointer className="h-3.5 w-3.5" />
+              <MousePointer className="h-4 w-4" />
               {selectionModeOn ? '框选模式' : '拖拽模式'}
             </button>
             <ReactFlow
@@ -1584,32 +1628,28 @@ function WorkflowEditorScreen() {
               zoomOnPinch
               preventScrolling
               colorMode={theme}
-              className={
-                theme === 'dark'
-                  ? 'bg-[linear-gradient(135deg,rgba(10,14,26,0.97),rgba(15,22,40,0.97))]'
-                  : 'bg-[linear-gradient(135deg,rgba(248,250,252,0.9),rgba(240,249,255,0.9))]'
-              }
-              defaultEdgeOptions={{ style: { strokeWidth: 2, stroke: theme === 'dark' ? '#2dd4bf' : '#0f766e' } }}
+              className="bg-background"
+              defaultEdgeOptions={{ style: { strokeWidth: 3, stroke: 'hsl(var(--foreground))' } }}
             >
-              <Background gap={24} size={1} color={theme === 'dark' ? '#2d3748' : '#cbd5e1'} />
-              <MiniMap className="!bg-background/90" pannable zoomable />
-              <Controls />
+              <Background gap={20} size={2} color="hsl(var(--foreground))" variant="dots" style={{ opacity: 0.15 }} />
+              <MiniMap className="!bg-background/90 !border-2 !border-foreground" pannable zoomable />
+              <Controls className="!border-2 !border-foreground !shadow-hard" />
             </ReactFlow>
 
             {/* Edge selected — delete bar */}
             {selectedEdgeId && (
-              <div className="absolute bottom-4 left-4 z-10 rounded-2xl border border-border bg-background/95 px-4 py-3 shadow-lg">
-                <div className="flex items-center gap-4">
+              <div className="absolute bottom-6 left-6 z-10 border-2 border-foreground bg-card px-5 py-4 shadow-hard">
+                <div className="flex items-center gap-6">
                   <div>
-                    <p className="text-sm font-medium">已选中连线</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-sm font-black">已选中连线</p>
+                    <p className="text-xs font-bold text-muted-foreground mt-1">
                       删除后会同时清除目标节点上的 link_source。
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={deleteSelectedEdge}
-                    className="rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 transition hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/30"
+                    className="border-2 border-red-900 bg-red-100 px-4 py-2 text-sm font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5"
                   >
                     删除连线
                   </button>

@@ -33,9 +33,9 @@ const STATUS_LABELS: Record<Snapshot['status'], string> = {
 }
 
 const STATUS_CLASSES: Record<Snapshot['status'], string> = {
-  pending: 'bg-yellow-100 text-yellow-800',
-  committed: 'bg-green-100 text-green-800',
-  reverted: 'bg-gray-100 text-gray-500',
+  pending: 'bg-yellow-300 text-black border-2 border-black',
+  committed: 'bg-primary text-primary-foreground border-2 border-black',
+  reverted: 'bg-muted text-muted-foreground border-2 border-black',
 }
 
 function formatDate(value: string): string {
@@ -64,30 +64,30 @@ function renderDetail(detail: Record<string, unknown> | null): Array<[string, st
 
 function RevertFailurePanel({ detail }: { detail: RevertResult }) {
   return (
-    <div className="mt-4 space-y-3 rounded-xl border border-red-200 bg-red-50 p-4">
+    <div className="mt-4 space-y-3 border-2 border-foreground bg-red-100 p-4 shadow-hard">
       <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
         <div className="space-y-1">
-          <p className="text-sm font-semibold text-red-800">回退失败</p>
+          <p className="text-sm font-bold text-red-900">回退失败</p>
           {detail.preflight_error && (
-            <p className="text-xs text-red-700">{detail.preflight_error}</p>
+            <p className="text-xs font-medium text-red-800">{detail.preflight_error}</p>
           )}
           {detail.error_message && !detail.preflight_error && (
-            <p className="text-xs text-red-700">{detail.error_message}</p>
+            <p className="text-xs font-medium text-red-800">{detail.error_message}</p>
           )}
         </div>
       </div>
 
       {detail.current_state.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-medium text-red-800">目前文件状态（未变动）：</p>
+        <div className="space-y-3">
+          <p className="text-xs font-bold text-red-900">目前文件状态（未变动）：</p>
           {detail.current_state.map((s, i) => (
-            <div key={i} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs">
-              <p className="text-muted-foreground">当前位置</p>
+            <div key={i} className="border-2 border-red-900 bg-white px-3 py-2 text-xs">
+              <p className="font-bold text-red-900">当前位置</p>
               <p className="break-all font-mono text-foreground">{s.current_path}</p>
               {s.current_path !== s.original_path && (
                 <>
-                  <p className="mt-1 text-muted-foreground">目标位置（未到达）</p>
+                  <p className="mt-2 font-bold text-red-900">目标位置（未到达）</p>
                   <p className="break-all font-mono text-foreground">{s.original_path}</p>
                 </>
               )}
@@ -96,7 +96,7 @@ function RevertFailurePanel({ detail }: { detail: RevertResult }) {
         </div>
       )}
 
-      <p className="text-xs text-red-600">✓ 回退失败不会导致文件丢失，所有文件保持在回退前位置。</p>
+      <p className="text-xs font-bold text-red-700">✓ 回退失败不会导致文件丢失，所有文件保持在回退前位置。</p>
     </div>
   )
 }
@@ -166,7 +166,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
     <>
       <div
         className={cn(
-          'fixed inset-0 z-40 bg-black/45 transition-opacity',
+          'fixed inset-0 z-40 bg-black/50 transition-opacity',
           open ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
         )}
         onClick={onClose}
@@ -175,48 +175,48 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
 
       <aside
         className={cn(
-          'fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l border-border bg-background shadow-2xl transition-transform duration-200',
+          'fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l-4 border-foreground bg-background shadow-[-8px_0_0_rgba(0,0,0,1)] transition-transform duration-300 ease-out',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
         aria-label="快照时间线"
       >
-        <div className="border-b border-border bg-card px-5 py-4">
+        <div className="border-b-2 border-foreground bg-primary px-6 py-5 text-primary-foreground">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Snapshots</p>
-              <h2 className="mt-2 text-lg font-semibold">文件夹操作时间线</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="text-xs font-bold uppercase tracking-[0.24em]">Snapshots</p>
+              <h2 className="mt-2 text-xl font-black tracking-tight">文件夹操作时间线</h2>
+              <p className="mt-1 text-sm font-medium">
                 按时间查看分类、移动和回退记录。
               </p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-border p-2 transition hover:bg-accent"
+              className="border-2 border-transparent p-2 transition-all hover:border-primary-foreground hover:bg-foreground hover:text-background"
               aria-label="关闭快照抽屉"
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-5">
+        <div className="flex-1 overflow-y-auto px-6 py-6 bg-background">
           {error && !state.failureDetail && (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="mb-6 border-2 border-foreground bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
               {error}
             </div>
           )}
 
-          {isLoading && <p className="text-sm text-muted-foreground">正在加载快照记录...</p>}
+          {isLoading && <p className="text-sm font-bold text-muted-foreground">正在加载快照记录...</p>}
 
           {!isLoading && !error && orderedSnapshots.length === 0 && (
-            <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
+            <div className="border-2 border-dashed border-foreground px-4 py-12 text-center text-sm font-bold text-muted-foreground">
               这个文件夹还没有快照记录。
             </div>
           )}
 
           {orderedSnapshots.length > 0 && (
-            <ol className="relative space-y-6 pl-6 before:absolute before:left-[9px] before:top-2 before:h-[calc(100%-0.5rem)] before:w-px before:bg-border">
+            <ol className="relative space-y-8 pl-8 before:absolute before:left-[15px] before:top-2 before:h-[calc(100%-0.5rem)] before:w-0.5 before:bg-foreground">
               {orderedSnapshots.map((snapshot) => {
                 const detailItems = renderDetail(snapshot.detail)
                 const operationLabel = OP_LABELS[snapshot.operation_type] ?? snapshot.operation_type
@@ -224,23 +224,23 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
 
                 return (
                   <li key={snapshot.id} className="relative">
-                    <span className="absolute left-[-24px] top-1.5 h-4 w-4 rounded-full border-4 border-background bg-primary" />
-                    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <span className="absolute left-[-32px] top-1.5 h-4 w-4 rounded-full border-2 border-foreground bg-primary" />
+                    <div className="border-2 border-foreground bg-card p-5 shadow-hard transition-all hover:-translate-y-1 hover:shadow-hard-hover">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div className="space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold">{operationLabel}</span>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <span className="text-base font-black tracking-tight">{operationLabel}</span>
                             <span
                               className={cn(
-                                'rounded-full px-2 py-0.5 text-xs font-medium',
+                                'px-2 py-0.5 text-xs font-bold',
                                 STATUS_CLASSES[snapshot.status],
                               )}
                             >
                               {STATUS_LABELS[snapshot.status]}
                             </span>
                           </div>
-                          <p className="text-xs text-muted-foreground">{formatDate(snapshot.created_at)}</p>
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <p className="text-xs font-mono font-bold text-muted-foreground">{formatDate(snapshot.created_at)}</p>
+                          <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-muted-foreground">
                             <span>前状态 {snapshot.before.length} 条</span>
                             {snapshot.after != null && <span>后状态 {snapshot.after.length} 条</span>}
                           </div>
@@ -251,9 +251,9 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                             type="button"
                             disabled={state.revertingId !== null}
                             onClick={() => void handleRevert(snapshot.id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 border-2 border-foreground bg-background px-3 py-2 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
                           >
-                            <RotateCcw className="h-3.5 w-3.5" />
+                            <RotateCcw className="h-4 w-4" />
                             {isReverting ? '回退中...' : '回退到此节点'}
                           </button>
                         )}
@@ -264,27 +264,27 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                       )}
 
                       {detailItems.length > 0 && (
-                        <dl className="mt-4 grid gap-2 rounded-xl bg-muted/50 p-3 text-xs sm:grid-cols-2">
+                        <dl className="mt-5 grid gap-3 border-2 border-foreground bg-muted/30 p-4 text-xs sm:grid-cols-2">
                           {detailItems.map(([label, value]) => (
                             <div key={`${snapshot.id}-${label}`}>
-                              <dt className="text-muted-foreground">{label}</dt>
-                              <dd className="mt-0.5 break-all text-foreground">{value}</dd>
+                              <dt className="font-bold text-muted-foreground">{label}</dt>
+                              <dd className="mt-1 break-all font-mono font-medium text-foreground">{value}</dd>
                             </div>
                           ))}
                         </dl>
                       )}
 
                       {snapshot.after != null && snapshot.after.length > 0 && (
-                        <div className="mt-4 space-y-2 text-xs text-muted-foreground">
-                          <p className="font-medium text-foreground">路径变化</p>
+                        <div className="mt-5 space-y-3 text-xs">
+                          <p className="font-black text-foreground">路径变化</p>
                           {snapshot.after.slice(0, 3).map((record, index) => (
-                            <div key={`${snapshot.id}-${record.current_path}-${index}`} className="rounded-lg border border-border px-3 py-2">
-                              <div className="break-all">{record.original_path}</div>
-                              <div className="my-1 flex items-center gap-1 text-primary">
-                                <ChevronRight className="h-3.5 w-3.5" />
+                            <div key={`${snapshot.id}-${record.current_path}-${index}`} className="border-2 border-foreground bg-background px-3 py-3 font-mono">
+                              <div className="break-all text-muted-foreground">{record.original_path}</div>
+                              <div className="my-2 flex items-center gap-1 font-bold text-primary">
+                                <ChevronRight className="h-4 w-4" />
                                 <span>变更后</span>
                               </div>
-                              <div className="break-all">{record.current_path}</div>
+                              <div className="break-all font-bold text-foreground">{record.current_path}</div>
                             </div>
                           ))}
                         </div>

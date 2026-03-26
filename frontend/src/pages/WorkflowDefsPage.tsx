@@ -85,39 +85,39 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   }
 
   return (
-    <section className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">工作流定义</h1>
+    <section className="mx-auto max-w-5xl px-6 py-8">
+      <div className="mb-8 flex items-end justify-between border-b-2 border-foreground pb-4">
+        <h1 className="text-3xl font-black tracking-tight uppercase">工作流定义</h1>
         <button
           type="button"
           onClick={openCreate}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90"
+          className="flex items-center gap-2 border-2 border-foreground bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
         >
           <Plus className="h-4 w-4" />
           新建
         </button>
       </div>
 
-      {isLoading && <p className="text-sm text-muted-foreground">加载中…</p>}
+      {isLoading && <p className="text-sm font-bold text-muted-foreground">加载中…</p>}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{error}</p>}
 
       {!isLoading && !error && defs.length === 0 && (
-        <div className="rounded-xl border border-dashed border-border py-16 text-center">
-          <p className="text-sm text-muted-foreground">暂无工作流定义，点击「新建」创建第一个。</p>
+        <div className="border-2 border-dashed border-foreground py-20 text-center">
+          <p className="text-sm font-bold text-muted-foreground">暂无工作流定义，点击「新建」创建第一个。</p>
         </div>
       )}
 
       {defs.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-border">
+        <div className="overflow-hidden border-2 border-foreground bg-card shadow-hard">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border bg-muted/40 text-left">
-                <th className="px-4 py-3 font-medium">名称</th>
-                <th className="px-4 py-3 font-medium">版本</th>
-                <th className="px-4 py-3 font-medium">状态</th>
-                <th className="px-4 py-3 font-medium">创建时间</th>
-                <th className="px-4 py-3 font-medium">操作</th>
+              <tr className="border-b-2 border-foreground bg-muted/50 text-left">
+                <th className="px-5 py-4 font-black tracking-widest">名称</th>
+                <th className="px-5 py-4 font-black tracking-widest">版本</th>
+                <th className="px-5 py-4 font-black tracking-widest">状态</th>
+                <th className="px-5 py-4 font-black tracking-widest">创建时间</th>
+                <th className="px-5 py-4 font-black tracking-widest">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -125,15 +125,15 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 <tr
                   key={def.id}
                   className={cn(
-                    'border-b border-border last:border-0',
-                    idx % 2 === 0 ? 'bg-background' : 'bg-muted/20',
+                    'border-b-2 border-foreground last:border-0 transition-colors hover:bg-muted/30',
+                    idx % 2 === 0 ? 'bg-background' : 'bg-muted/10',
                   )}
                 >
-                  <td className="px-4 py-3 font-medium">{def.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">v{def.version}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-5 py-4 font-black">{def.name}</td>
+                  <td className="px-5 py-4 font-mono font-bold text-muted-foreground">v{def.version}</td>
+                  <td className="px-5 py-4">
                     {def.is_active ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
+                      <span className="inline-flex items-center gap-1.5 border-2 border-foreground bg-green-300 px-3 py-1 text-xs font-black text-green-900">
                         <Check className="h-3 w-3" />
                         已激活
                       </span>
@@ -141,35 +141,35 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                       <button
                         type="button"
                         onClick={() => void handleSetActive(def)}
-                        className="rounded-lg border border-border px-2.5 py-1 text-xs transition hover:bg-accent"
+                        className="border-2 border-foreground bg-background px-3 py-1 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
                       >
                         设为激活
                       </button>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className="px-5 py-4 font-mono text-xs font-bold text-muted-foreground">
                     {new Date(def.created_at).toLocaleString('zh-CN')}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-3">
                       <button
                         type="button"
                         onClick={() => openEdit(def)}
-                        className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs transition hover:bg-accent"
+                        className="flex items-center gap-1.5 border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
                       >
                         <Pencil className="h-3 w-3" />
                         编辑
                       </button>
                       <Link
                         to={`/workflow-defs/${def.id}/editor`}
-                        className="flex items-center gap-1 rounded-lg border border-sky-200 px-2.5 py-1 text-xs text-sky-700 transition hover:bg-sky-50"
+                        className="flex items-center gap-1.5 border-2 border-foreground bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
                       >
                         可视化编辑
                       </Link>
                       <button
                         type="button"
                         onClick={() => void handleDelete(def)}
-                        className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs text-red-600 transition hover:bg-red-50"
+                        className="flex items-center gap-1.5 border-2 border-red-900 bg-red-100 px-3 py-1.5 text-xs font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5"
                       >
                         <Trash2 className="h-3 w-3" />
                         删除
@@ -184,44 +184,44 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
       )}
 
       {modal !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-background p-6 shadow-xl">
-            <h2 className="mb-5 text-base font-semibold">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg border-2 border-foreground bg-background p-6 shadow-hard-lg">
+            <h2 className="mb-6 text-xl font-black tracking-tight">
               {modal.kind === 'create' ? '新建工作流定义' : '编辑工作流定义'}
             </h2>
 
-            <div className="space-y-4">
+            <div className="space-y-5">
               <div>
-                <label className="mb-1.5 block text-sm font-medium">名称</label>
+                <label className="mb-2 block text-sm font-black tracking-widest">名称</label>
                 <input
                   type="text"
                   value={form.name}
                   onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
                   placeholder="工作流名称"
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none ring-primary focus:ring-2"
+                  className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
                 />
               </div>
 
               <div>
-                <label className="mb-1.5 block text-sm font-medium">Graph JSON</label>
+                <label className="mb-2 block text-sm font-black tracking-widest">GRAPH JSON</label>
                 <textarea
                   value={form.graphJson}
                   onChange={(e) => setForm((prev) => ({ ...prev, graphJson: e.target.value }))}
                   rows={10}
                   spellCheck={false}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs outline-none ring-primary focus:ring-2"
+                  className="w-full border-2 border-foreground bg-muted/30 px-4 py-3 font-mono text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
                 />
               </div>
 
-              {formError && <p className="text-sm text-red-600">{formError}</p>}
+              {formError && <p className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{formError}</p>}
             </div>
 
-            <div className="mt-6 flex justify-end gap-2">
+            <div className="mt-8 flex justify-end gap-3">
               <button
                 type="button"
                 onClick={closeModal}
                 disabled={isSaving}
-                className="rounded-lg border border-border px-4 py-2 text-sm transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                className="border-2 border-foreground bg-background px-6 py-2.5 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
                 取消
               </button>
@@ -229,7 +229,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 type="button"
                 onClick={() => void handleSave()}
                 disabled={isSaving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="border-2 border-foreground bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
                 {isSaving ? '保存中…' : '保存'}
               </button>

@@ -13,8 +13,7 @@ services:
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-3}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - ${SOURCE_DIR}:${SOURCE_DIR}:ro
-      - ${TARGET_DIR}:${TARGET_DIR}:rw
+      - ${NAS_ROOT}:${NAS_ROOT}:rw
       - classifier_config:/config
     tmpfs:
       - /tmp/work

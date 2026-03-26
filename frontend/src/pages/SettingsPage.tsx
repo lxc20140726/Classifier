@@ -109,15 +109,15 @@ export default function SettingsPage() {
   }
 
   return (
-    <section className="mx-auto max-w-2xl px-4 py-8">
-      <h1 className="mb-6 text-xl font-semibold">系统配置</h1>
+    <section className="mx-auto max-w-2xl px-6 py-8">
+      <h1 className="mb-8 text-3xl font-black tracking-tight uppercase">系统配置</h1>
 
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-8">
-        <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
-          <div className="flex items-center justify-between gap-3">
+        <div className="space-y-4 border-2 border-foreground bg-card p-6 shadow-hard">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <label className="block text-sm font-medium">默认目标根目录</label>
-              <p className="text-xs text-muted-foreground">用于自动补全各分类输出路径，可单独覆盖。</p>
+              <label className="block text-sm font-black tracking-widest">默认目标根目录</label>
+              <p className="mt-1 text-xs font-bold text-muted-foreground">用于自动补全各分类输出路径，可单独覆盖。</p>
             </div>
             <button
               type="button"
@@ -125,7 +125,7 @@ export default function SettingsPage() {
                 setPickerTarget('target')
                 setPickerOpen(true)
               }}
-              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm transition hover:bg-accent"
+              className="flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
             >
               <FolderSearch className="h-4 w-4" />
               选择目录
@@ -134,23 +134,23 @@ export default function SettingsPage() {
           <input
             value={form.targetDir}
             onChange={(event) => setForm((prev) => ({ ...prev, targetDir: event.target.value }))}
-            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm font-mono outline-none ring-primary focus:ring-2"
+            className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-mono font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
             placeholder="/data/target"
           />
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium">分类输出目录</label>
-            <p className="text-xs text-muted-foreground">这些路径会写入结构化 app_config，供处理工作流中的 move-node 使用。</p>
+            <label className="block text-sm font-black tracking-widest">分类输出目录</label>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">这些路径会写入结构化 app_config，供处理工作流中的 move-node 使用。</p>
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             {Object.entries(OUTPUT_DIR_LABELS).map(([key, label]) => (
-              <div key={key} className="rounded-2xl border border-border bg-card p-4">
-                <div className="mb-2 flex items-center justify-between gap-3">
+              <div key={key} className="border-2 border-foreground bg-card p-5 shadow-hard transition-all hover:-translate-y-1 hover:shadow-hard-hover">
+                <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-medium">{label}</p>
-                    <p className="text-xs text-muted-foreground">对应 `{key}` 分类的 move-node 目标路径。</p>
+                    <p className="text-sm font-black">{label}</p>
+                    <p className="mt-1 text-[10px] font-bold text-muted-foreground">对应 `{key}` 分类的目标路径</p>
                   </div>
                   <button
                     type="button"
@@ -158,7 +158,7 @@ export default function SettingsPage() {
                       setPickerTarget(key as keyof NonNullable<AppConfig['output_dirs']>)
                       setPickerOpen(true)
                     }}
-                    className="rounded-lg border border-border px-2.5 py-1.5 text-xs transition hover:bg-accent"
+                    className="border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
                   >
                     选择
                   </button>
@@ -172,7 +172,7 @@ export default function SettingsPage() {
                       [key]: event.target.value,
                     },
                   }))}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm font-mono outline-none ring-primary focus:ring-2"
+                  className="w-full border-2 border-foreground bg-background px-3 py-2 text-xs font-mono font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
                   placeholder={`/data/target/${key}`}
                 />
               </div>
@@ -180,14 +180,14 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        {success && <p className="text-sm text-green-700">{success}</p>}
+        {error && <p className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{error}</p>}
+        {success && <p className="border-2 border-green-900 bg-green-100 px-4 py-3 text-sm font-bold text-green-900 shadow-hard">{success}</p>}
 
-        <div className="flex justify-end">
+        <div className="flex justify-end pt-4">
           <button
             type="submit"
             disabled={isLoading || isSaving}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="border-2 border-foreground bg-primary px-8 py-3 text-sm font-black tracking-widest text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
           >
             {isSaving ? '保存中…' : '保存配置'}
           </button>

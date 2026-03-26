@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { ChevronRight, Folder, FolderOpen, Loader2, X } from 'lucide-react'
+import gsap from 'gsap'
 
 import { listDirs, type FsDirEntry } from '@/api/fs'
 import { cn } from '@/lib/utils'
@@ -23,6 +24,9 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [pathInput, setPathInput] = useState(initialPath)
+  
+  const overlayRef = useRef<HTMLDivElement | null>(null)
+  const modalRef = useRef<HTMLDivElement | null>(null)
 
   const navigate = useCallback(async (path: string) => {
     setIsLoading(true)
@@ -42,6 +46,12 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
   useEffect(() => {
     if (open) {
       void navigate(initialPath)
+      
+      // GSAP Animation
+      if (overlayRef.current && modalRef.current) {
+        gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.2 })
+        gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.7)" })
+      }
     }
   }, [open, initialPath, navigate])
 
@@ -54,15 +64,15 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex w-full max-w-lg flex-col rounded-2xl border border-border bg-card shadow-2xl">
+    <div ref={overlayRef} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div ref={modalRef} className="flex w-full max-w-lg flex-col border-2 border-foreground bg-card shadow-hard-lg">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 className="text-base font-semibold">{title ?? '选择目录'}</h2>
+        <div className="flex items-center justify-between border-b-2 border-foreground px-5 py-4 bg-primary text-primary-foreground">
+          <h2 className="text-base font-bold tracking-tight">{title ?? '选择目录'}</h2>
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-border p-1.5 transition hover:bg-accent"
+            className="border-2 border-transparent p-1.5 transition-all hover:border-primary-foreground hover:bg-foreground hover:text-background"
             aria-label="关闭"
           >
             <X className="h-4 w-4" />
@@ -70,29 +80,29 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
         </div>
 
         {/* Current path input */}
-        <div className="border-b border-border px-5 py-3">
+        <div className="border-b-2 border-foreground px-5 py-4 bg-muted/30">
           <div className="flex gap-2">
             <input
               type="text"
               value={pathInput}
               placeholder="/path/to/dir"
-              className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              className="flex-1 border-2 border-foreground bg-background px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
               onChange={(e) => setPathInput(e.target.value)}
               onKeyDown={handleInputKeyDown}
             />
             <button
               type="button"
               onClick={() => { void navigate(pathInput.trim()) }}
-              className="rounded-lg border border-border px-3 py-2 text-sm transition hover:bg-accent"
+              className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
             >
               前往
             </button>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">按 Enter 或点击「前往」跳转到指定路径</p>
+          <p className="mt-2 text-xs font-medium text-muted-foreground">按 Enter 或点击「前往」跳转到指定路径</p>
         </div>
 
         {/* Directory listing */}
-        <div className="max-h-72 overflow-y-auto">
+        <div className="max-h-72 overflow-y-auto bg-background">
           {/* Parent dir navigation */}
           {current && current.path !== '/' && (
             <button
@@ -101,7 +111,7 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
                 const parent = current.path.split('/').slice(0, -1).join('/') || '/'
                 void navigate(parent)
               }}
-              className="flex w-full items-center gap-2 border-b border-border px-5 py-3 text-sm text-muted-foreground transition hover:bg-accent"
+              className="group flex w-full items-center gap-2 border-b-2 border-foreground px-5 py-3 text-sm font-medium transition-colors hover:bg-foreground hover:text-background"
             >
               <ChevronRight className="h-4 w-4 rotate-180" />
               <span>上级目录</span>
@@ -110,12 +120,12 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
 
           {isLoading && (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <Loader2 className="h-6 w-6 animate-spin text-foreground" />
             </div>
           )}
 
           {error && (
-            <div className="px-5 py-4 text-sm text-red-600">{error}</div>
+            <div className="px-5 py-4 text-sm font-bold text-red-600 border-b-2 border-foreground">{error}</div>
           )}
 
           {!isLoading && !error && current && (
@@ -125,8 +135,8 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
                 type="button"
                 onClick={() => setSelected(current.path)}
                 className={cn(
-                  'flex w-full items-center gap-2 px-5 py-3 text-sm transition',
-                  selected === current.path ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
+                  'flex w-full items-center gap-2 border-b-2 border-foreground px-5 py-3 text-sm font-mono transition-colors',
+                  selected === current.path ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
                 )}
               >
                 <FolderOpen className="h-4 w-4 shrink-0" />
@@ -134,17 +144,17 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
               </button>
 
               {current.entries.length === 0 && (
-                <p className="px-5 py-4 text-sm text-muted-foreground">此目录下没有子目录。</p>
+                <p className="px-5 py-4 text-sm font-medium text-muted-foreground border-b-2 border-foreground">此目录下没有子目录。</p>
               )}
 
               {current.entries.map((entry) => (
-                <div key={entry.path} className="flex items-center">
+                <div key={entry.path} className="flex items-stretch border-b-2 border-foreground last:border-b-0">
                   <button
                     type="button"
                     onClick={() => setSelected(entry.path)}
                     className={cn(
-                      'flex flex-1 items-center gap-2 px-5 py-3 text-sm transition',
-                      selected === entry.path ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
+                      'flex flex-1 items-center gap-2 px-5 py-3 text-sm font-mono transition-colors',
+                      selected === entry.path ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
                     )}
                   >
                     <Folder className="h-4 w-4 shrink-0" />
@@ -154,7 +164,7 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
                     type="button"
                     onClick={() => void navigate(entry.path)}
                     title="进入此目录"
-                    className="mr-2 rounded-md px-2 py-1.5 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                    className="flex items-center justify-center border-l-2 border-foreground px-4 text-foreground transition-colors hover:bg-foreground hover:text-background"
                   >
                     <ChevronRight className="h-4 w-4" />
                   </button>
@@ -165,15 +175,15 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between border-t border-border px-5 py-4">
-          <p className="max-w-[60%] truncate text-xs text-muted-foreground">
+        <div className="flex items-center justify-between border-t-2 border-foreground bg-muted/30 px-5 py-4">
+          <p className="max-w-[50%] truncate text-xs font-mono font-bold text-foreground">
             {selected ?? '未选择'}
           </p>
-          <div className="flex gap-2">
+          <div className="flex gap-3">
             <button
               type="button"
               onClick={onCancel}
-              className="rounded-lg border border-border px-4 py-2 text-sm transition hover:bg-accent"
+              className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
             >
               取消
             </button>
@@ -181,7 +191,7 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
               type="button"
               disabled={selected === null}
               onClick={() => { if (selected) onConfirm(selected) }}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
             >
               确认选择
             </button>

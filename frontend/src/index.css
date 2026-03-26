@@ -4,30 +4,30 @@
 
 @layer base {
   :root {
-    --background: 42 33% 97%;
-    --foreground: 220 28% 12%;
-    --border: 28 16% 86%;
-    --primary: 198 55% 22%;
-    --primary-foreground: 42 33% 98%;
-    --muted: 36 26% 92%;
-    --muted-foreground: 215 14% 42%;
-    --accent: 28 65% 92%;
-    --accent-foreground: 220 28% 12%;
-    --card: 42 33% 99%;
-    --radius: 0.75rem;
+    --background: 132 11% 90%; /* #E4E9E5 */
+    --foreground: 0 0% 10%; /* #1A1A1A */
+    --border: 0 0% 10%; /* #1A1A1A */
+    --primary: 135 12% 56%; /* #849C8A */
+    --primary-foreground: 0 0% 10%; /* #1A1A1A */
+    --muted: 135 13% 85%; /* #D4DCD6 */
+    --muted-foreground: 136 7% 31%; /* #4A554D */
+    --accent: 0 0% 100%; /* #FFFFFF */
+    --accent-foreground: 0 0% 10%; /* #1A1A1A */
+    --card: 0 0% 100%; /* #FFFFFF */
+    --radius: 0.125rem; /* 2px */
   }
 
   .dark {
-    --background: 222 28% 10%;
-    --foreground: 210 20% 92%;
-    --border: 220 20% 20%;
-    --primary: 198 60% 52%;
-    --primary-foreground: 222 28% 8%;
-    --muted: 220 22% 16%;
-    --muted-foreground: 215 14% 60%;
-    --accent: 220 22% 20%;
-    --accent-foreground: 210 20% 92%;
-    --card: 222 28% 12%;
+    --background: 0 0% 10%; /* #1A1A1A */
+    --foreground: 132 11% 90%; /* #E4E9E5 */
+    --border: 132 11% 90%; /* #E4E9E5 */
+    --primary: 135 12% 56%; /* #849C8A */
+    --primary-foreground: 0 0% 10%; /* #1A1A1A */
+    --muted: 136 7% 20%; 
+    --muted-foreground: 135 13% 70%;
+    --accent: 136 7% 15%;
+    --accent-foreground: 132 11% 90%;
+    --card: 136 7% 12%;
   }
 
   * {
