@@ -118,13 +118,6 @@ export function suppressFolder(id: string) {
   })
 }
 
-export function moveFolders(folderIds: string[], targetDir: string) {
-  return request<{ job_id: string }>('/jobs/move', {
-    method: 'POST',
-    body: JSON.stringify({ folder_ids: folderIds, target_dir: targetDir }),
-  })
-}
-
 export async function unsuppressFolder(id: string): Promise<{ data: Folder }> {
   const response = await request<{ data: RawFolder }>(`/folders/${id}/restore`, {
     method: 'POST',

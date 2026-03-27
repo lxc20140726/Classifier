@@ -54,9 +54,7 @@ func main() {
 	auditSvc := service.NewAuditService(auditRepo)
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
-	moveSvc := service.NewMoveService(fsAdapter, jobRepo, folderRepo, snapshotSvc, auditSvc, broker)
 	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, scannerSvc)
-	moveJobStarterSvc := service.NewMoveJobStarterService(jobRepo, moveSvc)
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
 	scheduledWorkflowSvc := service.NewScheduledWorkflowService(scheduledWorkflowRepo, workflowRunnerSvc, scanJobStarterSvc)
 	scheduledWorkflowScheduler := service.NewScheduledWorkflowScheduler(scheduledWorkflowRepo, scheduledWorkflowSvc)
@@ -86,7 +84,6 @@ func main() {
 	}()
 
 	folderHandler := handler.NewFolderHandler(folderRepo, configRepo, scheduledWorkflowRepo, scanJobStarterSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
-	moveHandler := handler.NewMoveHandler(moveJobStarterSvc)
 	jobHandler := handler.NewJobHandlerWithWorkflow(jobRepo, workflowRunnerSvc)
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
 	configHandler := handler.NewConfigHandler(configRepo, nil)
@@ -125,7 +122,6 @@ func main() {
 			jobs.POST("", jobHandler.StartWorkflow)
 			jobs.GET("/:id", jobHandler.Get)
 			jobs.GET("/:id/progress", jobHandler.Progress)
-			jobs.POST("/move", moveHandler.Start)
 			jobs.GET("/:id/workflow-runs", workflowRunHandler.ListByJob)
 		}
 

@@ -12,7 +12,6 @@ import {
 } from 'lucide-react'
 import gsap from 'gsap'
 
-import { moveFolders } from '@/api/folders'
 import { SnapshotDrawer } from '@/components/SnapshotDrawer'
 import { cn } from '@/lib/utils'
 import { useActivityStore } from '@/store/activityStore'
@@ -87,68 +86,6 @@ function formatRelativeTime(iso: string): string {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs} 小时前`
   return `${Math.floor(hrs / 24)} 天前`
-}
-
-function MoveModal({
-  selectedIds,
-  onConfirm,
-  onCancel,
-}: {
-  selectedIds: string[]
-  onConfirm: (targetDir: string) => void
-  onCancel: () => void
-}) {
-  const [targetDir, setTargetDir] = useState('')
-  const overlayRef = useRef<HTMLDivElement | null>(null)
-  const modalRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (overlayRef.current && modalRef.current) {
-      gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.2 })
-      gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.7)" })
-    }
-  }, [])
-
-  return (
-    <div ref={overlayRef} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div ref={modalRef} className="w-full max-w-md border-2 border-foreground bg-card p-6 shadow-hard-lg">
-        <h2 className="text-xl font-black tracking-tight">移动文件夹</h2>
-        <p className="mt-2 text-sm font-medium text-muted-foreground">
-          将 {selectedIds.length} 个文件夹移动到新位置。
-        </p>
-        <div className="mt-5 space-y-2">
-          <label htmlFor="target-dir" className="text-sm font-bold">
-            目标目录
-          </label>
-          <input
-            id="target-dir"
-            type="text"
-            value={targetDir}
-            onChange={(e) => setTargetDir(e.target.value)}
-            placeholder="/path/to/target"
-            className="w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
-          />
-        </div>
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            disabled={!targetDir.trim()}
-            onClick={() => onConfirm(targetDir.trim())}
-            className="border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
-          >
-            确认移动
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 function ScanProgressBanner() {
@@ -578,8 +515,6 @@ export default function FolderListPage() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null)
-  const [showMoveModal, setShowMoveModal] = useState(false)
-  const [moveError, setMoveError] = useState<string | null>(null)
 
   useEffect(() => {
     void fetchFolders()
@@ -616,18 +551,6 @@ export default function FolderListPage() {
     }
   }
 
-  async function handleMove(targetDir: string) {
-    setMoveError(null)
-    try {
-      await moveFolders([...selectedIds], targetDir)
-      setSelectedIds(new Set())
-      setShowMoveModal(false)
-      void fetchFolders()
-    } catch (e) {
-      setMoveError(e instanceof Error ? e.message : '移动失败')
-    }
-  }
-
   return (
     <>
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b-2 border-foreground pb-4">
@@ -639,15 +562,6 @@ export default function FolderListPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {selectedIds.size > 0 && (
-            <button
-              type="button"
-              onClick={() => { setMoveError(null); setShowMoveModal(true) }}
-              className="flex items-center gap-2 border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
-            >
-              移动所选
-            </button>
-          )}
           <button
             type="button"
             onClick={() => void triggerScan()}
@@ -745,12 +659,6 @@ export default function FolderListPage() {
               {error}
             </div>
           )}
-          {moveError != null && (
-            <div className="mb-6 border-2 border-foreground bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
-              {moveError}
-            </div>
-          )}
-
           {isLoading && folders.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-32 text-foreground">
               <Loader2 className="h-8 w-8 animate-spin" />
@@ -853,14 +761,6 @@ export default function FolderListPage() {
         folderId={activeFolderId}
         onClose={() => setActiveFolderId(null)}
       />
-
-      {showMoveModal && (
-        <MoveModal
-          selectedIds={[...selectedIds]}
-          onConfirm={(targetDir) => void handleMove(targetDir)}
-          onCancel={() => setShowMoveModal(false)}
-        />
-      )}
     </>
   )
 }
