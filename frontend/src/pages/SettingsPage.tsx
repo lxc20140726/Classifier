@@ -3,6 +3,7 @@ import { FolderSearch } from 'lucide-react'
 
 import { getConfig, updateConfig } from '@/api/config'
 import { DirPicker } from '@/components/DirPicker'
+import { useConfigStore } from '@/store/configStore'
 import type { AppConfig } from '@/types'
 
 interface FormState {
@@ -37,6 +38,7 @@ export default function SettingsPage() {
   const [success, setSuccess] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<'target' | keyof NonNullable<AppConfig['output_dirs']>>('target')
+  const { sourceDir, load: loadSourceDir } = useConfigStore()
 
   useEffect(() => {
     let active = true
@@ -68,6 +70,10 @@ export default function SettingsPage() {
     void loadConfig()
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    void loadSourceDir()
+  }, [loadSourceDir])
 
 	function addDir(path: string) {
 		setForm((prev) => {
@@ -196,7 +202,7 @@ export default function SettingsPage() {
 
         <DirPicker
           open={pickerOpen}
-          initialPath="/"
+          initialPath={sourceDir}
           title={pickerTarget === 'target' ? '选择目标目录' : '选择输出目录'}
           onConfirm={addDir}
           onCancel={() => setPickerOpen(false)}

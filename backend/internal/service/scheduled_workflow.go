@@ -93,14 +93,8 @@ func (s *ScheduledWorkflowService) RunNow(ctx context.Context, id string) (strin
 		}
 		jobID = startedJobID
 	default:
-		folderIDs, folderErr := scheduledWorkflowFolderIDs(item)
-		if folderErr != nil {
-			return "", fmt.Errorf("scheduledWorkflowService.RunNow parse folder_ids: %w", folderErr)
-		}
-
 		startedJobID, startErr := s.runner.StartJob(ctx, StartWorkflowJobInput{
 			WorkflowDefID: item.WorkflowDefID,
-			FolderIDs:     folderIDs,
 		})
 		if startErr != nil {
 			return "", fmt.Errorf("scheduledWorkflowService.RunNow start workflow job: %w", startErr)
@@ -138,9 +132,6 @@ func newScheduledWorkflow(jobType, name, workflowDefID, cronSpec string, enabled
 	if cleanJobType == "workflow" {
 		if cleanWorkflowDefID == "" {
 			return nil, fmt.Errorf("workflow_def_id is required")
-		}
-		if len(normalizedFolderIDs) == 0 {
-			return nil, fmt.Errorf("folder_ids is required")
 		}
 	}
 	if cleanJobType == "scan" && len(normalizedSourceDirs) == 0 {

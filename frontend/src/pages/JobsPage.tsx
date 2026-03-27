@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState, useRef } from 'react'
 import { ChevronDown, ChevronRight, FolderSearch, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import gsap from 'gsap'
 
-import { listFolders } from '@/api/folders'
 import {
   createScheduledWorkflow,
   deleteScheduledWorkflow,
@@ -19,7 +18,6 @@ import { cn } from '@/lib/utils'
 import { useJobStore } from '@/store/jobStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import type {
-  Folder,
   Job,
   JobStatus,
   NodeRun,
@@ -259,8 +257,40 @@ function NodeRunsPanel({ runId }: { runId: string }) {
 function WorkflowRunRow({ run }: { run: WorkflowRun }) {
   const [expanded, setExpanded] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState<string>('photo')
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [isActing, setIsActing] = useState(false)
-  const { rollbackRun, provideInput } = useWorkflowRunStore()
+  const { rollbackRun, provideInput, provideRawInput, nodesByRunId, fetchRunDetail } = useWorkflowRunStore()
+
+  const nodeRuns = nodesByRunId[run.id] ?? []
+  const waitingNode = nodeRuns.find((n) => n.status === 'waiting_input') ?? null
+  const waitingNodeType = waitingNode?.node_type ?? null
+
+  useEffect(() => {
+    if (run.status === 'waiting_input') {
+      void fetchRunDetail(run.id)
+    }
+  }, [run.id, run.status, fetchRunDetail])
+
+  useEffect(() => {
+    if (waitingNodeType === 'folder-selector' && waitingNode) {
+      try {
+        const output = JSON.parse(waitingNode.output_json || '{}') as Record<string, unknown>
+        const raw = output['candidate_paths'] ?? output['state']
+        if (Array.isArray(raw)) {
+          const paths = raw.filter((p): p is string => typeof p === 'string')
+          setSelectedPaths(paths)
+        } else if (raw && typeof raw === 'object') {
+          const nested = (raw as Record<string, unknown>)['candidate_paths']
+          if (Array.isArray(nested)) {
+            const paths = nested.filter((p): p is string => typeof p === 'string')
+            setSelectedPaths(paths)
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+  }, [waitingNodeType, waitingNode])
 
   async function handleRollback() {
     setIsActing(true)
@@ -280,9 +310,34 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
     }
   }
 
+  async function handleFolderSelectorConfirm() {
+    setIsActing(true)
+    try {
+      await provideRawInput(run.id, { selected_paths: selectedPaths })
+    } finally {
+      setIsActing(false)
+    }
+  }
+
+  function togglePath(path: string) {
+    setSelectedPaths((prev) =>
+      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path],
+    )
+  }
+
   function toggleExpand() {
     setExpanded((v) => !v)
   }
+
+  const candidatePaths: string[] = (() => {
+    if (!waitingNode) return []
+    try {
+      const output = JSON.parse(waitingNode.output_json || '{}') as Record<string, unknown>
+      const raw = output['candidate_paths'] ?? (output['state'] as Record<string, unknown> | undefined)?.['candidate_paths']
+      if (Array.isArray(raw)) return raw.filter((p): p is string => typeof p === 'string')
+    } catch { /* ignore */ }
+    return []
+  })()
 
   return (
     <>
@@ -309,7 +364,7 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
                 回滚
               </button>
             )}
-            {run.status === 'waiting_input' && (
+            {run.status === 'waiting_input' && waitingNodeType !== 'folder-selector' && (
               <div className="flex items-center gap-2">
                 <select
                   value={selectedCategory}
@@ -330,12 +385,63 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
                 </button>
               </div>
             )}
+            {run.status === 'waiting_input' && waitingNodeType === 'folder-selector' && (
+              <span className="text-xs font-bold text-purple-700 dark:text-purple-300">
+                展开选择文件夹 ↓
+              </span>
+            )}
           </div>
         </td>
       </tr>
       {expanded && (
         <tr className="border-b-2 border-foreground bg-muted/10">
-          <td colSpan={5} className="px-6 py-4">
+          <td colSpan={5} className="px-6 py-4 space-y-4">
+            {run.status === 'waiting_input' && waitingNodeType === 'folder-selector' && candidatePaths.length > 0 && (
+              <div className="border-2 border-purple-400 bg-purple-50 dark:bg-purple-950/30 p-4 space-y-3">
+                <p className="text-xs font-black uppercase tracking-widest text-purple-800 dark:text-purple-300">
+                  选择参与处理的文件夹（{selectedPaths.length} / {candidatePaths.length}）
+                </p>
+                <div className="space-y-1 max-h-64 overflow-y-auto">
+                  {candidatePaths.map((path) => (
+                    <label key={path} className="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={selectedPaths.includes(path)}
+                        onChange={() => togglePath(path)}
+                        className="h-4 w-4 border-2 border-foreground"
+                      />
+                      <span className="font-mono text-xs font-bold group-hover:text-purple-700 dark:group-hover:text-purple-300 transition-colors">
+                        {path}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPaths(candidatePaths)}
+                    className="border-2 border-foreground bg-background px-3 py-1 text-xs font-bold transition-all hover:bg-foreground hover:text-background"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPaths([])}
+                    className="border-2 border-foreground bg-background px-3 py-1 text-xs font-bold transition-all hover:bg-foreground hover:text-background"
+                  >
+                    清空
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isActing || selectedPaths.length === 0}
+                    onClick={() => void handleFolderSelectorConfirm()}
+                    className="border-2 border-purple-900 bg-purple-200 px-4 py-1 text-xs font-bold text-purple-900 transition-all hover:bg-purple-900 hover:text-purple-100 hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50"
+                  >
+                    确认选择 ({selectedPaths.length})
+                  </button>
+                </div>
+              </div>
+            )}
             <NodeRunsPanel runId={run.id} />
           </td>
         </tr>
@@ -404,7 +510,7 @@ function JobRow({ job }: { job: Job }) {
         <td className="w-48 px-4 py-4">
           <ProgressBar done={job.done} total={job.total} />
         </td>
-        <td className="px-4 py-4 text-sm font-black">{job.folder_ids.length}</td>
+        <td className="px-4 py-4 text-sm font-black">{(job.folder_ids ?? []).length}</td>
         <td className="px-4 py-4 text-xs font-mono font-bold text-muted-foreground">{formatDate(job.created_at)}</td>
         <td className="px-4 py-4 text-xs font-mono font-bold text-muted-foreground">{formatDuration(job.started_at, job.finished_at)}</td>
       </tr>
@@ -544,9 +650,6 @@ function ScheduledWorkflowModal({
   modal,
   form,
   workflowDefs,
-  folders,
-  filterText,
-  setFilterText,
   formError,
   isSaving,
   onClose,
@@ -557,9 +660,6 @@ function ScheduledWorkflowModal({
   modal: ScheduledWorkflowModalMode | null
   form: ScheduledWorkflowFormState
   workflowDefs: WorkflowDefinition[]
-  folders: Folder[]
-  filterText: string
-  setFilterText: (value: string) => void
   formError: string | null
   isSaving: boolean
   onClose: () => void
@@ -570,14 +670,6 @@ function ScheduledWorkflowModal({
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
   const overlayRef = useRef<HTMLDivElement | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
-
-  const filteredFolders = useMemo(() => {
-    const keyword = filterText.trim().toLowerCase()
-    if (!keyword) return folders
-    return folders.filter((folder) => {
-      return folder.name.toLowerCase().includes(keyword) || folder.path.toLowerCase().includes(keyword)
-    })
-  }, [filterText, folders])
 
   useEffect(() => {
     if (modal && overlayRef.current && modalRef.current) {
@@ -666,15 +758,9 @@ function ScheduledWorkflowModal({
             <div>
               <label className="mb-2 block text-sm font-black tracking-widest">{form.jobType === 'scan' ? '扫描输入目录' : '选择目录'}</label>
               {form.jobType === 'workflow' ? (
-                <>
-                  <input
-                    value={filterText}
-                    onChange={(event) => setFilterText(event.target.value)}
-                    className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
-                    placeholder="搜索目录名称或路径"
-                  />
-                  <p className="mt-2 text-xs font-bold text-muted-foreground">已选择 <span className="text-foreground">{form.folderIds.length}</span> 个目录。</p>
-                </>
+                <div className="border-2 border-foreground bg-card px-4 py-4 text-sm font-bold text-muted-foreground shadow-hard">
+                  工作流计划任务已切换到 v2 执行模型，无需预选目录；目录输入请在工作流图内配置（如 `folder-picker` / `folder-tree-scanner`）。
+                </div>
               ) : (
                 <div className="flex flex-col gap-3 border-2 border-foreground bg-card px-4 py-4 shadow-hard">
                   <div>
@@ -706,23 +792,14 @@ function ScheduledWorkflowModal({
                       移除
                     </button>
                   </div>
-                )) : filteredFolders.map((folder) => (
-                  <label key={folder.id} className="flex cursor-pointer items-start gap-3 border-2 border-foreground bg-background px-3 py-3 text-sm transition-colors hover:bg-muted/30">
-                    <input
-                      type="checkbox"
-                      checked={form.folderIds.includes(folder.id)}
-                      onChange={() => onToggleFolder(folder.id)}
-                      className="mt-0.5 h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
-                    />
-                    <div className="min-w-0">
-                      <p className="truncate font-black">{folder.name}</p>
-                      <p className="truncate font-mono text-xs font-bold text-muted-foreground mt-0.5">{folder.path}</p>
-                    </div>
-                  </label>
-                ))}
-                {((form.jobType === 'scan' && form.sourceDirs.length === 0) || (form.jobType === 'workflow' && filteredFolders.length === 0)) && (
+                )) : (
+                  <div className="border-2 border-dashed border-foreground bg-background px-4 py-12 text-center text-sm font-bold text-muted-foreground">
+                    v2 工作流计划任务不再绑定目录列表。
+                  </div>
+                )}
+                {(form.jobType === 'scan' && form.sourceDirs.length === 0) && (
                   <div className="border-2 border-dashed border-foreground px-4 py-12 text-center text-sm font-bold text-muted-foreground">
-                    {form.jobType === 'scan' ? '尚未为这个扫描任务添加输入目录。' : '没有匹配的目录。'}
+                    尚未为这个扫描任务添加输入目录。
                   </div>
                 )}
               </div>
@@ -760,7 +837,6 @@ export default function JobsPage() {
   const [activeTab, setActiveTab] = useState<JobsTab>('scheduled')
   const [scheduledWorkflows, setScheduledWorkflows] = useState<ScheduledWorkflow[]>([])
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([])
-  const [folders, setFolders] = useState<Folder[]>([])
   const [isScheduledLoading, setIsScheduledLoading] = useState(false)
   const [scheduledError, setScheduledError] = useState<string | null>(null)
   const [modal, setModal] = useState<ScheduledWorkflowModalMode | null>(null)
@@ -768,7 +844,6 @@ export default function JobsPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
-  const [folderFilterText, setFolderFilterText] = useState('')
 
   useEffect(() => {
     void fetchJobs()
@@ -800,13 +875,11 @@ export default function JobsPage() {
     setIsScheduledLoading(true)
     setScheduledError(null)
     try {
-      const [workflowRes, folderRes, scheduledRes] = await Promise.all([
+      const [workflowRes, scheduledRes] = await Promise.all([
         listWorkflowDefs({ limit: 100 }),
-        listFolders({ limit: 200 }),
         listScheduledWorkflows(),
       ])
       setWorkflowDefs(workflowRes.data)
-      setFolders(folderRes.data)
       setScheduledWorkflows(scheduledRes.data)
     } catch (loadError) {
       setScheduledError(loadError instanceof Error ? loadError.message : '加载计划任务失败')
@@ -818,7 +891,6 @@ export default function JobsPage() {
   function openCreateModal() {
     setForm(EMPTY_SCHEDULED_WORKFLOW_FORM)
     setFormError(null)
-    setFolderFilterText('')
     setModal({ kind: 'create' })
   }
 
@@ -833,7 +905,6 @@ export default function JobsPage() {
       sourceDirs: workflow.source_dirs,
     })
     setFormError(null)
-    setFolderFilterText('')
     setModal({ kind: 'edit', workflow })
   }
 
@@ -875,10 +946,6 @@ export default function JobsPage() {
       setFormError('Cron 表达式不能为空')
       return
     }
-    if (form.jobType === 'workflow' && form.folderIds.length === 0) {
-      setFormError('请至少选择一个目录')
-      return
-    }
     if (form.jobType === 'scan' && form.sourceDirs.length === 0) {
       setFormError('请至少选择一个扫描输入目录')
       return
@@ -890,7 +957,7 @@ export default function JobsPage() {
       workflow_def_id: form.jobType === 'workflow' ? form.workflowDefId : '',
       cron_spec: form.cronSpec.trim(),
       enabled: form.enabled,
-      folder_ids: form.jobType === 'workflow' ? form.folderIds : [],
+      folder_ids: [],
       source_dirs: form.jobType === 'scan' ? form.sourceDirs : [],
     }
 
@@ -1034,9 +1101,6 @@ export default function JobsPage() {
         modal={modal}
         form={form}
         workflowDefs={workflowDefs}
-        folders={folders}
-        filterText={folderFilterText}
-        setFilterText={setFolderFilterText}
         formError={formError}
         isSaving={isSaving}
         onClose={closeModal}

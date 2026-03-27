@@ -28,13 +28,13 @@ func (e *folderSplitterNodeExecutor) Type() string {
 func (e *folderSplitterNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Folder Splitter",
-		Description: "Split mixed classified entry into processing items",
-		InputPorts: []NodeSchemaPort{
-			{Name: "entry", Description: "CLASSIFIED_ENTRY", Required: true},
+		Label:       "文件夹拆分器",
+		Description: "将分类条目转为处理项列表；mixed 类别的文件夹会拆分为一级子目录分别处理",
+		Inputs: []PortDef{
+			{Name: "entry", Type: PortTypeJSON, Description: "已分类条目", Required: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM[]", Required: true},
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "拆分后的处理项列表"},
 		},
 	}
 }

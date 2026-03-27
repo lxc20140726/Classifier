@@ -57,14 +57,14 @@ func TestNameKeywordClassifierBatch(t *testing.T) {
 	}
 }
 
-func TestNameKeywordClassifierLegacySingleFolderInput(t *testing.T) {
+func TestNameKeywordClassifierSingleTreeInput(t *testing.T) {
 	t.Parallel()
 
 	executor := newNameKeywordClassifierExecutor()
 	output, err := executor.Execute(context.Background(), NodeExecutionInput{
 		Node: repository.WorkflowGraphNode{Type: executor.Type()},
 		Inputs: testInputs(map[string]any{
-			"folder": FolderTree{Path: "/src/comic", Name: "My Comic Collection"},
+			"trees": FolderTree{Path: "/src/comic", Name: "My Comic Collection"},
 		}),
 	})
 	if err != nil {

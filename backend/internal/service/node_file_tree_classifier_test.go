@@ -45,7 +45,7 @@ func TestFileTreeClassifierBatch(t *testing.T) {
 		t.Fatalf("signal[2] = %+v, want empty with source path", signals[2])
 	}
 
-	unresolved, ok := out.Outputs["folder"].Value.([]FolderTree)
+	unresolved, ok := out.Outputs["pass"].Value.([]FolderTree)
 	if !ok {
 		t.Fatalf("port1 type = %T, want []FolderTree", out.Outputs["folder"].Value)
 	}
@@ -54,12 +54,12 @@ func TestFileTreeClassifierBatch(t *testing.T) {
 	}
 }
 
-func TestFileTreeClassifierLegacySingleFolderInput(t *testing.T) {
+func TestFileTreeClassifierSingleTreeInput(t *testing.T) {
 	t.Parallel()
 
 	executor := newFileTreeClassifierExecutor()
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
-		Inputs: testInputs(map[string]any{"folder": FolderTree{Path: "/src/m", Files: []FileEntry{{Name: "archive.cbz", Ext: "cbz"}}}}),
+		Inputs: testInputs(map[string]any{"trees": FolderTree{Path: "/src/m", Files: []FileEntry{{Name: "archive.cbz", Ext: "cbz"}}}}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)

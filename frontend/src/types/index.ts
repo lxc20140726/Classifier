@@ -71,7 +71,7 @@ export interface Job {
   type: string
   workflow_def_id?: string
   status: JobStatus
-  folder_ids: string[]
+  folder_ids: string[] | null
   total: number
   done: number
   failed: number
@@ -151,15 +151,17 @@ export type NodeRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'sk
 export type NodeType =
   | 'trigger'
   | 'ext-ratio-classifier'
-  | 'move'
   | 'move-node'
   | 'folder-tree-scanner'
+  | 'folder-picker'
+  | 'folder-selector'
   | 'name-keyword-classifier'
   | 'file-tree-classifier'
   | 'confidence-check'
   | 'manual-classifier'
   | 'subtree-aggregator'
   | 'classification-reader'
+  | 'classification-preview'
   | 'folder-splitter'
   | 'category-router'
   | 'rename-node'
@@ -229,7 +231,8 @@ export interface NodeUIPosition {
 
 export interface NodeLinkSource {
   source_node_id: string
-  output_port_index: number
+  source_port?: string
+  output_port_index?: number
 }
 
 export interface NodeInputSpec {
@@ -250,9 +253,9 @@ export interface WorkflowGraphNode {
 export interface WorkflowGraphEdge {
   id?: string
   source: string
-  source_port: number
+  source_port: number | string
   target: string
-  target_port: number
+  target_port: number | string
 }
 
 export interface WorkflowGraph {
@@ -262,6 +265,7 @@ export interface WorkflowGraph {
 
 export interface NodeSchemaPort {
   name: string
+  type: string
   description: string
   required: boolean
 }

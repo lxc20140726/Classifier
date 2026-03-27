@@ -4,12 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,8 +16,6 @@ import (
 
 type StartWorkflowJobInput struct {
 	WorkflowDefID string
-	FolderIDs     []string
-	SourceDir     string
 }
 
 type WorkflowRunDetail struct {
@@ -60,20 +54,16 @@ type PortDef struct {
 	Description string   `json:"description"`
 }
 
-type NodeSchemaPort = PortDef
-
 type NodeSchema struct {
-	Type         string           `json:"type,omitempty"`
-	TypeID       string           `json:"type_id,omitempty"`
-	Label        string           `json:"label,omitempty"`
-	DisplayName  string           `json:"display_name,omitempty"`
-	Description  string           `json:"description"`
-	Category     string           `json:"category,omitempty"`
-	InputPorts   []NodeSchemaPort `json:"input_ports,omitempty"`
-	OutputPorts  []NodeSchemaPort `json:"output_ports,omitempty"`
-	Inputs       []PortDef        `json:"inputs,omitempty"`
-	Outputs      []PortDef        `json:"outputs,omitempty"`
-	ConfigSchema map[string]any   `json:"config_schema,omitempty"`
+	Type         string         `json:"type,omitempty"`
+	TypeID       string         `json:"type_id,omitempty"`
+	Label        string         `json:"label,omitempty"`
+	DisplayName  string         `json:"display_name,omitempty"`
+	Description  string         `json:"description"`
+	Category     string         `json:"category,omitempty"`
+	Inputs       []PortDef      `json:"input_ports,omitempty"`
+	Outputs      []PortDef      `json:"output_ports,omitempty"`
+	ConfigSchema map[string]any `json:"config_schema,omitempty"`
 }
 
 func (s NodeSchema) TypeName() string {
@@ -91,17 +81,11 @@ func (s NodeSchema) DisplayLabel() string {
 }
 
 func (s NodeSchema) InputDefs() []PortDef {
-	if len(s.Inputs) > 0 {
-		return s.Inputs
-	}
-	return s.InputPorts
+	return s.Inputs
 }
 
 func (s NodeSchema) OutputDefs() []PortDef {
-	if len(s.Outputs) > 0 {
-		return s.Outputs
-	}
-	return s.OutputPorts
+	return s.Outputs
 }
 
 func (s NodeSchema) InputPort(name string) *PortDef {
@@ -150,7 +134,6 @@ type WorkflowRunnerService struct {
 	broker            *sse.Broker
 	auditSvc          *AuditService
 	typeRegistry      *TypeRegistry
-	folderConcurrency int
 }
 
 func NewWorkflowRunnerService(
@@ -175,7 +158,6 @@ func NewWorkflowRunnerService(
 		broker:            broker,
 		auditSvc:          auditSvc,
 		typeRegistry:      NewTypeRegistry(),
-		folderConcurrency: defaultWorkflowFolderConcurrency(),
 	}
 
 	svc.RegisterExecutor(&triggerNodeExecutor{})
@@ -190,11 +172,13 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newFolderSplitterExecutor())
 	svc.RegisterExecutor(newCategoryRouterExecutor())
 	svc.RegisterExecutor(newRenameNodeExecutor())
-	svc.RegisterExecutor(&moveNodeExecutor{fs: fsAdapter, folders: folderRepo})
 	svc.RegisterExecutor(newPhase4MoveNodeExecutor(fsAdapter, folderRepo))
 	svc.RegisterExecutor(newThumbnailNodeExecutor(fsAdapter, folderRepo))
 	svc.RegisterExecutor(newCompressNodeExecutor(fsAdapter))
 	svc.RegisterExecutor(newAuditLogNodeExecutor(auditSvc))
+	svc.RegisterExecutor(newClassificationPreviewNodeExecutor())
+	svc.RegisterExecutor(newFolderSelectorNodeExecutor())
+	svc.RegisterExecutor(newFolderPickerNodeExecutor(fsAdapter))
 
 	return svc
 }
@@ -224,124 +208,53 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 	if input.WorkflowDefID == "" {
 		return "", fmt.Errorf("workflowRunner.StartJob: workflow_def_id is required")
 	}
-	if len(input.FolderIDs) == 0 && strings.TrimSpace(input.SourceDir) == "" {
-		return "", fmt.Errorf("workflowRunner.StartJob: folder_ids or source_dir is required")
-	}
-
 	if _, err := s.workflowDefs.GetByID(ctx, input.WorkflowDefID); err != nil {
 		return "", fmt.Errorf("workflowRunner.StartJob get workflow def %q: %w", input.WorkflowDefID, err)
 	}
 
-	folderIDsJSON, err := json.Marshal(input.FolderIDs)
+	folderIDsJSON, err := json.Marshal([]string{})
 	if err != nil {
 		return "", fmt.Errorf("workflowRunner.StartJob marshal folder_ids: %w", err)
 	}
 
 	jobID := uuid.NewString()
-	total := len(input.FolderIDs)
-	if total == 0 {
-		total = 1
-	}
 	if err := s.jobs.Create(ctx, &repository.Job{
 		ID:            jobID,
 		Type:          "workflow",
 		WorkflowDefID: input.WorkflowDefID,
-		SourceDir:     strings.TrimSpace(input.SourceDir),
+		SourceDir:     "",
 		Status:        "pending",
 		FolderIDs:     string(folderIDsJSON),
-		Total:         total,
+		Total:         1,
 	}); err != nil {
 		return "", fmt.Errorf("workflowRunner.StartJob create job: %w", err)
 	}
 
-	go s.runJob(context.Background(), jobID, input.WorkflowDefID, append([]string(nil), input.FolderIDs...), strings.TrimSpace(input.SourceDir))
+	go s.runJob(context.Background(), jobID, input.WorkflowDefID)
 	return jobID, nil
 }
 
-func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID string, folderIDs []string, sourceDir string) {
+func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID string) {
 	_ = s.jobs.UpdateStatus(ctx, jobID, "running", "")
 
-	if len(folderIDs) == 0 {
-		run := &repository.WorkflowRun{
-			ID:            uuid.NewString(),
-			JobID:         jobID,
-			SourceDir:     sourceDir,
-			WorkflowDefID: workflowDefID,
-			Status:        "pending",
-		}
-		if err := s.workflowRuns.Create(ctx, run); err != nil {
-			_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-			_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
-			return
-		}
-		if err := s.executeWorkflowRun(ctx, run.ID, false); err != nil {
-			_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-			_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
-			return
-		}
-		_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
-		_ = s.jobs.UpdateStatus(ctx, jobID, "succeeded", "")
+	run := &repository.WorkflowRun{
+		ID:            uuid.NewString(),
+		JobID:         jobID,
+		WorkflowDefID: workflowDefID,
+		Status:        "pending",
+	}
+	if err := s.workflowRuns.Create(ctx, run); err != nil {
+		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
 		return
 	}
-
-	var failed atomic.Int64
-	concurrency := s.folderConcurrency
-	if concurrency <= 0 {
-		concurrency = 1
+	if err := s.executeWorkflowRun(ctx, run.ID, false); err != nil {
+		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+		return
 	}
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	for _, folderID := range folderIDs {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(folderID string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			run := &repository.WorkflowRun{
-				ID:            uuid.NewString(),
-				JobID:         jobID,
-				FolderID:      folderID,
-				WorkflowDefID: workflowDefID,
-				Status:        "pending",
-			}
-			if err := s.workflowRuns.Create(ctx, run); err != nil {
-				failed.Add(1)
-				_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-				return
-			}
-
-			if err := s.executeWorkflowRun(ctx, run.ID, false); err != nil {
-				failed.Add(1)
-				_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-				return
-			}
-
-			_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
-		}(folderID)
-	}
-	wg.Wait()
-
-	status := "succeeded"
-	failedCount := int(failed.Load())
-	if failedCount == len(folderIDs) {
-		status = "failed"
-	} else if failedCount > 0 {
-		status = "partial"
-	}
-	_ = s.jobs.UpdateStatus(ctx, jobID, status, "")
-}
-
-func defaultWorkflowFolderConcurrency() int {
-	value := runtime.GOMAXPROCS(0)
-	if value < 2 {
-		return 1
-	}
-	if value > 4 {
-		return 4
-	}
-
-	return value
+	_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
+	_ = s.jobs.UpdateStatus(ctx, jobID, "succeeded", "")
 }
 
 func (s *WorkflowRunnerService) ListWorkflowRuns(ctx context.Context, jobID string, page, limit int) ([]*repository.WorkflowRun, int, error) {
@@ -1314,43 +1227,17 @@ func (s *WorkflowRunnerService) marshalTypedValuesJSON(values map[string]TypedVa
 	return string(raw), nil
 }
 
-func (s *WorkflowRunnerService) parseNodeOutputsForSchema(rawOutput string, schema NodeSchema) (map[string]TypedValue, error) {
+func (s *WorkflowRunnerService) parseNodeOutputsForSchema(rawOutput string, _ NodeSchema) (map[string]TypedValue, error) {
 	var typedEncoded map[string]TypedValueJSON
-	if err := json.Unmarshal([]byte(rawOutput), &typedEncoded); err == nil && len(typedEncoded) > 0 {
-		return typedValueMapFromJSON(typedEncoded, s.typeRegistry)
+	if err := json.Unmarshal([]byte(rawOutput), &typedEncoded); err != nil {
+		return nil, err
 	}
 
-	legacy, err := parseNodeOutputs(rawOutput)
+	out, err := typedValueMapFromJSON(typedEncoded, s.typeRegistry)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse typed node outputs: %w", err)
 	}
-
-	out := make(map[string]TypedValue, len(schema.OutputDefs()))
-	for index, value := range legacy {
-		if index < 0 || index >= len(schema.OutputDefs()) {
-			continue
-		}
-		port := schema.OutputDefs()[index]
-		out[port.Name] = TypedValue{Type: inferPortTypeForOutput(schema, port.Name), Value: value}
-	}
-
 	return out, nil
-}
-
-func parseNodeOutputs(rawOutput string) ([]any, error) {
-	var outputs []any
-	if err := json.Unmarshal([]byte(rawOutput), &outputs); err == nil {
-		return outputs, nil
-	}
-
-	var wrapped struct {
-		Outputs []any `json:"outputs"`
-	}
-	if err := json.Unmarshal([]byte(rawOutput), &wrapped); err != nil {
-		return nil, err
-	}
-
-	return wrapped.Outputs, nil
 }
 
 func parseTypedNodeOutputs(rawOutput string) (map[string]TypedValue, bool, error) {
@@ -1442,7 +1329,16 @@ func (e *triggerNodeExecutor) Type() string {
 }
 
 func (e *triggerNodeExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Trigger", Description: "Trigger node"}
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "触发器",
+		Description: "触发节点，启动工作流并将当前处理文件夹传递给下游",
+		Outputs: []PortDef{{
+			Name:        "folder",
+			Type:        PortTypeJSON,
+			Description: "当前处理的文件夹数据",
+		}},
+	}
 }
 
 func (e *triggerNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
@@ -1472,21 +1368,21 @@ func (e *extRatioClassifierNodeExecutor) Type() string {
 func (e *extRatioClassifierNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Ext Ratio Classifier",
-		Description: "Classify folder trees by extension ratio",
-		InputPorts: []NodeSchemaPort{
-			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
-			{Name: "folder", Description: "FOLDER_TREE legacy input", Required: false},
+		Label:       "扩展名分类器",
+		Description: "根据目录内文件扩展名比例判断分类类别",
+		Inputs: []PortDef{
+			{Name: "trees", Type: PortTypeFolderTreeList, Description: "目录树列表", Required: false},
 		},
-		OutputPorts: []NodeSchemaPort{{
+		Outputs: []PortDef{{
 			Name:        "signal",
-			Description: "CLASSIFICATION_SIGNAL_LIST",
+			Type:        PortTypeClassificationSignalList,
+			Description: "分类信号列表",
 		}},
 	}
 }
 
 func (e *extRatioClassifierNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	rawTrees, ok := firstPresentTyped(input.Inputs, "trees", "folder")
+	rawTrees, ok := firstPresentTyped(input.Inputs, "trees")
 	if !ok {
 		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}
@@ -1532,49 +1428,6 @@ func (e *extRatioClassifierNodeExecutor) Rollback(_ context.Context, _ NodeRollb
 	return nil
 }
 
-type moveNodeExecutor struct {
-	fs      fs.FSAdapter
-	folders repository.FolderRepository
-}
-
-func (e *moveNodeExecutor) Type() string {
-	return "move"
-}
-
-func (e *moveNodeExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Move", Description: "Move folder to target directory"}
-}
-
-func (e *moveNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	targetDir := stringConfig(input.Node.Config, "target_dir")
-	if targetDir == "" {
-		targetDir = stringConfig(input.Node.Config, "targetDir")
-	}
-	if targetDir == "" {
-		return NodeExecutionOutput{}, fmt.Errorf("moveNode.Execute: target_dir is required")
-	}
-
-	if err := e.fs.MkdirAll(ctx, targetDir, 0o755); err != nil {
-		return NodeExecutionOutput{}, fmt.Errorf("moveNode.Execute mkdir %q: %w", targetDir, err)
-	}
-
-	dst := filepath.Join(targetDir, input.Folder.Name)
-	if err := e.fs.MoveDir(ctx, input.Folder.Path, dst); err != nil {
-		return NodeExecutionOutput{}, fmt.Errorf("moveNode.Execute move %q to %q: %w", input.Folder.Path, dst, err)
-	}
-
-	if err := e.folders.UpdatePath(ctx, input.Folder.ID, dst); err != nil {
-		return NodeExecutionOutput{}, fmt.Errorf("moveNode.Execute update path for folder %q: %w", input.Folder.ID, err)
-	}
-	input.Folder.Path = dst
-
-	if input.Folder == nil {
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder": {Type: PortTypeJSON, Value: nil}}, Status: ExecutionSuccess}, nil
-	}
-
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder": {Type: PortTypeJSON, Value: input.Folder}}, Status: ExecutionSuccess}, nil
-}
-
 func firstPresentTyped(inputs map[string]*TypedValue, keys ...string) (any, bool) {
 	for _, key := range keys {
 		value, ok := inputs[key]
@@ -1585,54 +1438,6 @@ func firstPresentTyped(inputs map[string]*TypedValue, keys ...string) (any, bool
 	}
 
 	return nil, false
-}
-
-func (e *moveNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
-	return NodeExecutionOutput{}, fmt.Errorf("%s: Resume not supported", e.Type())
-}
-
-func (e *moveNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {
-	var pre *repository.NodeSnapshot
-	var post *repository.NodeSnapshot
-	for _, item := range input.Snapshots {
-		if item.Kind == "pre" {
-			pre = item
-		}
-		if item.Kind == "post" {
-			post = item
-		}
-	}
-	if pre == nil || post == nil {
-		return nil
-	}
-
-	var preState struct {
-		FolderPath string `json:"folder_path"`
-	}
-	if err := json.Unmarshal([]byte(pre.FSManifest), &preState); err != nil {
-		return fmt.Errorf("moveNode.Rollback parse pre manifest for node run %q: %w", input.NodeRun.ID, err)
-	}
-
-	var postState struct {
-		FolderPath string `json:"folder_path"`
-	}
-	if err := json.Unmarshal([]byte(post.FSManifest), &postState); err != nil {
-		return fmt.Errorf("moveNode.Rollback parse post manifest for node run %q: %w", input.NodeRun.ID, err)
-	}
-
-	if preState.FolderPath == "" || postState.FolderPath == "" || preState.FolderPath == postState.FolderPath {
-		return nil
-	}
-
-	if err := e.fs.MoveDir(ctx, postState.FolderPath, preState.FolderPath); err != nil {
-		return fmt.Errorf("moveNode.Rollback move back %q to %q: %w", postState.FolderPath, preState.FolderPath, err)
-	}
-
-	if err := e.folders.UpdatePath(ctx, input.Folder.ID, preState.FolderPath); err != nil {
-		return fmt.Errorf("moveNode.Rollback update folder path for %q: %w", input.Folder.ID, err)
-	}
-
-	return nil
 }
 
 func stringConfig(config map[string]any, key string) string {
@@ -1652,14 +1457,3 @@ func stringConfig(config map[string]any, key string) string {
 	return strings.TrimSpace(text)
 }
 
-// hasNilRequiredInput returns true if any input port value is explicitly nil,
-// indicating the upstream node chose the other branch (nil-port skip semantics).
-func hasNilRequiredInput(inputs map[string]any) bool {
-	for _, v := range inputs {
-		if v == nil {
-			return true
-		}
-	}
-
-	return false
-}

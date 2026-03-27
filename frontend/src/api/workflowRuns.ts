@@ -1,5 +1,5 @@
 import { request } from '@/api/client'
-import type { NodeRun, PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
+import type { PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
 
 export interface WorkflowRunQueryParams {
   page?: number
@@ -8,7 +8,6 @@ export interface WorkflowRunQueryParams {
 
 export interface StartWorkflowJobBody {
   workflow_def_id: string
-  folder_ids: string[]
 }
 
 export function startWorkflowJob(body: StartWorkflowJobBody) {
@@ -33,10 +32,6 @@ export function getWorkflowRunDetail(id: string) {
   return request<WorkflowRunDetail>(`/workflow-runs/${id}`)
 }
 
-export function listNodeRunsByWorkflowRun(workflowRunId: string) {
-  return request<{ data: NodeRun[] }>(`/workflow-runs/${workflowRunId}/nodes`)
-}
-
 export function resumeWorkflowRun(id: string) {
   return request<{ resumed: boolean }>(`/workflow-runs/${id}/resume`, { method: 'POST' })
 }
@@ -46,6 +41,13 @@ export function rollbackWorkflowRun(id: string) {
 }
 
 export function provideWorkflowRunInput(id: string, body: ProvideInputBody) {
+  return request<undefined>(`/workflow-runs/${id}/provide-input`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function provideWorkflowRunRawInput(id: string, body: Record<string, unknown>) {
   return request<undefined>(`/workflow-runs/${id}/provide-input`, {
     method: 'POST',
     body: JSON.stringify(body),

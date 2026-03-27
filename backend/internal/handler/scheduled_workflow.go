@@ -194,9 +194,6 @@ func validateScheduledWorkflowRequest(req scheduledWorkflowUpsertRequest) error 
 		if strings.TrimSpace(req.WorkflowDefID) == "" {
 			return errors.New("workflow_def_id is required")
 		}
-		if len(req.FolderIDs) == 0 {
-			return errors.New("folder_ids is required")
-		}
 	}
 	if jobType == "scan" && len(req.SourceDirs) == 0 {
 		return errors.New("source_dirs is required")

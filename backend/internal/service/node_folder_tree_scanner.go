@@ -36,26 +36,25 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 		Type:        folderTreeScannerExecutorType,
 		Label:       "目录树扫描器",
 		Description: "递归扫描源目录，输出顶层子目录 FolderTree 列表",
-		InputPorts: []NodeSchemaPort{{
+		Inputs: []PortDef{{
 			Name:        "source_dir",
-			Description: "PATH 扫描根目录",
+			Type:        PortTypePath,
+			Description: "扫描根目录，必须由上游节点连入",
 			Required:    true,
 		}},
-		OutputPorts: []NodeSchemaPort{{
+		Outputs: []PortDef{{
 			Name:        "tree",
-			Description: "FOLDER_TREE_LIST 顶层子目录 FolderTree 列表",
+			Type:        PortTypeFolderTreeList,
+			Description: "顶层子目录 FolderTree 列表",
 		}},
 	}
 }
 
 func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	sourceDir := stringConfig(input.Node.Config, "source_dir")
+	rawInputs := typedInputsToAny(input.Inputs)
+	sourceDir := strings.TrimSpace(anyString(rawInputs["source_dir"]))
 	if sourceDir == "" {
-		rawInputs := typedInputsToAny(input.Inputs)
-		sourceDir = strings.TrimSpace(anyString(rawInputs["source_dir"]))
-	}
-	if sourceDir == "" {
-		return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute: source_dir is required")
+		return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute: source_dir is required, connect an upstream node to the source_dir port")
 	}
 
 	maxDepth := intConfig(input.Node.Config, "max_depth", 5)

@@ -26,15 +26,15 @@ func (e *auditLogNodeExecutor) Type() string {
 func (e *auditLogNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Audit Log",
-		Description: "Write structured audit logs for processing results",
-		InputPorts: []NodeSchemaPort{
-			{Name: "item", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: false},
-			{Name: "result", Description: "Node result payload", Required: false},
+		Label:       "审计日志",
+		Description: "将处理结果写入审计日志，同时将输入数据原样透传给下游",
+		Inputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "处理项列表", Required: false},
+			{Name: "result", Type: PortTypeJSON, Description: "节点结果数据", Required: false},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "item", Description: "Pass-through item input", Required: false},
-			{Name: "result", Description: "Pass-through result input", Required: false},
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "透传处理项列表"},
+			{Name: "result", Type: PortTypeJSON, Description: "透传结果数据"},
 		},
 	}
 }
@@ -45,7 +45,7 @@ func (e *auditLogNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	}
 
 	rawInputs := typedInputsToAny(input.Inputs)
-	items, _, _ := categoryRouterExtractItems(input.Inputs)
+	items, _ := categoryRouterExtractItems(input.Inputs)
 	resultPayload := auditLogNodeResolveResultInput(rawInputs)
 
 	detailJSON, err := json.Marshal(map[string]any{
@@ -72,7 +72,7 @@ func (e *auditLogNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: write audit log: %w", e.Type(), err)
 	}
 
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"item": {Type: PortTypeJSON, Value: auditLogNodeResolveItemInput(rawInputs)}, "result": {Type: PortTypeJSON, Value: resultPayload}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: auditLogNodeResolveItemInput(rawInputs)}, "result": {Type: PortTypeJSON, Value: resultPayload}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *auditLogNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

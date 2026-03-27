@@ -24,14 +24,14 @@ func (e *classificationReaderNodeExecutor) Type() string {
 func (e *classificationReaderNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Classification Reader",
-		Description: "Read classified entry from input or current workflow folder",
-		InputPorts: []NodeSchemaPort{
-			{Name: "entry", Description: "CLASSIFIED_ENTRY (optional)", Required: false},
-			{Name: "job_id", Description: "JOB_ID (optional compatibility)", Required: false},
+		Label:       "分类读取器",
+		Description: "分类管道到处理管道的桥接节点，读取 subtree-aggregator 的分类结果供处理链使用",
+		Inputs: []PortDef{
+			{Name: "entry", Type: PortTypeJSON, Description: "已分类条目（可选）", Required: false},
+			{Name: "job_id", Type: PortTypeString, Description: "任务 ID（可选）", Required: false},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "entry", Description: "CLASSIFIED_ENTRY", Required: true},
+		Outputs: []PortDef{
+			{Name: "entry", Type: PortTypeJSON, Description: "已分类条目"},
 		},
 	}
 }
@@ -40,30 +40,7 @@ func (e *classificationReaderNodeExecutor) Execute(_ context.Context, input Node
 	rawInputs := typedInputsToAny(input.Inputs)
 	entry, ok := classificationReaderResolveInputEntry(rawInputs)
 	if !ok {
-		if input.Folder == nil || input.Folder.ID == "" {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder is required when entry input is missing", e.Type())
-		}
-		entry = ClassifiedEntry{
-			FolderID: input.Folder.ID,
-			Path:     input.Folder.Path,
-			Name:     input.Folder.Name,
-			Category: input.Folder.Category,
-		}
-	}
-
-	if input.Folder != nil {
-		if entry.FolderID == "" {
-			entry.FolderID = input.Folder.ID
-		}
-		if entry.Path == "" {
-			entry.Path = input.Folder.Path
-		}
-		if entry.Name == "" {
-			entry.Name = input.Folder.Name
-		}
-		if entry.Category == "" {
-			entry.Category = input.Folder.Category
-		}
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: entry input is required", e.Type())
 	}
 
 	if entry.Category == "" {

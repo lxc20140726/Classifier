@@ -33,19 +33,18 @@ func (e *subtreeAggregatorNodeExecutor) Type() string {
 func (e *subtreeAggregatorNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Subtree Aggregator",
-		Description: "Aggregate classification signals and persist folder category",
-		InputPorts: []NodeSchemaPort{
-			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
-			{Name: "node", Description: "FOLDER_TREE_NODE legacy input", Required: false},
-			{Name: "signal_kw", Description: "CLASSIFICATION_SIGNAL_LIST from name-keyword-classifier", Required: false, Lazy: true},
-			{Name: "signal_ft", Description: "CLASSIFICATION_SIGNAL_LIST from file-tree-classifier", Required: false, Lazy: true},
-			{Name: "signal_ext", Description: "CLASSIFICATION_SIGNAL_LIST from ext-ratio-classifier", Required: false, Lazy: true},
-			{Name: "signal_high", Description: "CLASSIFICATION_SIGNAL_LIST from confidence-check high port", Required: false, Lazy: true},
-			{Name: "signal_manual", Description: "CLASSIFICATION_SIGNAL_LIST from manual-classifier", Required: false, Lazy: true},
+		Label:       "子树聚合器",
+		Description: "聚合各分类器的信号，取最高置信度结果并将最终分类持久化到数据库",
+		Inputs: []PortDef{
+			{Name: "trees", Type: PortTypeFolderTreeList, Description: "目录树列表", Required: false},
+			{Name: "signal_kw", Type: PortTypeClassificationSignalList, Description: "关键词分类器信号", Required: false, Lazy: true},
+			{Name: "signal_ft", Type: PortTypeClassificationSignalList, Description: "文件树分类器信号", Required: false, Lazy: true},
+			{Name: "signal_ext", Type: PortTypeClassificationSignalList, Description: "扩展名分类器信号", Required: false, Lazy: true},
+			{Name: "signal_high", Type: PortTypeClassificationSignalList, Description: "置信度检查高置信度信号", Required: false, Lazy: true},
+			{Name: "signal_manual", Type: PortTypeClassificationSignalList, Description: "人工分类信号", Required: false, Lazy: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "entry", Description: "CLASSIFIED_ENTRY_LIST", Required: false},
+		Outputs: []PortDef{
+			{Name: "entry", Type: PortTypeClassifiedEntryList, Description: "已分类条目列表"},
 		},
 	}
 }
@@ -56,7 +55,7 @@ func (e *subtreeAggregatorNodeExecutor) Execute(ctx context.Context, input NodeE
 	}
 
 	rawInputs := typedInputsToAny(input.Inputs)
-	rawTrees, hasTrees := firstPresent(rawInputs, "trees", "node")
+	rawTrees, hasTrees := firstPresent(rawInputs, "trees")
 	var (
 		trees []FolderTree
 		err   error
@@ -66,9 +65,6 @@ func (e *subtreeAggregatorNodeExecutor) Execute(ctx context.Context, input NodeE
 		if err != nil {
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute parse trees: %w", e.Type(), err)
 		}
-	}
-	if len(trees) == 0 && input.Folder != nil && strings.TrimSpace(input.Folder.Path) != "" {
-		trees = []FolderTree{{Path: input.Folder.Path, Name: input.Folder.Name}}
 	}
 	if len(trees) == 0 {
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder trees are required", e.Type())
@@ -190,14 +186,7 @@ func aggregateTreeCategory(bestSignal ClassificationSignal, subtreeEntries []Cla
 }
 
 func (e *subtreeAggregatorNodeExecutor) ensureFolderForTree(ctx context.Context, input NodeExecutionInput, tree FolderTree) (*repository.Folder, error) {
-	if input.Folder != nil && strings.TrimSpace(input.Folder.ID) != "" && strings.TrimSpace(input.Folder.Path) == strings.TrimSpace(tree.Path) {
-		return input.Folder, nil
-	}
-
 	if strings.TrimSpace(tree.Path) == "" {
-		if input.Folder != nil && strings.TrimSpace(input.Folder.ID) != "" {
-			return input.Folder, nil
-		}
 		return nil, fmt.Errorf("folder path is required")
 	}
 
