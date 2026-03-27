@@ -290,6 +290,112 @@ func createPhase3WorkflowDef(t *testing.T, repo repository.WorkflowDefinitionRep
 	return def
 }
 
+// TestEngineV2_AC_CLASS2_KeywordPriorityOverExtRatio verifies that the
+// name-keyword-classifier (confidence 1.0) overrides ext-ratio-classifier when
+// classifying a folder whose name contains a keyword trigger.
+func TestEngineV2_AC_CLASS2_KeywordPriorityOverExtRatio(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	adapter := fs.NewMockAdapter()
+	// Folder "漫画合集" has only video files → ext-ratio would say "video" (conf 0.85)
+	// but the name keyword rule fires "manga" at conf 1.0.
+	adapter.AddDir("/source", []fs.DirEntry{{Name: "漫画合集", IsDir: true}})
+	adapter.AddDir("/source/漫画合集", []fs.DirEntry{
+		{Name: "ep1.mp4", IsDir: false, Size: 200},
+		{Name: "ep2.mkv", IsDir: false, Size: 220},
+	})
+
+	svc, jobRepo, folderRepo, workflowDefRepo, _, _, _ := newPhase3WorkflowTestEnv(t, adapter)
+
+	def := createPhase3WorkflowDef(t, workflowDefRepo, "wf-keyword-priority", repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "scanner", Type: folderTreeScannerExecutorType, Enabled: true, Config: map[string]any{"source_dir": "/source"}},
+			// keyword classifier: fires "manga" at confidence 1.0 because name contains "漫画"
+			{ID: "kw", Type: "name-keyword-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"folder": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
+			}},
+			// ext-ratio classifier: sees video files, emits "video" at confidence 0.85
+			{ID: "ext", Type: "ext-ratio-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"folder": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
+			}},
+			// aggregator receives both signals and picks highest-confidence winner
+			{ID: "agg", Type: subtreeAggregatorExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"node":       {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
+				"signal_kw":  {LinkSource: &repository.NodeLinkSource{SourceNodeID: "kw", OutputPortIndex: 0}},
+				"signal_ext": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ext", OutputPortIndex: 0}},
+			}},
+		},
+	})
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+
+	folder, err := folderRepo.GetByPath(ctx, "/source/漫画合集")
+	if err != nil {
+		t.Fatalf("folderRepo.GetByPath() error = %v", err)
+	}
+	// keyword (manga, 1.0) must win over ext-ratio (video, 0.85)
+	if folder.Category != "manga" {
+		t.Fatalf("folder category = %q, want manga (keyword priority over ext-ratio)", folder.Category)
+	}
+}
+
+// TestEngineV2_AC_COMPAT2_LegacyScanAndMoveJobRegression verifies that the
+// pre-engine-v2 folder-scan job and single-folder move job still complete
+// successfully after the engine v2 upgrade.
+func TestEngineV2_AC_COMPAT2_LegacyScanAndMoveJobRegression(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	adapter := fs.NewMockAdapter()
+	adapter.AddDir("/source", []fs.DirEntry{{Name: "legacy-folder", IsDir: true}})
+	adapter.AddDir("/source/legacy-folder", []fs.DirEntry{{Name: "001.jpg", IsDir: false, Size: 100}})
+
+	svc, jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, _, _ := newPhase3WorkflowTestEnv(t, adapter)
+
+	// Legacy move job: single-folder workflow using old "move" node type.
+	folder := &repository.Folder{ID: "folder-legacy-compat", Path: "/source/legacy-folder", Name: "legacy-folder", Category: "photo", CategorySource: "manual", Status: "pending"}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	def := createPhase3WorkflowDef(t, workflowDefRepo, "wf-legacy-compat", repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "move", Type: "move", Enabled: true, Config: map[string]any{"target_dir": "/target"}},
+		},
+	})
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, FolderIDs: []string{folder.ID}})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("legacy move job status = %q, want succeeded", job.Status)
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	if run.Status != "succeeded" {
+		t.Fatalf("legacy move workflow run status = %q, want succeeded", run.Status)
+	}
+
+	updated, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() error = %v", err)
+	}
+	if updated.Path != "/target/legacy-folder" {
+		t.Fatalf("folder path = %q, want /target/legacy-folder", updated.Path)
+	}
+}
+
 func waitWorkflowRunByJob(t *testing.T, repo repository.WorkflowRunRepository, jobID string) *repository.WorkflowRun {
 	t.Helper()
 

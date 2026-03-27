@@ -187,12 +187,12 @@ func TestRenameNodeExecutorTemplateRegexAndConditionalDefault(t *testing.T) {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		item, ok := out.Outputs["items"].Value.(ProcessingItem)
-		if !ok {
-			t.Fatalf("output type = %T, want ProcessingItem", out.Outputs["items"].Value)
+		items, ok := out.Outputs["items"].Value.([]ProcessingItem)
+		if !ok || len(items) != 1 {
+			t.Fatalf("output type/len = %T/%d, want []ProcessingItem/1", out.Outputs["items"].Value, len(items))
 		}
-		if item.TargetName != "Blade Runner (2049)" {
-			t.Fatalf("TargetName = %q, want %q", item.TargetName, "Blade Runner (2049)")
+		if items[0].TargetName != "Blade Runner (2049)" {
+			t.Fatalf("TargetName = %q, want %q", items[0].TargetName, "Blade Runner (2049)")
 		}
 	})
 
@@ -211,9 +211,9 @@ func TestRenameNodeExecutorTemplateRegexAndConditionalDefault(t *testing.T) {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		item := out.Outputs["items"].Value.(ProcessingItem)
-		if item.TargetName != "Dune (2021)" {
-			t.Fatalf("TargetName = %q, want %q", item.TargetName, "Dune (2021)")
+		items := out.Outputs["items"].Value.([]ProcessingItem)
+		if len(items) != 1 || items[0].TargetName != "Dune (2021)" {
+			t.Fatalf("TargetName = %q, want %q", items[0].TargetName, "Dune (2021)")
 		}
 	})
 
@@ -235,9 +235,9 @@ func TestRenameNodeExecutorTemplateRegexAndConditionalDefault(t *testing.T) {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		item := out.Outputs["items"].Value.(ProcessingItem)
-		if item.TargetName != "DEFAULT-Sample" {
-			t.Fatalf("TargetName = %q, want %q", item.TargetName, "DEFAULT-Sample")
+		items := out.Outputs["items"].Value.([]ProcessingItem)
+		if len(items) != 1 || items[0].TargetName != "DEFAULT-Sample" {
+			t.Fatalf("TargetName = %q, want %q", items[0].TargetName, "DEFAULT-Sample")
 		}
 	})
 }
@@ -648,6 +648,191 @@ func TestThumbnailNodeExecutorRollbackRemovesFilesAndClearsCover(t *testing.T) {
 	if updated.CoverImagePath != "" {
 		t.Fatalf("cover_image_path = %q, want empty after rollback", updated.CoverImagePath)
 	}
+}
+
+// TestEngineV2_AC_ROLL2_ThumbnailNodeRollbackTypedFormat verifies that
+// thumbnail-node Rollback deletes the generated thumbnail file when node output
+// is stored in the typed-value JSON format used by the engine v2 runtime.
+func TestEngineV2_AC_ROLL2_ThumbnailNodeRollbackTypedFormat(t *testing.T) {
+	t.Parallel()
+
+	database := newServiceTestDB(t)
+	folderRepo := repository.NewFolderRepository(database)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	thumbPath := filepath.Join(root, "thumbnails", "album.jpg")
+	mustMkdirAll(t, filepath.Dir(thumbPath))
+	if err := os.WriteFile(thumbPath, []byte("thumb-typed"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", thumbPath, err)
+	}
+
+	folder := &repository.Folder{
+		ID: "folder-thumbnail-rb-typed", Path: "/source/album", Name: "album",
+		Category: "video", CategorySource: "auto", Status: "pending", CoverImagePath: thumbPath,
+	}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
+		"items":           {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
+		"thumbnail_paths": {Type: PortTypeStringList, Value: []string{thumbPath}},
+	}, NewTypeRegistry())
+	if err != nil {
+		t.Fatalf("typedValueMapToJSON() error = %v", err)
+	}
+
+	executor := newThumbnailNodeExecutor(fs.NewOSAdapter(), folderRepo)
+	err = executor.Rollback(ctx, NodeRollbackInput{
+		NodeRun:   &repository.NodeRun{ID: "node-run-thumbnail-rb-typed"},
+		Folder:    folder,
+		Snapshots: []*repository.NodeSnapshot{{ID: "snap-thumbnail-rb-typed", Kind: "post", OutputJSON: mustJSONMarshal(t, encodedOutputs)}},
+	})
+	if err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	if pathExists(t, thumbPath) {
+		t.Fatalf("thumbnail %q should be deleted after typed-format rollback", thumbPath)
+	}
+
+	updated, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() error = %v", err)
+	}
+	if updated.CoverImagePath != "" {
+		t.Fatalf("cover_image_path = %q, want empty after rollback", updated.CoverImagePath)
+	}
+}
+
+// TestEngineV2_AC_ROLL3_CompressNodeRollbackTypedFormat verifies that
+// compress-node Rollback deletes the generated archive when node output is
+// stored in the typed-value JSON format used by the engine v2 runtime.
+func TestEngineV2_AC_ROLL3_CompressNodeRollbackTypedFormat(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "archives", "album.cbz")
+	mustMkdirAll(t, filepath.Dir(archivePath))
+	if err := os.WriteFile(archivePath, []byte("typed-archive"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", archivePath, err)
+	}
+
+	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
+		"items":    {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{SourcePath: "/source/album"}}},
+		"archives": {Type: PortTypeStringList, Value: []string{archivePath}},
+	}, NewTypeRegistry())
+	if err != nil {
+		t.Fatalf("typedValueMapToJSON() error = %v", err)
+	}
+
+	executor := newCompressNodeExecutor(fs.NewOSAdapter())
+	err = executor.Rollback(context.Background(), NodeRollbackInput{
+		NodeRun: &repository.NodeRun{
+			ID:        "node-run-compress-rb-typed",
+			InputJSON: `{"node":{"config":{"delete_source":false}}}`,
+		},
+		Snapshots: []*repository.NodeSnapshot{{
+			ID:         "snap-compress-rb-typed",
+			Kind:       "post",
+			OutputJSON: mustJSONMarshal(t, encodedOutputs),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	if pathExists(t, archivePath) {
+		t.Fatalf("archive %q should be deleted after typed-format rollback", archivePath)
+	}
+}
+
+// TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat verifies backward
+// compatibility: rollback still works when output_json uses the old array
+// format instead of the typed-value map format.
+func TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat(t *testing.T) {
+	t.Parallel()
+
+	t.Run("compress_node_legacy_array_format", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		archivePath := filepath.Join(root, "legacy-album.cbz")
+		if err := os.WriteFile(archivePath, []byte("legacy"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", archivePath, err)
+		}
+
+		executor := newCompressNodeExecutor(fs.NewOSAdapter())
+		err := executor.Rollback(context.Background(), NodeRollbackInput{
+			NodeRun: &repository.NodeRun{
+				ID:        "node-run-compress-legacy-compat",
+				InputJSON: `{"node":{"config":{"delete_source":false}}}`,
+			},
+			Snapshots: []*repository.NodeSnapshot{{
+				ID:   "snap-compress-legacy-compat",
+				Kind: "post",
+				// old array format: [<items-value>, <archives-list>]
+				OutputJSON: mustJSONMarshal(t, map[string]any{
+					"outputs": []any{
+						map[string]any{"source_path": "/source/album"},
+						[]string{archivePath},
+					},
+				}),
+			}},
+		})
+		if err != nil {
+			t.Fatalf("Rollback() legacy format error = %v", err)
+		}
+		if pathExists(t, archivePath) {
+			t.Fatalf("archive should be deleted when rollback uses legacy array format")
+		}
+	})
+
+	t.Run("thumbnail_node_legacy_array_format", func(t *testing.T) {
+		t.Parallel()
+
+		database := newServiceTestDB(t)
+		folderRepo := repository.NewFolderRepository(database)
+
+		ctx := context.Background()
+		root := t.TempDir()
+		thumbPath := filepath.Join(root, "legacy-album.jpg")
+		if err := os.WriteFile(thumbPath, []byte("legacy-thumb"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", thumbPath, err)
+		}
+
+		folder := &repository.Folder{
+			ID: "folder-thumbnail-legacy-compat", Path: "/source/album", Name: "album",
+			Category: "video", CategorySource: "auto", Status: "pending",
+		}
+		if err := folderRepo.Upsert(ctx, folder); err != nil {
+			t.Fatalf("folderRepo.Upsert() error = %v", err)
+		}
+
+		executor := newThumbnailNodeExecutor(fs.NewOSAdapter(), folderRepo)
+		err := executor.Rollback(ctx, NodeRollbackInput{
+			NodeRun: &repository.NodeRun{ID: "node-run-thumbnail-legacy-compat"},
+			Folder:  folder,
+			Snapshots: []*repository.NodeSnapshot{{
+				ID:   "snap-thumbnail-legacy-compat",
+				Kind: "post",
+				// old array format: [<items-value>, <thumbnail-paths-list>]
+				OutputJSON: mustJSONMarshal(t, map[string]any{
+					"outputs": []any{
+						map[string]any{"folder_id": folder.ID, "source_path": "/source/album"},
+						[]string{thumbPath},
+					},
+				}),
+			}},
+		})
+		if err != nil {
+			t.Fatalf("Rollback() legacy thumbnail format error = %v", err)
+		}
+		if pathExists(t, thumbPath) {
+			t.Fatalf("thumbnail should be deleted when rollback uses legacy array format")
+		}
+	})
 }
 
 type auditRepoStub struct {

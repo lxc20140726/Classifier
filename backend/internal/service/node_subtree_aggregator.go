@@ -33,19 +33,18 @@ func (e *subtreeAggregatorNodeExecutor) Type() string {
 func (e *subtreeAggregatorNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Subtree Aggregator",
-		Description: "Aggregate classification signals and persist folder category",
-		InputPorts: []NodeSchemaPort{
-			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
-			{Name: "node", Description: "FOLDER_TREE_NODE legacy input", Required: false},
-			{Name: "signal_kw", Description: "CLASSIFICATION_SIGNAL_LIST from name-keyword-classifier", Required: false, Lazy: true},
-			{Name: "signal_ft", Description: "CLASSIFICATION_SIGNAL_LIST from file-tree-classifier", Required: false, Lazy: true},
-			{Name: "signal_ext", Description: "CLASSIFICATION_SIGNAL_LIST from ext-ratio-classifier", Required: false, Lazy: true},
-			{Name: "signal_high", Description: "CLASSIFICATION_SIGNAL_LIST from confidence-check high port", Required: false, Lazy: true},
-			{Name: "signal_manual", Description: "CLASSIFICATION_SIGNAL_LIST from manual-classifier", Required: false, Lazy: true},
+		Label:       "子树聚合器",
+		Description: "聚合各分类器的信号，取最高置信度结果并将最终分类持久化到数据库",
+		Inputs: []PortDef{
+			{Name: "trees", Type: PortTypeFolderTreeList, Description: "目录树列表", Required: false},
+			{Name: "signal_kw", Type: PortTypeClassificationSignalList, Description: "关键词分类器信号", Required: false, Lazy: true},
+			{Name: "signal_ft", Type: PortTypeClassificationSignalList, Description: "文件树分类器信号", Required: false, Lazy: true},
+			{Name: "signal_ext", Type: PortTypeClassificationSignalList, Description: "扩展名分类器信号", Required: false, Lazy: true},
+			{Name: "signal_high", Type: PortTypeClassificationSignalList, Description: "置信度检查高置信度信号", Required: false, Lazy: true},
+			{Name: "signal_manual", Type: PortTypeClassificationSignalList, Description: "人工分类信号", Required: false, Lazy: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "entry", Description: "CLASSIFIED_ENTRY_LIST", Required: false},
+		Outputs: []PortDef{
+			{Name: "entry", Type: PortTypeClassifiedEntryList, Description: "已分类条目列表"},
 		},
 	}
 }

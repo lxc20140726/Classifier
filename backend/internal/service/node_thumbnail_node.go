@@ -52,22 +52,22 @@ func (e *thumbnailNodeExecutor) Type() string {
 func (e *thumbnailNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Thumbnail Node",
-		Description: "Generate a representative thumbnail for video folders",
-		InputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
+		Label:       "缩略图节点",
+		Description: "为视频文件夹提取代表帧生成缩略图（依赖运行环境中的 ffmpeg）",
+		Inputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待生成缩略图的处理项列表", Required: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
-			{Name: "thumbnail_paths", Description: "Generated thumbnail file paths", Required: true},
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "已处理的处理项列表"},
+			{Name: "thumbnail_paths", Type: PortTypeStringList, Description: "生成的缩略图路径列表"},
 		},
 	}
 }
 
 func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	items, isList, ok := categoryRouterExtractItems(input.Inputs)
+	items, ok := categoryRouterExtractItems(input.Inputs)
 	if !ok || len(items) == 0 {
-		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item/items input is required", e.Type())
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: items input is required", e.Type())
 	}
 
 	ffmpegPath, err := e.lookPath("ffmpeg")
@@ -131,11 +131,7 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 		thumbnailPaths = append(thumbnailPaths, thumbnailPath)
 	}
 
-	if isList {
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "thumbnail_paths": {Type: PortTypeStringList, Value: thumbnailPaths}}, Status: ExecutionSuccess}, nil
-	}
-
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: items[0]}, "thumbnail_paths": {Type: PortTypeStringList, Value: thumbnailPaths}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "thumbnail_paths": {Type: PortTypeStringList, Value: thumbnailPaths}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *thumbnailNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

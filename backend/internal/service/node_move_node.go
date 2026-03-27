@@ -29,22 +29,22 @@ func (e *phase4MoveNodeExecutor) Type() string {
 func (e *phase4MoveNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Move Node",
-		Description: "Move processing items to target directory",
-		InputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
+		Label:       "移动节点",
+		Description: "将处理项移动到目标目录，支持冲突策略和操作回滚",
+		Inputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待移动的处理项列表", Required: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "Moved PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
-			{Name: "results", Description: "MOVE_RESULT[]", Required: true},
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "已移动的处理项列表"},
+			{Name: "results", Type: PortTypeMoveResultList, Description: "移动操作结果列表"},
 		},
 	}
 }
 
 func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	items, isList, ok := categoryRouterExtractItems(input.Inputs)
+	items, ok := categoryRouterExtractItems(input.Inputs)
 	if !ok || len(items) == 0 {
-		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item/items input is required", e.Type())
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: items input is required", e.Type())
 	}
 
 	targetDir := stringConfig(input.Node.Config, "target_dir")
@@ -130,14 +130,7 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 		results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: finalPath, Status: "moved"})
 	}
 
-	if isList {
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: movedItems}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
-	}
-	if len(movedItems) == 0 {
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: nil}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
-	}
-
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: movedItems[0]}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: movedItems}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *phase4MoveNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -265,7 +258,7 @@ func phase4MoveRollbackEntriesFromOutput(raw string) ([]phase4MoveRollbackEntry,
 }
 
 func phase4MoveRollbackEntriesFromValues(itemsValue any, resultsValue any) []phase4MoveRollbackEntry {
-	items, _, _ := categoryRouterToItems(itemsValue)
+	items, _ := categoryRouterToItems(itemsValue)
 	results := phase4MoveResultsFromAny(resultsValue)
 	entries := make([]phase4MoveRollbackEntry, 0, len(results))
 	for index, result := range results {

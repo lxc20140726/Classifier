@@ -43,16 +43,14 @@ func (e *nameKeywordClassifierNodeExecutor) Type() string {
 func (e *nameKeywordClassifierNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Name Keyword Classifier",
-		Description: "Classify folder trees by configured name keywords",
-		InputPorts: []NodeSchemaPort{
-			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
-			{Name: "folder", Description: "FOLDER_TREE_NODE legacy input", Required: false},
-			{Name: "reserved", Description: "reserved", Required: false},
+		Label:       "关键词分类器",
+		Description: "根据文件夹名称关键词进行分类",
+		Inputs: []PortDef{
+			{Name: "trees", Type: PortTypeFolderTreeList, Description: "目录树列表", Required: false},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "signal", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
-			{Name: "pass", Description: "FOLDER_TREE_LIST legacy unresolved output", Required: false},
+		Outputs: []PortDef{
+			{Name: "signal", Type: PortTypeClassificationSignalList, Description: "分类信号列表"},
+			{Name: "pass", Type: PortTypeFolderTreeList, Description: "未命中透传目录树"},
 		},
 	}
 }

@@ -26,15 +26,14 @@ func (e *confidenceCheckNodeExecutor) Type() string {
 func (e *confidenceCheckNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Confidence Check",
-		Description: "Route classification signal by confidence threshold",
-		InputPorts: []NodeSchemaPort{
-			{Name: "signals", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
-			{Name: "signal", Description: "CLASSIFICATION_SIGNAL legacy input", Required: false},
+		Label:       "置信度检查",
+		Description: "按置信度阈值将分类信号路由至高置信度或低置信度端口",
+		Inputs: []PortDef{
+			{Name: "signals", Type: PortTypeClassificationSignalList, Description: "分类信号列表", Required: false},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "high", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
-			{Name: "low", Description: "CLASSIFICATION_SIGNAL_LIST", Required: false},
+		Outputs: []PortDef{
+			{Name: "high", Type: PortTypeClassificationSignalList, Description: "高置信度信号"},
+			{Name: "low", Type: PortTypeClassificationSignalList, Description: "低置信度信号"},
 		},
 	}
 }

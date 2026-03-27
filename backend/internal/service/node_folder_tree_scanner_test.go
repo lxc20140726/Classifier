@@ -46,18 +46,18 @@ func TestFolderTreeScannerExecutorSchema(t *testing.T) {
 		t.Fatalf("schema.Description = %q, want expected Chinese description", schema.Description)
 	}
 
-	if len(schema.InputPorts) != 1 {
-		t.Fatalf("len(schema.InputPorts) = %d, want 1", len(schema.InputPorts))
+	if len(schema.Inputs) != 1 {
+		t.Fatalf("len(schema.Inputs) = %d, want 1", len(schema.Inputs))
 	}
-	if schema.InputPorts[0].Name != "source_dir" || !schema.InputPorts[0].Required {
-		t.Fatalf("input port = %+v, want source_dir required", schema.InputPorts[0])
+	if schema.Inputs[0].Name != "source_dir" || !schema.Inputs[0].Required {
+		t.Fatalf("input port = %+v, want source_dir required", schema.Inputs[0])
 	}
 
-	if len(schema.OutputPorts) != 1 {
-		t.Fatalf("len(schema.OutputPorts) = %d, want 1", len(schema.OutputPorts))
+	if len(schema.Outputs) != 1 {
+		t.Fatalf("len(schema.Outputs) = %d, want 1", len(schema.Outputs))
 	}
-	if schema.OutputPorts[0].Name != "tree" {
-		t.Fatalf("output port name = %q, want tree", schema.OutputPorts[0].Name)
+	if schema.Outputs[0].Name != "tree" {
+		t.Fatalf("output port name = %q, want tree", schema.Outputs[0].Name)
 	}
 }
 

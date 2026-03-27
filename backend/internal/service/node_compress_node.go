@@ -32,22 +32,22 @@ func (e *compressNodeExecutor) Type() string {
 func (e *compressNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Compress Node",
-		Description: "Create cbz/zip archives from folder processing items",
-		InputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
+		Label:       "压缩节点",
+		Description: "将处理项打包为 cbz/zip 压缩文件",
+		Inputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待压缩的处理项列表", Required: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
-			{Name: "archives", Description: "Generated archive file paths", Required: true},
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "已处理的处理项列表"},
+			{Name: "archives", Type: PortTypeStringList, Description: "生成的压缩包路径列表"},
 		},
 	}
 }
 
 func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	items, isList, ok := categoryRouterExtractItems(input.Inputs)
+	items, ok := categoryRouterExtractItems(input.Inputs)
 	if !ok || len(items) == 0 {
-		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item/items input is required", e.Type())
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: items input is required", e.Type())
 	}
 
 	scope := strings.ToLower(strings.TrimSpace(stringConfig(input.Node.Config, "scope")))
@@ -127,11 +127,7 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 		archives = append(archives, archivePath)
 	}
 
-	if isList {
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "archives": {Type: PortTypeStringList, Value: archives}}, Status: ExecutionSuccess}, nil
-	}
-
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: items[0]}, "archives": {Type: PortTypeStringList, Value: archives}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "archives": {Type: PortTypeStringList, Value: archives}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *compressNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

@@ -60,20 +60,16 @@ type PortDef struct {
 	Description string   `json:"description"`
 }
 
-type NodeSchemaPort = PortDef
-
 type NodeSchema struct {
-	Type         string           `json:"type,omitempty"`
-	TypeID       string           `json:"type_id,omitempty"`
-	Label        string           `json:"label,omitempty"`
-	DisplayName  string           `json:"display_name,omitempty"`
-	Description  string           `json:"description"`
-	Category     string           `json:"category,omitempty"`
-	InputPorts   []NodeSchemaPort `json:"input_ports,omitempty"`
-	OutputPorts  []NodeSchemaPort `json:"output_ports,omitempty"`
-	Inputs       []PortDef        `json:"inputs,omitempty"`
-	Outputs      []PortDef        `json:"outputs,omitempty"`
-	ConfigSchema map[string]any   `json:"config_schema,omitempty"`
+	Type         string         `json:"type,omitempty"`
+	TypeID       string         `json:"type_id,omitempty"`
+	Label        string         `json:"label,omitempty"`
+	DisplayName  string         `json:"display_name,omitempty"`
+	Description  string         `json:"description"`
+	Category     string         `json:"category,omitempty"`
+	Inputs       []PortDef      `json:"input_ports,omitempty"`
+	Outputs      []PortDef      `json:"output_ports,omitempty"`
+	ConfigSchema map[string]any `json:"config_schema,omitempty"`
 }
 
 func (s NodeSchema) TypeName() string {
@@ -91,17 +87,11 @@ func (s NodeSchema) DisplayLabel() string {
 }
 
 func (s NodeSchema) InputDefs() []PortDef {
-	if len(s.Inputs) > 0 {
-		return s.Inputs
-	}
-	return s.InputPorts
+	return s.Inputs
 }
 
 func (s NodeSchema) OutputDefs() []PortDef {
-	if len(s.Outputs) > 0 {
-		return s.Outputs
-	}
-	return s.OutputPorts
+	return s.Outputs
 }
 
 func (s NodeSchema) InputPort(name string) *PortDef {
@@ -195,6 +185,9 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newThumbnailNodeExecutor(fsAdapter, folderRepo))
 	svc.RegisterExecutor(newCompressNodeExecutor(fsAdapter))
 	svc.RegisterExecutor(newAuditLogNodeExecutor(auditSvc))
+	svc.RegisterExecutor(newClassificationPreviewNodeExecutor())
+	svc.RegisterExecutor(newFolderSelectorNodeExecutor())
+	svc.RegisterExecutor(newFolderPickerNodeExecutor(fsAdapter))
 
 	return svc
 }
@@ -1442,7 +1435,16 @@ func (e *triggerNodeExecutor) Type() string {
 }
 
 func (e *triggerNodeExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Trigger", Description: "Trigger node"}
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "触发器",
+		Description: "触发节点，启动工作流并将当前处理文件夹传递给下游",
+		Outputs: []PortDef{{
+			Name:        "folder",
+			Type:        PortTypeJSON,
+			Description: "当前处理的文件夹数据",
+		}},
+	}
 }
 
 func (e *triggerNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
@@ -1472,15 +1474,15 @@ func (e *extRatioClassifierNodeExecutor) Type() string {
 func (e *extRatioClassifierNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Ext Ratio Classifier",
-		Description: "Classify folder trees by extension ratio",
-		InputPorts: []NodeSchemaPort{
-			{Name: "trees", Description: "FOLDER_TREE_LIST", Required: false},
-			{Name: "folder", Description: "FOLDER_TREE legacy input", Required: false},
+		Label:       "扩展名分类器",
+		Description: "根据目录内文件扩展名比例判断分类类别",
+		Inputs: []PortDef{
+			{Name: "trees", Type: PortTypeFolderTreeList, Description: "目录树列表", Required: false},
 		},
-		OutputPorts: []NodeSchemaPort{{
+		Outputs: []PortDef{{
 			Name:        "signal",
-			Description: "CLASSIFICATION_SIGNAL_LIST",
+			Type:        PortTypeClassificationSignalList,
+			Description: "分类信号列表",
 		}},
 	}
 }
@@ -1542,7 +1544,11 @@ func (e *moveNodeExecutor) Type() string {
 }
 
 func (e *moveNodeExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Move", Description: "Move folder to target directory"}
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "移动",
+		Description: "将文件夹移动到目标目录",
+	}
 }
 
 func (e *moveNodeExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {

@@ -25,53 +25,40 @@ func (e *categoryRouterNodeExecutor) Type() string {
 func (e *categoryRouterNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Category Router",
-		Description: "Route processing items by category",
-		InputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
+		Label:       "类别路由器",
+		Description: "按分类类别将处理项路由至对应输出端口（video / manga / photo / other / mixed_leaf）",
+		Inputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待路由的处理项列表", Required: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "video", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: false},
-			{Name: "manga", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: false},
-			{Name: "photo", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: false},
-			{Name: "other", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: false},
-			{Name: "mixed_leaf", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: false},
+		Outputs: []PortDef{
+			{Name: "video", Type: PortTypeProcessingItemList, Description: "视频类处理项"},
+			{Name: "manga", Type: PortTypeProcessingItemList, Description: "漫画类处理项"},
+			{Name: "photo", Type: PortTypeProcessingItemList, Description: "图片类处理项"},
+			{Name: "other", Type: PortTypeProcessingItemList, Description: "其他类处理项"},
+			{Name: "mixed_leaf", Type: PortTypeProcessingItemList, Description: "混合叶节点处理项"},
 		},
 	}
 }
 
 func (e *categoryRouterNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	items, isList, ok := categoryRouterExtractItems(input.Inputs)
+	items, ok := categoryRouterExtractItems(input.Inputs)
 	if !ok {
 		return NodeExecutionOutput{Outputs: emptyCategoryRouterOutputs(), Status: ExecutionSuccess}, nil
 	}
 
-	if isList {
-		ports := make([][]ProcessingItem, 5)
-		for _, item := range items {
-			idx := categoryRouterPortIndex(item.Category)
-			ports[idx] = append(ports[idx], item)
-		}
-
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{
-			"video":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[0]...)},
-			"manga":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[1]...)},
-			"photo":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[2]...)},
-			"other":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[3]...)},
-			"mixed_leaf": {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[4]...)},
-		}, Status: ExecutionSuccess}, nil
+	ports := make([][]ProcessingItem, 5)
+	for _, item := range items {
+		idx := categoryRouterPortIndex(item.Category)
+		ports[idx] = append(ports[idx], item)
 	}
 
-	outputs := map[string]TypedValue{
-		"video":      {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
-		"manga":      {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
-		"photo":      {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
-		"other":      {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
-		"mixed_leaf": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
-	}
-	categoryKeys := []string{"video", "manga", "photo", "other", "mixed_leaf"}
-	outputs[categoryKeys[categoryRouterPortIndex(items[0].Category)]] = TypedValue{Type: PortTypeProcessingItemList, Value: []ProcessingItem{items[0]}}
-	return NodeExecutionOutput{Outputs: outputs, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{
+		"video":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[0]...)},
+		"manga":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[1]...)},
+		"photo":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[2]...)},
+		"other":      {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[3]...)},
+		"mixed_leaf": {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), ports[4]...)},
+	}, Status: ExecutionSuccess}, nil
 }
 
 func emptyCategoryRouterOutputs() map[string]TypedValue {
@@ -92,36 +79,35 @@ func (e *categoryRouterNodeExecutor) Rollback(_ context.Context, _ NodeRollbackI
 	return nil
 }
 
-func categoryRouterExtractItems(inputs map[string]*TypedValue) ([]ProcessingItem, bool, bool) {
+func categoryRouterExtractItems(inputs map[string]*TypedValue) ([]ProcessingItem, bool) {
 	for _, key := range []string{"items", "item"} {
 		typed, ok := inputs[key]
 		if !ok || typed == nil {
 			continue
 		}
-		raw := typed.Value
 
-		items, isList, ok := categoryRouterToItems(raw)
+		items, ok := categoryRouterToItems(typed.Value)
 		if !ok {
 			continue
 		}
 
-		return items, isList, true
+		return items, true
 	}
 
-	return nil, false, false
+	return nil, false
 }
 
-func categoryRouterToItems(raw any) ([]ProcessingItem, bool, bool) {
+func categoryRouterToItems(raw any) ([]ProcessingItem, bool) {
 	switch value := raw.(type) {
 	case ProcessingItem:
-		return []ProcessingItem{value}, false, true
+		return []ProcessingItem{value}, true
 	case *ProcessingItem:
 		if value == nil {
-			return nil, false, false
+			return nil, false
 		}
-		return []ProcessingItem{*value}, false, true
+		return []ProcessingItem{*value}, true
 	case []ProcessingItem:
-		return append([]ProcessingItem(nil), value...), true, true
+		return append([]ProcessingItem(nil), value...), true
 	case []*ProcessingItem:
 		out := make([]ProcessingItem, 0, len(value))
 		for _, item := range value {
@@ -130,7 +116,7 @@ func categoryRouterToItems(raw any) ([]ProcessingItem, bool, bool) {
 			}
 			out = append(out, *item)
 		}
-		return out, true, true
+		return out, true
 	case []any:
 		out := make([]ProcessingItem, 0, len(value))
 		for _, item := range value {
@@ -140,13 +126,13 @@ func categoryRouterToItems(raw any) ([]ProcessingItem, bool, bool) {
 			}
 			out = append(out, parsed)
 		}
-		return out, true, true
+		return out, true
 	default:
 		parsed, ok := categoryRouterToItem(value)
 		if !ok {
-			return nil, false, false
+			return nil, false
 		}
-		return []ProcessingItem{parsed}, false, true
+		return []ProcessingItem{parsed}, true
 	}
 }
 

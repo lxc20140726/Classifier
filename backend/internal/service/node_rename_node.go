@@ -33,19 +33,19 @@ func (e *renameNodeExecutor) Type() string {
 func (e *renameNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Rename Node",
-		Description: "Transform target names by template, regex, or conditional rules",
-		InputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
+		Label:       "重命名节点",
+		Description: "通过模板、正则或条件规则重命名处理项的目标文件夹名",
+		Inputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待重命名的处理项列表", Required: true},
 		},
-		OutputPorts: []NodeSchemaPort{
-			{Name: "items", Description: "PROCESSING_ITEM or PROCESSING_ITEM[]", Required: true},
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "已重命名的处理项列表"},
 		},
 	}
 }
 
 func (e *renameNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	items, isList, ok := categoryRouterExtractItems(input.Inputs)
+	items, ok := categoryRouterExtractItems(input.Inputs)
 	if !ok {
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: items input is required", e.Type())
 	}
@@ -82,15 +82,7 @@ func (e *renameNodeExecutor) Execute(_ context.Context, input NodeExecutionInput
 		result = append(result, item)
 	}
 
-	if isList {
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: result}}, Status: ExecutionSuccess}, nil
-	}
-
-	if len(result) == 0 {
-		return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: nil}}, Status: ExecutionSuccess}, nil
-	}
-
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeJSON, Value: result[0]}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: result}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *renameNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -111,6 +103,8 @@ func renameNodeApplyStrategy(
 	conditionalRules []renameConditionalRule,
 ) (string, error) {
 	switch strategy {
+	case "simple":
+		return current, nil
 	case "template":
 		if strings.TrimSpace(templateText) == "" {
 			return current, nil

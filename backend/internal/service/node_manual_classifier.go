@@ -33,17 +33,16 @@ func (e *manualClassifierNodeExecutor) Type() string {
 func (e *manualClassifierNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "Manual Classifier",
-		Description: "Wait for manual category input and output classification signals",
-		InputPorts: []NodeSchemaPort{
-			{Name: "trees", Description: "FOLDER_TREE_LIST for manual review", Required: false, Lazy: true},
-			{Name: "hint", Description: "CLASSIFICATION_SIGNAL_LIST low-confidence suggestions", Required: false, Lazy: true},
-			{Name: "signal", Description: "CLASSIFICATION_SIGNAL legacy input", Required: false, Lazy: true},
+		Label:       "人工分类器",
+		Description: "暂停工作流等待人工输入分类结果，通过 provide-input 接口提交后继续执行",
+		Inputs: []PortDef{
+			{Name: "trees", Type: PortTypeFolderTreeList, Description: "待人工审核的目录树", Required: false, Lazy: true},
+			{Name: "hint", Type: PortTypeClassificationSignalList, Description: "低置信度建议信号", Required: false, Lazy: true},
 		},
-		OutputPorts: []NodeSchemaPort{{
+		Outputs: []PortDef{{
 			Name:        "signal",
-			Description: "CLASSIFICATION_SIGNAL_LIST",
-			Required:    false,
+			Type:        PortTypeClassificationSignalList,
+			Description: "人工分类信号",
 		}},
 	}
 }

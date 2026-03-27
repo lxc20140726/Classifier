@@ -36,14 +36,16 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 		Type:        folderTreeScannerExecutorType,
 		Label:       "目录树扫描器",
 		Description: "递归扫描源目录，输出顶层子目录 FolderTree 列表",
-		InputPorts: []NodeSchemaPort{{
+		Inputs: []PortDef{{
 			Name:        "source_dir",
-			Description: "PATH 扫描根目录",
+			Type:        PortTypePath,
+			Description: "扫描根目录",
 			Required:    true,
 		}},
-		OutputPorts: []NodeSchemaPort{{
+		Outputs: []PortDef{{
 			Name:        "tree",
-			Description: "FOLDER_TREE_LIST 顶层子目录 FolderTree 列表",
+			Type:        PortTypeFolderTreeList,
+			Description: "顶层子目录 FolderTree 列表",
 		}},
 	}
 }

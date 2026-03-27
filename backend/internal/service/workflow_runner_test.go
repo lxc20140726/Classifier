@@ -41,7 +41,7 @@ func (e *produceInputExecutor) Type() string {
 }
 
 func (e *produceInputExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Produce Input", Description: "Produce a fixed output for tests", OutputPorts: []NodeSchemaPort{{Name: "out", Type: PortTypeString}}}
+	return NodeSchema{Type: e.Type(), Label: "Produce Input", Description: "Produce a fixed output for tests", Outputs: []PortDef{{Name: "out", Type: PortTypeString}}}
 }
 
 func (e *produceInputExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
@@ -99,7 +99,7 @@ func (e *consumeInputExecutor) Type() string {
 }
 
 func (e *consumeInputExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Consume Input", Description: "Consume upstream output for tests", InputPorts: []NodeSchemaPort{{Name: "upstream", Type: PortTypeString, Required: true}}, OutputPorts: []NodeSchemaPort{{Name: "echo", Type: PortTypeString}}}
+	return NodeSchema{Type: e.Type(), Label: "Consume Input", Description: "Consume upstream output for tests", Inputs: []PortDef{{Name: "upstream", Type: PortTypeString, Required: true}}, Outputs: []PortDef{{Name: "echo", Type: PortTypeString}}}
 }
 
 func (e *consumeInputExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
@@ -189,7 +189,7 @@ func (e *namedPortProducerExecutor) Schema() NodeSchema {
 		Type:        e.Type(),
 		Label:       "Named Port Producer",
 		Description: "Emit multi-port outputs for named-port compatibility tests",
-		OutputPorts: []NodeSchemaPort{{Name: "first"}, {Name: "second"}},
+		Outputs: []PortDef{{Name: "first"}, {Name: "second"}},
 	}
 }
 
@@ -214,7 +214,7 @@ func (e *namedPortConsumerExecutor) Schema() NodeSchema {
 		Type:        e.Type(),
 		Label:       "Named Port Consumer",
 		Description: "Consume upstream output through named source port",
-		InputPorts:  []NodeSchemaPort{{Name: "upstream", Required: true}},
+		Inputs: []PortDef{{Name: "upstream", Required: true}},
 	}
 }
 
@@ -245,7 +245,7 @@ func (e *requiredInputProbeExecutor) Schema() NodeSchema {
 		Type:        e.Type(),
 		Label:       e.Type(),
 		Description: "Probe skip behavior for required inputs",
-		InputPorts:  []NodeSchemaPort{{Name: e.portName, Required: true, Lazy: e.lazy}},
+		Inputs: []PortDef{{Name: e.portName, Required: true, Lazy: e.lazy}},
 	}
 }
 
@@ -299,7 +299,7 @@ func (e *processingItemSourceExecutor) Type() string {
 }
 
 func (e *processingItemSourceExecutor) Schema() NodeSchema {
-	return NodeSchema{Type: e.Type(), Label: "Processing Item Source", Description: "Emit processing items for rollback tests", OutputPorts: []NodeSchemaPort{{Name: "items", Type: PortTypeProcessingItemList}}}
+	return NodeSchema{Type: e.Type(), Label: "Processing Item Source", Description: "Emit processing items for rollback tests", Outputs: []PortDef{{Name: "items", Type: PortTypeProcessingItemList}}}
 }
 
 func (e *processingItemSourceExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
@@ -959,6 +959,225 @@ func TestWorkflowRunnerServicePhase4MoveRollback(t *testing.T) {
 	}
 	if !existsSource {
 		t.Fatalf("source path should exist after rollback")
+	}
+}
+
+// TestEngineV2_AC_PROC1_ProcessingChainRenameAndMove verifies the complete
+// processing chain: category-router → rename-node → move-node runs end-to-end
+// and the folder ends up at the correct renamed destination.
+func TestEngineV2_AC_PROC1_ProcessingChainRenameAndMove(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	adapter := fs.NewMockAdapter()
+	adapter.AddDir("/source", []fs.DirEntry{{Name: "Dune[2021]", IsDir: true}})
+	adapter.AddDir("/source/Dune[2021]", []fs.DirEntry{{Name: "movie.mkv", IsDir: false, Size: 500}})
+
+	folder := &repository.Folder{ID: "folder-proc1", Path: "/source/Dune[2021]", Name: "Dune[2021]", Category: "video", CategorySource: "workflow", Status: "pending"}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	producer := &processingItemSourceExecutor{items: []ProcessingItem{
+		{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name, TargetName: folder.Name, Category: "video"},
+	}}
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "source", Type: producer.Type(), Enabled: true},
+			{ID: "router", Type: categoryRouterExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "source", SourcePort: "items"}},
+			}},
+			{ID: "rename", Type: renameNodeExecutorType, Enabled: true,
+				Config: map[string]any{"strategy": "regex_extract", "regex": `^(?P<title>.+?)\[(?P<year>\d{4})\]$`, "template": "{title} ({year})"},
+				Inputs: map[string]repository.NodeInputSpec{
+					"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "video"}},
+				},
+			},
+			{ID: "move", Type: phase4MoveNodeExecutorType, Enabled: true,
+				Config: map[string]any{"target_dir": "/target"},
+				Inputs: map[string]repository.NodeInputSpec{
+					"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename", SourcePort: "items"}},
+				},
+			},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e1", Source: "source", SourcePort: "items", Target: "router", TargetPort: "items"},
+			{ID: "e2", Source: "router", SourcePort: "video", Target: "rename", TargetPort: "items"},
+			{ID: "e3", Source: "rename", SourcePort: "items", Target: "move", TargetPort: "items"},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-proc1", Name: "wf-proc1", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc.RegisterExecutor(producer)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+
+	// folder should now be at the renamed destination
+	updatedFolder, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() error = %v", err)
+	}
+	if updatedFolder.Path != "/target/Dune (2021)" {
+		t.Fatalf("folder path = %q, want /target/Dune (2021)", updatedFolder.Path)
+	}
+
+	dstExists, err := adapter.Exists(ctx, "/target/Dune (2021)")
+	if err != nil {
+		t.Fatalf("adapter.Exists(dst) error = %v", err)
+	}
+	if !dstExists {
+		t.Fatalf("destination /target/Dune (2021) should exist after move")
+	}
+}
+
+// TestEngineV2_AC_ROLL4_MultiNodeReverseRollback verifies that RollbackWorkflowRun
+// reverses node executions in strict reverse-sequence order: two sequential move-node
+// steps both get rolled back, with the later move reversed first.
+func TestEngineV2_AC_ROLL4_MultiNodeReverseRollback(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	adapter := fs.NewMockAdapter()
+	adapter.AddDir("/source", []fs.DirEntry{{Name: "album", IsDir: true}})
+	adapter.AddDir("/source/album", []fs.DirEntry{{Name: "001.jpg", IsDir: false, Size: 10}})
+
+	folder := &repository.Folder{ID: "folder-roll4", Path: "/source/album", Name: "album", Category: "photo", CategorySource: "workflow", Status: "pending"}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	// Graph: source → move1 (/source/album → /dst1/album) → rename → move2 (/dst1/album → /dst2/album)
+	producer := &processingItemSourceExecutor{items: []ProcessingItem{
+		{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name, TargetName: folder.Name, Category: "photo"},
+	}}
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "source", Type: producer.Type(), Enabled: true},
+			{ID: "move1", Type: phase4MoveNodeExecutorType, Enabled: true,
+				Config: map[string]any{"target_dir": "/dst1"},
+				Inputs: map[string]repository.NodeInputSpec{
+					"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "source", SourcePort: "items"}},
+				},
+			},
+			{ID: "rename", Type: renameNodeExecutorType, Enabled: true,
+				Config: map[string]any{"strategy": "template", "template": "{name}"},
+				Inputs: map[string]repository.NodeInputSpec{
+					"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "move1", SourcePort: "items"}},
+				},
+			},
+			{ID: "move2", Type: phase4MoveNodeExecutorType, Enabled: true,
+				Config: map[string]any{"target_dir": "/dst2"},
+				Inputs: map[string]repository.NodeInputSpec{
+					"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename", SourcePort: "items"}},
+				},
+			},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e1", Source: "source", SourcePort: "items", Target: "move1", TargetPort: "items"},
+			{ID: "e2", Source: "move1", SourcePort: "items", Target: "rename", TargetPort: "items"},
+			{ID: "e3", Source: "rename", SourcePort: "items", Target: "move2", TargetPort: "items"},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-roll4", Name: "wf-roll4", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc.RegisterExecutor(producer)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+
+	// after both moves: folder should be at /dst2/album
+	movedFolder, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() after moves error = %v", err)
+	}
+	if movedFolder.Path != "/dst2/album" {
+		t.Fatalf("folder path after moves = %q, want /dst2/album", movedFolder.Path)
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	if err := svc.RollbackWorkflowRun(ctx, run.ID); err != nil {
+		t.Fatalf("RollbackWorkflowRun() error = %v", err)
+	}
+
+	// after rollback: folder should be back at /source/album
+	rolledBack, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() after rollback error = %v", err)
+	}
+	if rolledBack.Path != "/source/album" {
+		t.Fatalf("folder path after rollback = %q, want /source/album", rolledBack.Path)
+	}
+
+	// intermediate path /dst1/album should also be gone (moved back through by reverse rollback)
+	dst1Exists, err := adapter.Exists(ctx, "/dst1/album")
+	if err != nil {
+		t.Fatalf("adapter.Exists(/dst1/album) error = %v", err)
+	}
+	if dst1Exists {
+		t.Fatalf("/dst1/album should not exist after complete rollback")
+	}
+
+	dst2Exists, err := adapter.Exists(ctx, "/dst2/album")
+	if err != nil {
+		t.Fatalf("adapter.Exists(/dst2/album) error = %v", err)
+	}
+	if dst2Exists {
+		t.Fatalf("/dst2/album should not exist after rollback")
+	}
+
+	srcExists, err := adapter.Exists(ctx, "/source/album")
+	if err != nil {
+		t.Fatalf("adapter.Exists(/source/album) error = %v", err)
+	}
+	if !srcExists {
+		t.Fatalf("/source/album should exist after rollback")
 	}
 }
 
