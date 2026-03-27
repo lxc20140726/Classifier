@@ -204,7 +204,13 @@ function graphToEdges(graph: WorkflowGraph): Edge[] {
   }))
 }
 
-function buildInputMap(nodeId: string, edges: Edge[], schema?: NodeSchema, previous?: Record<string, NodeInputSpec>) {
+function buildInputMap(
+  nodeId: string,
+  edges: Edge[],
+  schema?: NodeSchema,
+  previous?: Record<string, NodeInputSpec>,
+  getSourceSchema?: (sourceNodeId: string) => NodeSchema | undefined,
+) {
   const nextInputs: Record<string, NodeInputSpec> = {}
 
   if (previous) {
@@ -221,11 +227,11 @@ function buildInputMap(nodeId: string, edges: Edge[], schema?: NodeSchema, previ
     const sourcePortIndex = parseHandleIndex(edge.sourceHandle)
     if (targetPortIndex == null || sourcePortIndex == null) continue
     const portName = schema?.input_ports?.[targetPortIndex]?.name ?? `input_${targetPortIndex}`
+    const sourcePortName = getSourceSchema?.(edge.source)?.output_ports?.[sourcePortIndex]?.name
     nextInputs[portName] = {
-      link_source: {
-        source_node_id: edge.source,
-        output_port_index: sourcePortIndex,
-      },
+      link_source: sourcePortName != null
+        ? { source_node_id: edge.source, source_port: sourcePortName }
+        : { source_node_id: edge.source, output_port_index: sourcePortIndex },
     }
   }
 
@@ -245,6 +251,9 @@ function nodesToGraph(
   workflowNodes: Record<string, WorkflowGraphNode>,
   schemaMap: Map<string, NodeSchema>,
 ): WorkflowGraph {
+  const nodeTypeMap = new Map(rfNodes.map((n) => [n.id, n.data.type]))
+  const getSchema = (nodeId: string) => schemaMap.get(nodeTypeMap.get(nodeId) ?? '')
+
   const nodes: WorkflowGraphNode[] = rfNodes.map((node) => {
     const previous = workflowNodes[node.id]
     const nextType = node.data.type
@@ -254,19 +263,25 @@ function nodesToGraph(
       type: nextType,
       label: node.data.label,
       config: previous?.config ?? {},
-      inputs: buildInputMap(node.id, rfEdges, schema, previous?.inputs),
+      inputs: buildInputMap(node.id, rfEdges, schema, previous?.inputs, getSchema),
       ui_position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
       enabled: node.data.enabled,
     }
   })
 
-  const edges: WorkflowGraphEdge[] = rfEdges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    source_port: parseHandleIndex(edge.sourceHandle) ?? 0,
-    target: edge.target,
-    target_port: parseHandleIndex(edge.targetHandle) ?? 0,
-  }))
+  const edges: WorkflowGraphEdge[] = rfEdges.map((edge) => {
+    const sourcePortIndex = parseHandleIndex(edge.sourceHandle) ?? 0
+    const targetPortIndex = parseHandleIndex(edge.targetHandle) ?? 0
+    const sourcePortName = getSchema(edge.source)?.output_ports?.[sourcePortIndex]?.name
+    const targetPortName = getSchema(edge.target)?.input_ports?.[targetPortIndex]?.name
+    return {
+      id: edge.id,
+      source: edge.source,
+      source_port: sourcePortName ?? sourcePortIndex,
+      target: edge.target,
+      target_port: targetPortName ?? targetPortIndex,
+    }
+  })
 
   return { nodes, edges }
 }

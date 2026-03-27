@@ -232,7 +232,8 @@ export interface NodeUIPosition {
 
 export interface NodeLinkSource {
   source_node_id: string
-  output_port_index: number
+  source_port?: string
+  output_port_index?: number
 }
 
 export interface NodeInputSpec {
@@ -253,9 +254,9 @@ export interface WorkflowGraphNode {
 export interface WorkflowGraphEdge {
   id?: string
   source: string
-  source_port: number
+  source_port: number | string
   target: string
-  target_port: number
+  target_port: number | string
 }
 
 export interface WorkflowGraph {

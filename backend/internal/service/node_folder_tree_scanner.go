@@ -39,8 +39,8 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 		Inputs: []PortDef{{
 			Name:        "source_dir",
 			Type:        PortTypePath,
-			Description: "扫描根目录",
-			Required:    true,
+			Description: "扫描根目录（也可在节点配置中填写，两者均可）",
+			Required:    false,
 		}},
 		Outputs: []PortDef{{
 			Name:        "tree",
