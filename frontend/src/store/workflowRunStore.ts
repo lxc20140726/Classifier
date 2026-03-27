@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-import { getWorkflowRunDetail, listWorkflowRunsByJob, provideWorkflowRunInput, resumeWorkflowRun, rollbackWorkflowRun } from '@/api/workflowRuns'
+import { getWorkflowRunDetail, listWorkflowRunsByJob, provideWorkflowRunInput, provideWorkflowRunRawInput, resumeWorkflowRun, rollbackWorkflowRun } from '@/api/workflowRuns'
 import type { NodeRun, NodeRunStatus, NodeType, ProvideInputBody, WorkflowNodeEvent, WorkflowRun, WorkflowRunStatus } from '@/types'
 
 interface WorkflowRunStore {
@@ -13,6 +13,7 @@ interface WorkflowRunStore {
   resumeRun: (runId: string) => Promise<void>
   rollbackRun: (runId: string) => Promise<void>
   provideInput: (runId: string, category: ProvideInputBody['category']) => Promise<void>
+  provideRawInput: (runId: string, body: Record<string, unknown>) => Promise<void>
   handleNodeEvent: (event: WorkflowNodeEvent) => void
   updateRunStatus: (workflowRunId: string, status: WorkflowRunStatus) => void
 }
@@ -77,6 +78,11 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
 
   async provideInput(runId, category) {
     await provideWorkflowRunInput(runId, { category })
+    await get().fetchRunDetail(runId)
+  },
+
+  async provideRawInput(runId, body) {
+    await provideWorkflowRunRawInput(runId, body)
     await get().fetchRunDetail(runId)
   },
 

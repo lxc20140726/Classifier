@@ -154,12 +154,15 @@ export type NodeType =
   | 'move'
   | 'move-node'
   | 'folder-tree-scanner'
+  | 'folder-picker'
+  | 'folder-selector'
   | 'name-keyword-classifier'
   | 'file-tree-classifier'
   | 'confidence-check'
   | 'manual-classifier'
   | 'subtree-aggregator'
   | 'classification-reader'
+  | 'classification-preview'
   | 'folder-splitter'
   | 'category-router'
   | 'rename-node'
@@ -262,6 +265,7 @@ export interface WorkflowGraph {
 
 export interface NodeSchemaPort {
   name: string
+  type: string
   description: string
   required: boolean
 }

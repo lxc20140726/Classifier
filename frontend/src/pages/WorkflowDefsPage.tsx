@@ -8,20 +8,108 @@ import type { WorkflowDefinition } from '@/types'
 
 export type WorkflowDefsPageProps = Record<string, never>
 
+// ─── Template Graphs ─────────────────────────────────────────────────────────
+
+const TEMPLATE_CLASSIFICATION_ONLY = JSON.stringify({
+  nodes: [
+    { id: 'n-trigger', type: 'trigger', label: '触发器', config: {}, inputs: {}, enabled: true, ui_position: { x: 60, y: 280 } },
+    { id: 'n-scanner', type: 'folder-tree-scanner', label: '目录树扫描器', config: { source_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 260, y: 280 } },
+    { id: 'n-kw', type: 'name-keyword-classifier', label: '关键词分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 100 } },
+    { id: 'n-ft', type: 'file-tree-classifier', label: '文件树分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 260 } },
+    { id: 'n-ext', type: 'ext-ratio-classifier', label: '扩展名分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 420 } },
+    { id: 'n-agg', type: 'subtree-aggregator', label: '子树聚合器', config: {}, inputs: {}, enabled: true, ui_position: { x: 780, y: 260 } },
+  ],
+  edges: [
+    { id: 'e1', source: 'n-scanner', source_port: 0, target: 'n-kw', target_port: 0 },
+    { id: 'e2', source: 'n-scanner', source_port: 0, target: 'n-ft', target_port: 0 },
+    { id: 'e3', source: 'n-scanner', source_port: 0, target: 'n-ext', target_port: 0 },
+    { id: 'e4', source: 'n-kw', source_port: 0, target: 'n-agg', target_port: 1 },
+    { id: 'e5', source: 'n-ft', source_port: 0, target: 'n-agg', target_port: 2 },
+    { id: 'e6', source: 'n-ext', source_port: 0, target: 'n-agg', target_port: 3 },
+  ],
+})
+
+const TEMPLATE_CLASSIFY_AND_MOVE = JSON.stringify({
+  nodes: [
+    { id: 'n-trigger', type: 'trigger', label: '触发器', config: {}, inputs: {}, enabled: true, ui_position: { x: 60, y: 320 } },
+    { id: 'n-scanner', type: 'folder-tree-scanner', label: '目录树扫描器', config: { source_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 260, y: 320 } },
+    { id: 'n-kw', type: 'name-keyword-classifier', label: '关键词分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 120 } },
+    { id: 'n-ft', type: 'file-tree-classifier', label: '文件树分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 300 } },
+    { id: 'n-ext', type: 'ext-ratio-classifier', label: '扩展名分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 480 } },
+    { id: 'n-agg', type: 'subtree-aggregator', label: '子树聚合器', config: {}, inputs: {}, enabled: true, ui_position: { x: 780, y: 300 } },
+    { id: 'n-preview', type: 'classification-preview', label: '分类预览', config: {}, inputs: {}, enabled: true, ui_position: { x: 1020, y: 300 } },
+    { id: 'n-reader', type: 'classification-reader', label: '分类读取器', config: {}, inputs: {}, enabled: true, ui_position: { x: 1260, y: 300 } },
+    { id: 'n-splitter', type: 'folder-splitter', label: '文件夹拆分器', config: {}, inputs: {}, enabled: true, ui_position: { x: 1480, y: 300 } },
+    { id: 'n-router', type: 'category-router', label: '类别路由器', config: {}, inputs: {}, enabled: true, ui_position: { x: 1700, y: 300 } },
+    { id: 'n-move-video', type: 'move-node', label: '移动节点（视频）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 100 } },
+    { id: 'n-move-manga', type: 'move-node', label: '移动节点（漫画）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 260 } },
+    { id: 'n-move-photo', type: 'move-node', label: '移动节点（图片）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 420 } },
+    { id: 'n-move-other', type: 'move-node', label: '移动节点（其他）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 580 } },
+  ],
+  edges: [
+    { id: 'e1', source: 'n-scanner', source_port: 0, target: 'n-kw', target_port: 0 },
+    { id: 'e2', source: 'n-scanner', source_port: 0, target: 'n-ft', target_port: 0 },
+    { id: 'e3', source: 'n-scanner', source_port: 0, target: 'n-ext', target_port: 0 },
+    { id: 'e4', source: 'n-kw', source_port: 0, target: 'n-agg', target_port: 1 },
+    { id: 'e5', source: 'n-ft', source_port: 0, target: 'n-agg', target_port: 2 },
+    { id: 'e6', source: 'n-ext', source_port: 0, target: 'n-agg', target_port: 3 },
+    { id: 'e7', source: 'n-agg', source_port: 0, target: 'n-preview', target_port: 0 },
+    { id: 'e8', source: 'n-preview', source_port: 0, target: 'n-reader', target_port: 0 },
+    { id: 'e9', source: 'n-reader', source_port: 0, target: 'n-splitter', target_port: 0 },
+    { id: 'e10', source: 'n-splitter', source_port: 0, target: 'n-router', target_port: 0 },
+    { id: 'e11', source: 'n-router', source_port: 0, target: 'n-move-video', target_port: 0 },
+    { id: 'e12', source: 'n-router', source_port: 1, target: 'n-move-manga', target_port: 0 },
+    { id: 'e13', source: 'n-router', source_port: 2, target: 'n-move-photo', target_port: 0 },
+    { id: 'e14', source: 'n-router', source_port: 3, target: 'n-move-other', target_port: 0 },
+  ],
+})
+
+interface WorkflowTemplate {
+  id: string
+  name: string
+  description: string
+  graphJson: string
+}
+
+const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
+  {
+    id: 'blank',
+    name: '空白工作流',
+    description: '从零开始，自由搭建节点图',
+    graphJson: '{"nodes":[],"edges":[]}',
+  },
+  {
+    id: 'classify-only',
+    name: '分类流',
+    description: '扫描源目录 → 三路并行分类 → 聚合写入数据库。适合只想给文件夹打类别标签的场景',
+    graphJson: TEMPLATE_CLASSIFICATION_ONLY,
+  },
+  {
+    id: 'classify-and-move',
+    name: '分类 + 路由移动',
+    description: '扫描 → 分类 → 预览结果 → 按类别移动到不同目标目录。完整管道，开箱即用',
+    graphJson: TEMPLATE_CLASSIFY_AND_MOVE,
+  },
+]
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 interface FormState {
   name: string
   graphJson: string
 }
 
-const EMPTY_FORM: FormState = { name: '', graphJson: '{}' }
+const EMPTY_FORM: FormState = { name: '', graphJson: '{"nodes":[],"edges":[]}' }
 
 type ModalMode = { kind: 'create' } | { kind: 'edit'; def: WorkflowDefinition }
+type CreateStep = 'pick-template' | 'fill-details'
 
 export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   const { defs, isLoading, error, fetchDefs, createDef, updateDef, deleteDef, setActive } =
     useWorkflowDefStore()
 
   const [modal, setModal] = useState<ModalMode | null>(null)
+  const [createStep, setCreateStep] = useState<CreateStep>('pick-template')
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [formError, setFormError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
@@ -33,7 +121,13 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   function openCreate() {
     setForm(EMPTY_FORM)
     setFormError(null)
+    setCreateStep('pick-template')
     setModal({ kind: 'create' })
+  }
+
+  function selectTemplate(tpl: WorkflowTemplate) {
+    setForm({ name: tpl.id === 'blank' ? '' : tpl.name, graphJson: tpl.graphJson })
+    setCreateStep('fill-details')
   }
 
   function openEdit(def: WorkflowDefinition) {
@@ -185,54 +279,91 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
 
       {modal !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg border-2 border-foreground bg-background p-6 shadow-hard-lg">
+          <div className={cn(
+            'w-full border-2 border-foreground bg-background p-6 shadow-hard-lg',
+            modal.kind === 'create' && createStep === 'pick-template' ? 'max-w-2xl' : 'max-w-lg',
+          )}>
             <h2 className="mb-6 text-xl font-black tracking-tight">
-              {modal.kind === 'create' ? '新建工作流定义' : '编辑工作流定义'}
+              {modal.kind === 'edit' ? '编辑工作流定义' : createStep === 'pick-template' ? '选择模板' : '新建工作流定义'}
             </h2>
 
-            <div className="space-y-5">
-              <div>
-                <label className="mb-2 block text-sm font-black tracking-widest">名称</label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                  placeholder="工作流名称"
-                  className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
-                />
+            {modal.kind === 'create' && createStep === 'pick-template' && (
+              <div className="grid grid-cols-1 gap-3">
+                {WORKFLOW_TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => selectTemplate(tpl)}
+                    className="border-2 border-foreground bg-background p-4 text-left transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
+                  >
+                    <p className="font-black tracking-wide">{tpl.name}</p>
+                    <p className="mt-1 text-xs font-bold text-muted-foreground group-hover:text-background">{tpl.description}</p>
+                  </button>
+                ))}
               </div>
+            )}
 
-              <div>
-                <label className="mb-2 block text-sm font-black tracking-widest">GRAPH JSON</label>
-                <textarea
-                  value={form.graphJson}
-                  onChange={(e) => setForm((prev) => ({ ...prev, graphJson: e.target.value }))}
-                  rows={10}
-                  spellCheck={false}
-                  className="w-full border-2 border-foreground bg-muted/30 px-4 py-3 font-mono text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
-                />
+            {(modal.kind === 'edit' || createStep === 'fill-details') && (
+              <div className="space-y-5">
+                <div>
+                  <label className="mb-2 block text-sm font-black tracking-widest">名称</label>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="工作流名称"
+                    className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-black tracking-widest">GRAPH JSON</label>
+                  <textarea
+                    value={form.graphJson}
+                    onChange={(e) => setForm((prev) => ({ ...prev, graphJson: e.target.value }))}
+                    rows={10}
+                    spellCheck={false}
+                    className="w-full border-2 border-foreground bg-muted/30 px-4 py-3 font-mono text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
+                  />
+                </div>
+
+                {formError && <p className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{formError}</p>}
               </div>
+            )}
 
-              {formError && <p className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{formError}</p>}
-            </div>
-
-            <div className="mt-8 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={closeModal}
-                disabled={isSaving}
-                className="border-2 border-foreground bg-background px-6 py-2.5 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSave()}
-                disabled={isSaving}
-                className="border-2 border-foreground bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
-              >
-                {isSaving ? '保存中…' : '保存'}
-              </button>
+            <div className="mt-8 flex justify-between gap-3">
+              <div>
+                {modal.kind === 'create' && createStep === 'fill-details' && (
+                  <button
+                    type="button"
+                    onClick={() => setCreateStep('pick-template')}
+                    disabled={isSaving}
+                    className="border-2 border-foreground bg-background px-4 py-2.5 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50"
+                  >
+                    ← 重选模板
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  disabled={isSaving}
+                  className="border-2 border-foreground bg-background px-6 py-2.5 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
+                >
+                  取消
+                </button>
+                {(modal.kind === 'edit' || createStep === 'fill-details') && (
+                  <button
+                    type="button"
+                    onClick={() => void handleSave()}
+                    disabled={isSaving}
+                    className="border-2 border-foreground bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
+                  >
+                    {isSaving ? '保存中…' : '保存'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

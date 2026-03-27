@@ -51,3 +51,10 @@ export function provideWorkflowRunInput(id: string, body: ProvideInputBody) {
     body: JSON.stringify(body),
   })
 }
+
+export function provideWorkflowRunRawInput(id: string, body: Record<string, unknown>) {
+  return request<undefined>(`/workflow-runs/${id}/provide-input`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}

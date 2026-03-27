@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   addEdge,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   PanOnScrollMode,
@@ -19,7 +20,7 @@ import {
   type OnConnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, FolderOpen, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2, X } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FolderOpen, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2, X } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import gsap from 'gsap'
 
@@ -109,7 +110,7 @@ const NODE_CATEGORIES: NodeCategory[] = [
     iconColor: 'text-blue-600 dark:text-blue-400',
     accentClass: 'from-blue-500/20 to-indigo-500/10 border-blue-200 dark:from-blue-500/25 dark:to-indigo-500/15 dark:border-blue-700',
     borderHoverClass: 'hover:border-blue-300 dark:hover:border-blue-500',
-    types: new Set(['folder-tree-scanner', 'classification-reader']),
+    types: new Set(['folder-tree-scanner', 'folder-picker', 'classification-reader', 'classification-preview']),
   },
   {
     label: '分类器',
@@ -123,7 +124,7 @@ const NODE_CATEGORIES: NodeCategory[] = [
     iconColor: 'text-amber-600 dark:text-amber-400',
     accentClass: 'from-amber-500/20 to-orange-500/10 border-amber-200 dark:from-amber-500/25 dark:to-orange-500/15 dark:border-amber-700',
     borderHoverClass: 'hover:border-amber-300 dark:hover:border-amber-500',
-    types: new Set(['confidence-check', 'folder-splitter', 'category-router', 'subtree-aggregator']),
+    types: new Set(['confidence-check', 'folder-splitter', 'folder-selector', 'category-router', 'subtree-aggregator']),
   },
   {
     label: '执行操作',
@@ -458,6 +459,17 @@ function cfgNum(config: Record<string, unknown>, key: string, fallback: number):
   return typeof v === 'number' ? v : fallback
 }
 
+function cfgBool(config: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const value = config[key]
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') return true
+    if (normalized === 'false') return false
+  }
+  return fallback
+}
+
 function cfgJson(config: Record<string, unknown>, key: string): string {
   const v = config[key]
   if (v === undefined || v === null) return ''
@@ -570,14 +582,21 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'classification-reader':
       return (
         <NodeUsageHint>
-          读取当前工作流文件夹的已有分类结果，或从上游端口接收分类数据并透传。无需配置。
+          分类管道与处理管道之间的桥接节点。将 subtree-aggregator 输出的分类结果转为处理链可用的格式。完整流程中必须放在 subtree-aggregator 之后、folder-splitter 之前。无需配置。
+        </NodeUsageHint>
+      )
+
+    case 'classification-preview':
+      return (
+        <NodeUsageHint>
+          分类结果透视节点。原样透传分类条目，不暂停工作流。运行完成后可在节点运行记录中查看每个文件夹的分类结果（路径、类别、置信度）。无需配置。
         </NodeUsageHint>
       )
 
     case 'folder-splitter':
       return (
         <NodeUsageHint>
-          将文件夹树拆分为独立的叶子节点，逐一向下游传递处理项。无需配置。
+          将分类条目转为处理项列表。mixed 类别的文件夹会被拆分为一级子目录分别处理；其他类别直接透传。接在 classification-reader 之后，无需配置。
         </NodeUsageHint>
       )
 
@@ -591,8 +610,26 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'subtree-aggregator':
       return (
         <NodeUsageHint>
-          汇总多个分类器的置信度信号，取最高置信度结果，将最终分类持久化到数据库。无需配置。
+          聚合所有分类器的信号，取最高置信度结果，将最终分类写入数据库。需将各分类器的信号端口（signal_kw / signal_ft / signal_ext）分别连入对应输入端口。无需配置。
         </NodeUsageHint>
+      )
+
+    case 'folder-selector':
+      return (
+        <div className="space-y-3">
+          <NodeUsageHint>
+            放在扫描器之后，工作流运行到此处会暂停并展示扫描到的文件夹列表，等待手动勾选哪些参与后续处理。勾选完成后继续执行。开启"全部自动选中"则不暂停直接透传。
+          </NodeUsageHint>
+          <label className="flex cursor-pointer items-center justify-between border-2 border-foreground bg-muted/30 px-3 py-2 transition-colors hover:bg-muted/50">
+            <span className="text-sm font-bold">全部自动选中（不暂停）</span>
+            <input
+              type="checkbox"
+              checked={cfgBool(config, 'auto_select_all', false)}
+              onChange={(e) => set('auto_select_all', e.target.checked ? 'true' : 'false')}
+              className="h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
+            />
+          </label>
+        </div>
       )
 
     case 'audit-log':
@@ -680,7 +717,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
             <select value={strategy} onChange={(e) => set('strategy', e.target.value)} className={FIELD_CLS}>
               <option value="simple">simple — 保持原名</option>
               <option value="template">template — 模板替换</option>
-              <option value="regex">regex — 正则提取</option>
+              <option value="regex_extract">regex_extract — 正则提取</option>
               <option value="conditional">conditional — 条件规则</option>
             </select>
           </ConfigField>
@@ -695,7 +732,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
               />
             </ConfigField>
           )}
-          {strategy === 'regex' && (
+          {strategy === 'regex_extract' && (
             <ConfigField
               label="正则表达式"
               hint="使用命名捕获组 (?P<title>...) 提取标题，命中后输出捕获内容"
@@ -738,25 +775,15 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
               title="选择目标目录"
             />
           </ConfigField>
-          <ConfigField label="移动单元" hint="folder：整个文件夹；file：逐文件移动（默认 folder）">
+          <ConfigField label="冲突策略" hint="目标路径已存在时的处理方式（默认自动重命名）">
             <select
-              value={cfgStr(config, 'move_unit') || 'folder'}
-              onChange={(e) => set('move_unit', e.target.value)}
-              className={FIELD_CLS}
-            >
-              <option value="folder">folder — 整个文件夹</option>
-              <option value="file">file — 逐文件</option>
-            </select>
-          </ConfigField>
-          <ConfigField label="冲突策略" hint="目标路径已存在时的处理方式（默认 skip）">
-            <select
-              value={cfgStr(config, 'conflict_policy') || 'skip'}
+              value={cfgStr(config, 'conflict_policy') || 'auto_rename'}
               onChange={(e) => set('conflict_policy', e.target.value)}
               className={FIELD_CLS}
             >
+              <option value="auto_rename">auto_rename — 自动重命名</option>
               <option value="skip">skip — 跳过</option>
               <option value="overwrite">overwrite — 覆盖</option>
-              <option value="rename">rename — 自动重命名</option>
             </select>
           </ConfigField>
         </div>
@@ -829,6 +856,11 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
         </div>
       )
 
+    case 'folder-picker':
+      return (
+        <FolderPickerConfigPanel nodeId={nodeId} config={config} updateNodeConfig={updateNodeConfig} />
+      )
+
     default:
       return (
         <NodeUsageHint>
@@ -836,6 +868,74 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
         </NodeUsageHint>
       )
   }
+}
+
+// ─── FolderPickerConfigPanel ──────────────────────────────────────────────────
+
+interface FolderPickerConfigPanelProps {
+  nodeId: string
+  config: Record<string, unknown>
+  updateNodeConfig: (nodeId: string, key: string, rawValue: string) => void
+}
+
+function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPickerConfigPanelProps) {
+  const rawPaths = config['paths']
+  const paths: string[] = Array.isArray(rawPaths)
+    ? rawPaths.filter((p): p is string => typeof p === 'string')
+    : []
+
+  function setPaths(next: string[]) {
+    updateNodeConfig(nodeId, 'paths', JSON.stringify(next))
+  }
+
+  function addPath() {
+    setPaths([...paths, ''])
+  }
+
+  function updatePath(index: number, value: string) {
+    const next = paths.map((p, i) => (i === index ? value : p))
+    setPaths(next)
+  }
+
+  function removePath(index: number) {
+    setPaths(paths.filter((_, i) => i !== index))
+  }
+
+  return (
+    <div className="space-y-3">
+      <ConfigField label="文件夹路径列表" hint="每行一个文件夹路径，运行时直接作为目录树输出">
+        <div className="space-y-2">
+          {paths.map((p, i) => (
+            <div key={i} className="flex gap-2">
+              <div className="flex-1">
+                <DirPickerField
+                  value={p}
+                  onChange={(v) => updatePath(i, v)}
+                  placeholder="/data/folder"
+                  title="选择文件夹"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => removePath(i)}
+                className="shrink-0 border-2 border-foreground bg-background px-2 py-2 text-foreground transition-all hover:bg-foreground hover:text-background"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addPath}
+            className="flex w-full items-center justify-center gap-2 border-2 border-dashed border-foreground bg-background py-2 text-sm font-bold text-muted-foreground transition-all hover:border-solid hover:text-foreground"
+          >
+            <Plus className="h-4 w-4" />
+            添加文件夹
+          </button>
+        </div>
+      </ConfigField>
+    </div>
+  )
 }
 
 // ─── WorkflowNodeCard ─────────────────────────────────────────────────────────
@@ -849,11 +949,26 @@ const NODE_STATUS_CFG: Record<NodeRunStatus, { label: string; cls: string; icon:
   waiting_input: { label: '等待输入', cls: 'text-blue-900 bg-blue-200 border-2 border-foreground', icon: <Loader2 className="h-3 w-3 animate-pulse" /> },
 }
 
+const PORT_TYPE_COLORS: Record<string, string> = {
+  PROCESSING_ITEM_LIST: '!bg-orange-500',
+  FOLDER_TREE_LIST: '!bg-green-500',
+  CLASSIFICATION_SIGNAL_LIST: '!bg-blue-500',
+  CLASSIFIED_ENTRY_LIST: '!bg-purple-500',
+  MOVE_RESULT_LIST: '!bg-red-400',
+  STRING_LIST: '!bg-gray-400',
+  STRING: '!bg-gray-400',
+  PATH: '!bg-yellow-500',
+  JSON: '!bg-teal-500',
+  BOOLEAN: '!bg-pink-500',
+}
+
 function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
   const { workflowNodes, updateNode, updateNodeConfig, deleteNode, nodeRunByNodeId, onRollbackRun } =
     useEditorContext()
   const workflowNode = workflowNodes[id] ?? null
   const nodeRun = nodeRunByNodeId[id] ?? null
+
+  const [expanded, setExpanded] = useState(true)
 
   const inputPorts = data.schema?.input_ports ?? []
   const outputPorts = data.schema?.output_ports ?? []
@@ -894,29 +1009,10 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
         'relative shadow-hard transition-all duration-200 cursor-grab active:cursor-grabbing',
         nodeStyleClass,
         data.enabled ? 'opacity-100' : 'opacity-60 grayscale-[0.5]',
-        selected ? 'w-[320px] shadow-hard-hover -translate-y-1 ring-2 ring-foreground ring-offset-2 ring-offset-background' : 'min-w-[220px] hover:-translate-y-0.5 hover:shadow-hard-hover',
+        expanded ? 'w-[300px]' : 'min-w-[200px]',
+        selected ? 'shadow-hard-hover -translate-y-1 ring-2 ring-foreground ring-offset-2 ring-offset-background' : 'hover:-translate-y-0.5 hover:shadow-hard-hover',
       )}
     >
-      {inputPorts.map((port, index) => (
-        <Handle
-          key={`in-${port.name}`}
-          id={`in-${index}`}
-          type="target"
-          position={Position.Left}
-          className="!w-3 !h-3 !bg-foreground !border-2 !border-background hover:!scale-150 transition-transform"
-          style={{ top: `${((index + 1) / (inputPorts.length + 1)) * 100}%`, left: isTrigger ? '8px' : '-7px' }}
-        />
-      ))}
-      {outputPorts.map((port, index) => (
-        <Handle
-          key={`out-${port.name}`}
-          id={`out-${index}`}
-          type="source"
-          position={Position.Right}
-          className="!w-3 !h-3 !bg-foreground !border-2 !border-background hover:!scale-150 transition-transform"
-          style={{ top: `${((index + 1) / (outputPorts.length + 1)) * 100}%`, right: '-7px' }}
-        />
-      ))}
 
       {/* Header */}
       <div className={headerStyleClass}>
@@ -934,31 +1030,79 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
             {isTrigger && <p className="truncate font-mono text-[10px] font-bold opacity-80">{data.type}</p>}
           </div>
         </div>
-        {!isTrigger && (
-          <span
-            className={cn(
-              'shrink-0 border-2 px-1.5 py-0.5 text-[10px] font-bold',
-              data.enabled ? 'border-transparent' : 'border-foreground bg-background text-foreground',
-            )}
+        <div className="flex items-center gap-1 shrink-0">
+          {!isTrigger && (
+            <span
+              className={cn(
+                'border-2 px-1.5 py-0.5 text-[10px] font-bold',
+                data.enabled ? 'border-transparent' : 'border-foreground bg-background text-foreground',
+              )}
+            >
+              {data.enabled ? '' : '停用'}
+            </span>
+          )}
+          <button
+            type="button"
+            className="nodrag flex items-center justify-center w-5 h-5 opacity-60 hover:opacity-100 transition-opacity"
+            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+            title={expanded ? '折叠' : '展开'}
           >
-            {data.enabled ? '' : '停用'}
-          </span>
-        )}
+            {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+        </div>
       </div>
+
+      {/* Port rows */}
+      {(inputPorts.length > 0 || outputPorts.length > 0) && (
+        <div className="pt-1 pb-0.5">
+          {inputPorts.map((port, index) => (
+            <div
+              key={`in-${port.name}`}
+              className="relative flex items-center gap-1.5 py-0.5 pl-4 pr-3"
+              title={port.description || undefined}
+            >
+              <Handle
+                id={`in-${index}`}
+                type="target"
+                position={Position.Left}
+                style={{ left: '-7px', top: '50%', transform: 'translateY(-50%)' }}
+                className={cn(
+                  '!w-2.5 !h-2.5 !border-2 !border-background hover:!scale-125 transition-transform',
+                  PORT_TYPE_COLORS[port.type] ?? '!bg-foreground',
+                )}
+              />
+              <span className="truncate font-mono text-[10px] text-foreground/80">{port.name}</span>
+              {port.required && <span className="shrink-0 text-[8px] font-bold text-destructive">*</span>}
+            </div>
+          ))}
+          {outputPorts.map((port, index) => (
+            <div
+              key={`out-${port.name}`}
+              className="relative flex items-center justify-end gap-1.5 py-0.5 pl-3 pr-4"
+              title={port.description || undefined}
+            >
+              <span className="truncate font-mono text-[10px] text-foreground/80">{port.name}</span>
+              <Handle
+                id={`out-${index}`}
+                type="source"
+                position={Position.Right}
+                style={{ right: '-7px', top: '50%', transform: 'translateY(-50%)' }}
+                className={cn(
+                  '!w-2.5 !h-2.5 !border-2 !border-background hover:!scale-125 transition-transform',
+                  PORT_TYPE_COLORS[port.type] ?? '!bg-foreground',
+                )}
+              />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Body */}
       <div className="px-3 py-3">
         {!isTrigger && (
           <p className="mb-2 truncate font-mono text-[10px] font-bold text-muted-foreground">{data.type}</p>
         )}
-        
-        {(inputPorts.length > 0 || outputPorts.length > 0) && (
-          <div className="flex gap-3 text-[10px] font-bold text-muted-foreground mb-2">
-            {inputPorts.length > 0 && <span>↓ IN {inputPorts.length}</span>}
-            {outputPorts.length > 0 && <span>↑ OUT {outputPorts.length}</span>}
-          </div>
-        )}
-        
+
         {nodeRun && (() => {
           const cfg = NODE_STATUS_CFG[nodeRun.status]
           return (
@@ -971,8 +1115,8 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
         })()}
       </div>
 
-      {/* Expanded config form — only when selected */}
-      {selected && (
+      {/* Expanded config form */}
+      {expanded && (
         <div className="nodrag nowheel nopan max-h-[55vh] overflow-y-auto border-t-2 border-foreground bg-background px-4 pb-4 pt-4">
           <div className="space-y-4">
             {/* Enable toggle */}
@@ -1631,7 +1775,7 @@ function WorkflowEditorScreen() {
               className="bg-background"
               defaultEdgeOptions={{ style: { strokeWidth: 3, stroke: 'hsl(var(--foreground))' } }}
             >
-              <Background gap={20} size={2} color="hsl(var(--foreground))" variant="dots" style={{ opacity: 0.15 }} />
+              <Background gap={20} size={2} color="hsl(var(--foreground))" variant={BackgroundVariant.Dots} style={{ opacity: 0.15 }} />
               <MiniMap className="!bg-background/90 !border-2 !border-foreground" pannable zoomable />
               <Controls className="!border-2 !border-foreground !shadow-hard" />
             </ReactFlow>
