@@ -157,9 +157,6 @@ func (e *thumbnailNodeExecutor) Rollback(ctx context.Context, input NodeRollback
 		}
 	}
 
-	if input.Folder != nil && strings.TrimSpace(input.Folder.ID) != "" {
-		folderIDs = append(folderIDs, input.Folder.ID)
-	}
 	if err := e.clearCoverImagePathIfNeeded(ctx, folderIDs, thumbnailPaths); err != nil {
 		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
 	}
@@ -182,11 +179,7 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 			paths = compactStringSlice(anyToStringSlice(typedOutputs["thumbnail_paths"].Value))
 			folderIDs = thumbnailNodeExtractFolderIDs(typedOutputs["items"].Value)
 		} else {
-			outputs, legacyErr := parseNodeOutputs(input.NodeRun.OutputJSON)
-			if legacyErr != nil {
-				return nil, nil, fmt.Errorf("parse node output json for node run %q: %w", input.NodeRun.ID, legacyErr)
-			}
-			paths, folderIDs = thumbnailNodeExtractRollbackData(outputs)
+			return nil, nil, fmt.Errorf("parse node output json for node run %q: typed outputs required", input.NodeRun.ID)
 		}
 		for _, path := range paths {
 			pathSet[path] = struct{}{}
@@ -210,11 +203,7 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 			paths = compactStringSlice(anyToStringSlice(typedOutputs["thumbnail_paths"].Value))
 			folderIDs = thumbnailNodeExtractFolderIDs(typedOutputs["items"].Value)
 		} else {
-			outputs, legacyErr := parseNodeOutputs(snapshot.OutputJSON)
-			if legacyErr != nil {
-				return nil, nil, fmt.Errorf("parse node snapshot output json for snapshot %q: %w", snapshot.ID, legacyErr)
-			}
-			paths, folderIDs = thumbnailNodeExtractRollbackData(outputs)
+			return nil, nil, fmt.Errorf("parse node snapshot output json for snapshot %q: typed outputs required", snapshot.ID)
 		}
 		for _, path := range paths {
 			pathSet[path] = struct{}{}
@@ -237,18 +226,31 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 	return thumbnailPaths, folderIDs, nil
 }
 
-func thumbnailNodeExtractRollbackData(outputs []any) ([]string, []string) {
-	if len(outputs) < 2 {
-		return nil, nil
+func thumbnailNodeExtractFolderIDs(raw any) []string {
+	switch typed := raw.(type) {
+	case []ProcessingItem:
+		out := make([]string, 0, len(typed))
+		seen := map[string]struct{}{}
+		for _, item := range typed {
+			folderID := strings.TrimSpace(item.FolderID)
+			if folderID == "" {
+				continue
+			}
+			if _, ok := seen[folderID]; ok {
+				continue
+			}
+			seen[folderID] = struct{}{}
+			out = append(out, folderID)
+		}
+		return out
+	case ProcessingItem:
+		folderID := strings.TrimSpace(typed.FolderID)
+		if folderID == "" {
+			return nil
+		}
+		return []string{folderID}
 	}
 
-	thumbnailPaths := compactStringSlice(anyToStringSlice(outputs[1]))
-	folderIDs := thumbnailNodeExtractFolderIDs(outputs[0])
-
-	return thumbnailPaths, folderIDs
-}
-
-func thumbnailNodeExtractFolderIDs(raw any) []string {
 	items := thumbnailNodeAsMapSlice(raw)
 	if len(items) == 0 {
 		return nil

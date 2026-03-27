@@ -55,7 +55,7 @@ func (e *subtreeAggregatorNodeExecutor) Execute(ctx context.Context, input NodeE
 	}
 
 	rawInputs := typedInputsToAny(input.Inputs)
-	rawTrees, hasTrees := firstPresent(rawInputs, "trees", "node")
+	rawTrees, hasTrees := firstPresent(rawInputs, "trees")
 	var (
 		trees []FolderTree
 		err   error
@@ -65,9 +65,6 @@ func (e *subtreeAggregatorNodeExecutor) Execute(ctx context.Context, input NodeE
 		if err != nil {
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute parse trees: %w", e.Type(), err)
 		}
-	}
-	if len(trees) == 0 && input.Folder != nil && strings.TrimSpace(input.Folder.Path) != "" {
-		trees = []FolderTree{{Path: input.Folder.Path, Name: input.Folder.Name}}
 	}
 	if len(trees) == 0 {
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder trees are required", e.Type())
@@ -189,14 +186,7 @@ func aggregateTreeCategory(bestSignal ClassificationSignal, subtreeEntries []Cla
 }
 
 func (e *subtreeAggregatorNodeExecutor) ensureFolderForTree(ctx context.Context, input NodeExecutionInput, tree FolderTree) (*repository.Folder, error) {
-	if input.Folder != nil && strings.TrimSpace(input.Folder.ID) != "" && strings.TrimSpace(input.Folder.Path) == strings.TrimSpace(tree.Path) {
-		return input.Folder, nil
-	}
-
 	if strings.TrimSpace(tree.Path) == "" {
-		if input.Folder != nil && strings.TrimSpace(input.Folder.ID) != "" {
-			return input.Folder, nil
-		}
 		return nil, fmt.Errorf("folder path is required")
 	}
 

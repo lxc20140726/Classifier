@@ -53,10 +53,6 @@ func TestScheduledWorkflowServiceRunNow(t *testing.T) {
 	if runner.called[0].WorkflowDefID != "wf-1" {
 		t.Fatalf("WorkflowDefID = %q, want wf-1", runner.called[0].WorkflowDefID)
 	}
-	if !reflect.DeepEqual(runner.called[0].FolderIDs, []string{"folder-2", "folder-1"}) {
-		t.Fatalf("FolderIDs = %#v, want normalized ids", runner.called[0].FolderIDs)
-	}
-
 	loaded, err := repo.GetByID(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v", err)

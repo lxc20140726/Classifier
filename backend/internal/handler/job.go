@@ -110,8 +110,7 @@ func (h *JobHandler) StartWorkflow(c *gin.Context) {
 	}
 
 	var req struct {
-		WorkflowDefID string   `json:"workflow_def_id"`
-		FolderIDs     []string `json:"folder_ids"`
+		WorkflowDefID string `json:"workflow_def_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -122,14 +121,9 @@ func (h *JobHandler) StartWorkflow(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow_def_id is required"})
 		return
 	}
-	if len(req.FolderIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "folder_ids is required"})
-		return
-	}
 
 	jobID, err := h.workflowStarter.StartJob(c.Request.Context(), service.StartWorkflowJobInput{
 		WorkflowDefID: req.WorkflowDefID,
-		FolderIDs:     req.FolderIDs,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start workflow job"})
@@ -142,7 +136,10 @@ func (h *JobHandler) StartWorkflow(c *gin.Context) {
 func serializeJob(job *repository.Job) gin.H {
 	folderIDs := make([]string, 0)
 	if job.FolderIDs != "" {
-		_ = json.Unmarshal([]byte(job.FolderIDs), &folderIDs)
+		parsed := make([]string, 0)
+		if err := json.Unmarshal([]byte(job.FolderIDs), &parsed); err == nil && parsed != nil {
+			folderIDs = parsed
+		}
 	}
 
 	return gin.H{

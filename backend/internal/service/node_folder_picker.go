@@ -30,7 +30,8 @@ func (e *folderPickerNodeExecutor) Schema() NodeSchema {
 		Description: "静态源节点：在配置中预先指定文件夹路径列表，运行时直接输出为目录树，不扫描不暂停",
 		Inputs:      []PortDef{},
 		Outputs: []PortDef{
-			{Name: "folders", Type: PortTypeFolderTreeList, Description: "选定的目录树列表"},
+			{Name: "folders", Type: PortTypeFolderTreeList, Description: "选定的目录树列表（可直接接分类器）"},
+			{Name: "path", Type: PortTypePath, Description: "第一个配置路径（可接目录树扫描器的 source_dir）"},
 		},
 	}
 }
@@ -61,9 +62,17 @@ func (e *folderPickerNodeExecutor) Execute(ctx context.Context, input NodeExecut
 		})
 	}
 
+	primaryPath := ""
+	if len(paths) > 0 {
+		primaryPath = strings.TrimSpace(paths[0])
+	}
+
 	return NodeExecutionOutput{
-		Outputs: map[string]TypedValue{"folders": {Type: PortTypeFolderTreeList, Value: trees}},
-		Status:  ExecutionSuccess,
+		Outputs: map[string]TypedValue{
+			"folders": {Type: PortTypeFolderTreeList, Value: trees},
+			"path":    {Type: PortTypePath, Value: primaryPath},
+		},
+		Status: ExecutionSuccess,
 	}, nil
 }
 

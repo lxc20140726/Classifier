@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 import { getWorkflowRunDetail, listWorkflowRunsByJob, provideWorkflowRunInput, provideWorkflowRunRawInput, resumeWorkflowRun, rollbackWorkflowRun } from '@/api/workflowRuns'
-import type { NodeRun, NodeRunStatus, NodeType, ProvideInputBody, WorkflowNodeEvent, WorkflowRun, WorkflowRunStatus } from '@/types'
+import type { NodeRun, NodeRunStatus, NodeType, ProvideInputBody, WorkflowNodeEvent, WorkflowRun } from '@/types'
 
 interface WorkflowRunStore {
   runsByJobId: Record<string, WorkflowRun[]>
@@ -15,7 +15,6 @@ interface WorkflowRunStore {
   provideInput: (runId: string, category: ProvideInputBody['category']) => Promise<void>
   provideRawInput: (runId: string, body: Record<string, unknown>) => Promise<void>
   handleNodeEvent: (event: WorkflowNodeEvent) => void
-  updateRunStatus: (workflowRunId: string, status: WorkflowRunStatus) => void
 }
 
 export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
@@ -116,23 +115,6 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
         updated = [...existing, placeholder]
       }
       return { nodesByRunId: { ...state.nodesByRunId, [workflow_run_id]: updated } }
-    })
-  },
-
-  updateRunStatus(workflowRunId, status) {
-    set((state) => {
-      const updatedRunsByJobId = { ...state.runsByJobId }
-      for (const jobId of Object.keys(updatedRunsByJobId)) {
-        const runs = updatedRunsByJobId[jobId]
-        const idx = runs.findIndex((r) => r.id === workflowRunId)
-        if (idx !== -1) {
-          updatedRunsByJobId[jobId] = runs.map((r, i) =>
-            i === idx ? { ...r, status } : r,
-          )
-          break
-        }
-      }
-      return { runsByJobId: updatedRunsByJobId }
     })
   },
 }))

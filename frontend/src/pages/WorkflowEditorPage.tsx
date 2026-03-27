@@ -20,13 +20,12 @@ import {
   type OnConnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { ArrowLeft, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FolderOpen, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2, X } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FolderOpen, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2 } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import gsap from 'gsap'
 
 import { ApiRequestError } from '@/api/client'
 import { DirPicker } from '@/components/DirPicker'
-import { useFolderStore } from '@/store/folderStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import { startWorkflowJob } from '@/api/workflowRuns'
 import type { NodeRun, NodeRunStatus } from '@/types'
@@ -132,7 +131,7 @@ const NODE_CATEGORIES: NodeCategory[] = [
     iconColor: 'text-emerald-600 dark:text-emerald-400',
     accentClass: 'from-emerald-500/20 to-green-500/10 border-emerald-200 dark:from-emerald-500/25 dark:to-green-500/15 dark:border-emerald-700',
     borderHoverClass: 'hover:border-emerald-300 dark:hover:border-emerald-500',
-    types: new Set(['move', 'move-node', 'rename-node', 'compress-node', 'thumbnail-node']),
+    types: new Set(['move-node', 'rename-node', 'compress-node', 'thumbnail-node']),
   },
   {
     label: '审计日志',
@@ -194,15 +193,52 @@ function graphToNodes(graph: WorkflowGraph, schemas: Map<string, NodeSchema>): E
   }))
 }
 
-function graphToEdges(graph: WorkflowGraph): Edge[] {
-  return graph.edges.map((edge, index) => ({
-    id: edge.id || `edge-${index}`,
-    source: edge.source,
-    target: edge.target,
-    sourceHandle: `out-${edge.source_port}`,
-    targetHandle: `in-${edge.target_port}`,
-    animated: false,
-  }))
+function graphToEdges(graph: WorkflowGraph, schemaMap: Map<string, NodeSchema>): Edge[] {
+  const seenIds = new Set<string>()
+  const seenTargetPorts = new Set<string>()
+  const result: Edge[] = []
+  const nodeTypeById = new Map(graph.nodes.map((n) => [n.id, n.type]))
+
+  for (let index = 0; index < graph.edges.length; index++) {
+    const edge = graph.edges[index]
+    const id = edge.id || `edge-${index}`
+    const targetPortKey = `${edge.target}::${edge.target_port}`
+
+    if (seenIds.has(id) || seenTargetPorts.has(targetPortKey)) continue
+
+    seenIds.add(id)
+    seenTargetPorts.add(targetPortKey)
+
+    const sourceSchema = schemaMap.get(nodeTypeById.get(edge.source) ?? '')
+    const targetSchema = schemaMap.get(nodeTypeById.get(edge.target) ?? '')
+
+    let sourceHandle: string
+    if (typeof edge.source_port === 'number') {
+      sourceHandle = `out-${edge.source_port}`
+    } else {
+      const portIndex = sourceSchema?.output_ports?.findIndex((p) => p.name === edge.source_port) ?? -1
+      sourceHandle = portIndex >= 0 ? `out-${portIndex}` : `out-0`
+    }
+
+    let targetHandle: string
+    if (typeof edge.target_port === 'number') {
+      targetHandle = `in-${edge.target_port}`
+    } else {
+      const portIndex = targetSchema?.input_ports?.findIndex((p) => p.name === edge.target_port) ?? -1
+      targetHandle = portIndex >= 0 ? `in-${portIndex}` : `in-0`
+    }
+
+    result.push({
+      id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle,
+      targetHandle,
+      animated: false,
+    })
+  }
+
+  return result
 }
 
 function buildInputMap(
@@ -780,7 +816,6 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
         </div>
       )
 
-    case 'move':
     case 'move-node':
       return (
         <div className="space-y-3">
@@ -920,6 +955,9 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
 
   return (
     <div className="space-y-3">
+      <NodeUsageHint>
+        folders 端口输出所有路径的目录树（接分类器）；path 端口输出第一个路径字符串（接目录树扫描器的 source_dir）。
+      </NodeUsageHint>
       <ConfigField label="文件夹路径列表" hint="每行一个文件夹路径，运行时直接作为目录树输出">
         <div className="space-y-2">
           {paths.map((p, i) => (
@@ -1203,129 +1241,6 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
 
 const NODE_TYPES = { workflowNode: WorkflowNodeCard }
 
-// ─── RunWorkflowModal ────────────────────────────────────────────────────────
-
-interface RunWorkflowModalProps {
-  open: boolean
-  workflowDefId: string
-  onClose: () => void
-  onStarted: (jobId: string) => void
-}
-
-function RunWorkflowModal({ open, workflowDefId, onClose, onStarted }: RunWorkflowModalProps) {
-  const folders = useFolderStore((s) => s.folders)
-  const fetchFolders = useFolderStore((s) => s.fetchFolders)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  
-  const overlayRef = useRef<HTMLDivElement | null>(null)
-  const modalRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (open) {
-      void fetchFolders()
-      setSelected(new Set())
-      setError(null)
-      
-      if (overlayRef.current && modalRef.current) {
-        gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.2 })
-        gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.7)" })
-      }
-    }
-  }, [open, fetchFolders])
-
-  function toggleFolder(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  function toggleAll() {
-    if (selected.size === folders.length) setSelected(new Set())
-    else setSelected(new Set(folders.map((f) => f.id)))
-  }
-
-  async function handleRun() {
-    if (selected.size === 0) return
-    setIsSubmitting(true)
-    setError(null)
-    try {
-      const res = await startWorkflowJob({ workflow_def_id: workflowDefId, folder_ids: [...selected] })
-      onStarted(res.job_id)
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '启动失败')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  if (!open) return null
-
-  return (
-    <div ref={overlayRef} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div ref={modalRef} className="flex w-full max-w-md flex-col border-2 border-foreground bg-card shadow-hard-lg">
-        <div className="flex items-center justify-between border-b-2 border-foreground bg-primary px-5 py-4 text-primary-foreground">
-          <h2 className="text-lg font-black tracking-tight">运行工作流</h2>
-          <button type="button" onClick={onClose} className="border-2 border-transparent p-1.5 transition-all hover:border-primary-foreground hover:bg-foreground hover:text-background">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-5 py-5 bg-background">
-          <div className="mb-4 flex items-center justify-between">
-            <p className="text-sm font-bold text-muted-foreground">选择要处理的文件夹（<span className="text-foreground">{selected.size}/{folders.length}</span>）</p>
-            <button type="button" onClick={toggleAll} className="text-xs font-black text-primary hover:underline">
-              {selected.size === folders.length ? '取消全选' : '全选'}
-            </button>
-          </div>
-          {folders.length === 0 && (
-            <p className="py-8 text-center text-sm font-bold text-muted-foreground border-2 border-dashed border-foreground">暂无文件夹，请先扫描</p>
-          )}
-          <div className="max-h-72 space-y-2 overflow-y-auto">
-            {folders.map((folder) => (
-              <label
-                key={folder.id}
-                className={cn(
-                  'flex cursor-pointer items-center gap-3 border-2 border-foreground px-3 py-3 transition-colors',
-                  selected.has(folder.id) ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted/30',
-                )}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(folder.id)}
-                  onChange={() => toggleFolder(folder.id)}
-                  className="h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-black">{folder.name}</p>
-                  <p className="truncate font-mono text-[10px] font-bold opacity-80 mt-0.5">{folder.path}</p>
-                </div>
-              </label>
-            ))}
-          </div>
-          {error && <p className="mt-4 border-2 border-red-900 bg-red-100 px-3 py-2 text-sm font-bold text-red-900">{error}</p>}
-        </div>
-        <div className="flex justify-end gap-3 border-t-2 border-foreground bg-muted/30 px-5 py-4">
-          <button type="button" onClick={onClose} className="border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5">取消</button>
-          <button
-            type="button"
-            disabled={selected.size === 0 || isSubmitting}
-            onClick={() => void handleRun()}
-            className="inline-flex items-center gap-2 border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-primary disabled:hover:text-primary-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
-          >
-            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {isSubmitting ? '启动中...' : '开始运行'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ─── WorkflowEditorScreen ─────────────────────────────────────────────────────
 
 function WorkflowEditorScreen() {
@@ -1345,7 +1260,7 @@ function WorkflowEditorScreen() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [isNodePanelOpen, setIsNodePanelOpen] = useState(false)
-  const [isRunModalOpen, setIsRunModalOpen] = useState(false)
+  const [isRunning, setIsRunning] = useState(false)
   const [selectionModeOn, setSelectionModeOn] = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
 
@@ -1411,7 +1326,7 @@ function WorkflowEditorScreen() {
         setWorkflowDef(nextWorkflow)
         setWorkflowNodes(nextWorkflowNodes)
         setNodes(graphToNodes(graph, nextSchemaMap))
-        setEdges(graphToEdges(graph))
+        setEdges(graphToEdges(graph, nextSchemaMap))
         setSelectedEdgeId(null)
       } catch (loadError) {
         if (!active) return
@@ -1427,7 +1342,12 @@ function WorkflowEditorScreen() {
 
   const onConnect = useMemo<OnConnect>(
     () => (connection: Connection) => {
-      setEdges((currentEdges) => addEdge({ ...connection, animated: false }, currentEdges))
+      setEdges((currentEdges) => {
+        const withoutExisting = currentEdges.filter(
+          (edge) => !(edge.target === connection.target && edge.targetHandle === connection.targetHandle),
+        )
+        return addEdge({ ...connection, animated: false }, withoutExisting)
+      })
       setNotice(null)
     },
     [setEdges],
@@ -1596,6 +1516,26 @@ function WorkflowEditorScreen() {
     }
   }
 
+  async function handleRunWorkflow() {
+    if (!workflowDefId || isRunning) return
+    setIsRunning(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await startWorkflowJob({ workflow_def_id: workflowDefId })
+      setActiveJobId(res.job_id)
+      setNotice('工作流已启动')
+    } catch (runError) {
+      if (runError instanceof ApiRequestError) {
+        setError(runError.message)
+      } else {
+        setError(runError instanceof Error ? runError.message : '启动失败')
+      }
+    } finally {
+      setIsRunning(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center text-sm font-black tracking-widest text-foreground">
@@ -1635,11 +1575,12 @@ function WorkflowEditorScreen() {
               {notice && <span className="text-sm font-bold text-green-300">{notice}</span>}
               <button
                 type="button"
-                onClick={() => setIsRunModalOpen(true)}
-                className="inline-flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold text-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
+                onClick={() => void handleRunWorkflow()}
+                disabled={isRunning}
+                className="inline-flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold text-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
-                <Play className="h-4 w-4" />
-                运行
+                {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {isRunning ? '启动中...' : '运行'}
               </button>
               <button
                 type="button"
@@ -1820,12 +1761,6 @@ function WorkflowEditorScreen() {
           </div>
         </div>
       </div>
-      <RunWorkflowModal
-        open={isRunModalOpen}
-        workflowDefId={workflowDefId}
-        onClose={() => setIsRunModalOpen(false)}
-        onStarted={(jobId) => setActiveJobId(jobId)}
-      />
     </EditorContext.Provider>
   )
 }

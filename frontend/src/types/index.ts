@@ -71,7 +71,7 @@ export interface Job {
   type: string
   workflow_def_id?: string
   status: JobStatus
-  folder_ids: string[]
+  folder_ids: string[] | null
   total: number
   done: number
   failed: number
@@ -151,7 +151,6 @@ export type NodeRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'sk
 export type NodeType =
   | 'trigger'
   | 'ext-ratio-classifier'
-  | 'move'
   | 'move-node'
   | 'folder-tree-scanner'
   | 'folder-picker'

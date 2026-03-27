@@ -57,7 +57,7 @@ func (e *nameKeywordClassifierNodeExecutor) Schema() NodeSchema {
 
 func (e *nameKeywordClassifierNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
 	rawInputs := typedInputsToAny(input.Inputs)
-	rawTrees, ok := firstPresent(rawInputs, "trees", "folder")
+	rawTrees, ok := firstPresent(rawInputs, "trees")
 	if !ok {
 		return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: nil}, "pass": {Type: PortTypeFolderTreeList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}

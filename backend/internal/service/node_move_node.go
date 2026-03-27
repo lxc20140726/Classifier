@@ -143,11 +143,6 @@ func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbac
 		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
 	}
 
-	fallbackFolderID := ""
-	if input.Folder != nil {
-		fallbackFolderID = strings.TrimSpace(input.Folder.ID)
-	}
-
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.TargetPath) == "" || strings.TrimSpace(entry.SourcePath) == "" || entry.TargetPath == entry.SourcePath {
 			continue
@@ -166,9 +161,6 @@ func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbac
 		}
 
 		folderID := strings.TrimSpace(entry.FolderID)
-		if folderID == "" && len(entries) == 1 {
-			folderID = fallbackFolderID
-		}
 		if e.folders != nil && folderID != "" {
 			if err := e.folders.UpdatePath(ctx, folderID, entry.SourcePath); err != nil {
 				return fmt.Errorf("update folder path for %q: %w", folderID, err)
@@ -240,21 +232,7 @@ func phase4MoveRollbackEntriesFromOutput(raw string) ([]phase4MoveRollbackEntry,
 	} else if typed {
 		return phase4MoveRollbackEntriesFromValues(typedOutputs["items"].Value, typedOutputs["results"].Value), nil
 	}
-
-	legacy, err := parseNodeOutputs(raw)
-	if err != nil {
-		return nil, err
-	}
-
-	var itemsValue any
-	var resultsValue any
-	if len(legacy) > 0 {
-		itemsValue = legacy[0]
-	}
-	if len(legacy) > 1 {
-		resultsValue = legacy[1]
-	}
-	return phase4MoveRollbackEntriesFromValues(itemsValue, resultsValue), nil
+	return nil, fmt.Errorf("invalid typed output json")
 }
 
 func phase4MoveRollbackEntriesFromValues(itemsValue any, resultsValue any) []phase4MoveRollbackEntry {

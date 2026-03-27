@@ -193,11 +193,7 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 		if typed {
 			paths = compactStringSlice(anyToStringSlice(typedOutputs["archives"].Value))
 		} else {
-			outputs, legacyErr := parseNodeOutputs(input.NodeRun.OutputJSON)
-			if legacyErr != nil {
-				return nil, fmt.Errorf("parse node output json for node run %q: %w", input.NodeRun.ID, legacyErr)
-			}
-			paths = compressNodeExtractArchivePaths(outputs)
+			return nil, fmt.Errorf("parse node output json for node run %q: typed outputs required", input.NodeRun.ID)
 		}
 		for _, path := range paths {
 			pathSet[path] = struct{}{}
@@ -216,11 +212,7 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 		if typed {
 			paths = compactStringSlice(anyToStringSlice(typedOutputs["archives"].Value))
 		} else {
-			outputs, legacyErr := parseNodeOutputs(snapshot.OutputJSON)
-			if legacyErr != nil {
-				return nil, fmt.Errorf("parse node snapshot output json for snapshot %q: %w", snapshot.ID, legacyErr)
-			}
-			paths = compressNodeExtractArchivePaths(outputs)
+			return nil, fmt.Errorf("parse node snapshot output json for snapshot %q: typed outputs required", snapshot.ID)
 		}
 		for _, path := range paths {
 			pathSet[path] = struct{}{}
@@ -233,14 +225,6 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 	}
 
 	return paths, nil
-}
-
-func compressNodeExtractArchivePaths(outputs []any) []string {
-	if len(outputs) < 2 {
-		return nil
-	}
-
-	return compactStringSlice(anyToStringSlice(outputs[1]))
 }
 
 func anyToStringSlice(raw any) []string {

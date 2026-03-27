@@ -1,5 +1,5 @@
 import { request } from '@/api/client'
-import type { NodeRun, PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
+import type { PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
 
 export interface WorkflowRunQueryParams {
   page?: number
@@ -8,7 +8,6 @@ export interface WorkflowRunQueryParams {
 
 export interface StartWorkflowJobBody {
   workflow_def_id: string
-  folder_ids: string[]
 }
 
 export function startWorkflowJob(body: StartWorkflowJobBody) {
@@ -31,10 +30,6 @@ export function listWorkflowRunsByJob(
 
 export function getWorkflowRunDetail(id: string) {
   return request<WorkflowRunDetail>(`/workflow-runs/${id}`)
-}
-
-export function listNodeRunsByWorkflowRun(workflowRunId: string) {
-  return request<{ data: NodeRun[] }>(`/workflow-runs/${workflowRunId}/nodes`)
 }
 
 export function resumeWorkflowRun(id: string) {

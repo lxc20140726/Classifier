@@ -143,13 +143,18 @@ func (e *slowParallelExecutor) Execute(_ context.Context, input NodeExecutionInp
 		}
 	}
 
+	folderID := ""
+	if input.Folder != nil {
+		folderID = input.Folder.ID
+	}
+
 	e.mu.Lock()
-	e.visited = append(e.visited, input.Folder.ID)
+	e.visited = append(e.visited, folderID)
 	e.mu.Unlock()
 
 	time.Sleep(50 * time.Millisecond)
 	atomic.AddInt32(&e.active, -1)
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder_id": {Type: PortTypeString, Value: input.Folder.ID}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{Outputs: map[string]TypedValue{"folder_id": {Type: PortTypeString, Value: folderID}}, Status: ExecutionSuccess}, nil
 }
 
 func (e *slowParallelExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -376,7 +381,7 @@ func TestWorkflowRunnerServiceStartAndResume(t *testing.T) {
 		nil,
 	)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, FolderIDs: []string{folder.ID}})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -493,7 +498,7 @@ func TestWorkflowRunnerServicePortInputPropagation(t *testing.T) {
 	svc.RegisterExecutor(&produceInputExecutor{})
 	svc.RegisterExecutor(consume)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, FolderIDs: []string{folder.ID}})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -552,7 +557,7 @@ func TestWorkflowRunnerServiceRunsFoldersInParallel(t *testing.T) {
 	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(executor)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, FolderIDs: []string{"folder-a", "folder-b"}})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -561,11 +566,11 @@ func TestWorkflowRunnerServiceRunsFoldersInParallel(t *testing.T) {
 	if job.Status != "succeeded" {
 		t.Fatalf("job status = %q, want succeeded", job.Status)
 	}
-	if atomic.LoadInt32(&executor.maxActive) < 2 {
-		t.Fatalf("maxActive = %d, want at least 2", atomic.LoadInt32(&executor.maxActive))
+	if atomic.LoadInt32(&executor.maxActive) != 1 {
+		t.Fatalf("maxActive = %d, want 1 in v2 single-run mode", atomic.LoadInt32(&executor.maxActive))
 	}
-	if len(executor.visited) != 2 {
-		t.Fatalf("visited len = %d, want 2", len(executor.visited))
+	if len(executor.visited) != 1 {
+		t.Fatalf("visited len = %d, want 1 in v2 single-run mode", len(executor.visited))
 	}
 }
 
@@ -644,7 +649,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 			svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, auditSvc)
 			svc.RegisterExecutor(&auditOutputExecutor{nodeType: tc.nodeType, outputs: tc.outputs})
 
-			jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, FolderIDs: []string{folder.ID}})
+			jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 			if err != nil {
 				t.Fatalf("StartJob() error = %v", err)
 			}
@@ -705,7 +710,7 @@ func TestWorkflowRunnerServiceNamedSourcePortCompatibility(t *testing.T) {
 	svc.RegisterExecutor(&namedPortProducerExecutor{})
 	svc.RegisterExecutor(consumer)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -763,7 +768,7 @@ func TestWorkflowRunnerServiceLazyRequiredInputSkipSemantics(t *testing.T) {
 	svc.RegisterExecutor(strict)
 	svc.RegisterExecutor(lazy)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -823,7 +828,7 @@ func TestWorkflowRunnerServiceResumeDataPersistence(t *testing.T) {
 	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
 	svc.RegisterExecutor(resumeExecutor)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -916,7 +921,7 @@ func TestWorkflowRunnerServicePhase4MoveRollback(t *testing.T) {
 	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(producer)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -1027,7 +1032,7 @@ func TestEngineV2_AC_PROC1_ProcessingChainRenameAndMove(t *testing.T) {
 	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(producer)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}
@@ -1123,7 +1128,7 @@ func TestEngineV2_AC_ROLL4_MultiNodeReverseRollback(t *testing.T) {
 	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(producer)
 
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID, SourceDir: "/source"})
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
 	if err != nil {
 		t.Fatalf("StartJob() error = %v", err)
 	}

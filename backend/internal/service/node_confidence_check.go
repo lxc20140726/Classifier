@@ -40,7 +40,7 @@ func (e *confidenceCheckNodeExecutor) Schema() NodeSchema {
 
 func (e *confidenceCheckNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
 	rawInputs := typedInputsToAny(input.Inputs)
-	rawSignals, ok := firstPresent(rawInputs, "signals", "signal")
+	rawSignals, ok := firstPresent(rawInputs, "signals")
 	if !ok {
 		return NodeExecutionOutput{Outputs: map[string]TypedValue{"high": {Type: PortTypeClassificationSignalList, Value: nil}, "low": {Type: PortTypeClassificationSignalList, Value: nil}}, Status: ExecutionSuccess}, nil
 	}

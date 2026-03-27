@@ -439,7 +439,10 @@ func TestCompressNodeExecutorRollbackRemovesGeneratedArchives(t *testing.T) {
 		Snapshots: []*repository.NodeSnapshot{{
 			ID:         "snapshot-compress-rb-1",
 			Kind:       "post",
-			OutputJSON: mustJSONMarshal(t, map[string]any{"outputs": []any{map[string]any{"ok": true}, []string{archivePath}}}),
+		OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, map[string]TypedValue{
+			"items":    {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{SourcePath: "/source/album"}}},
+			"archives": {Type: PortTypeStringList, Value: []string{archivePath}},
+		})),
 		}},
 	})
 	if err != nil {
@@ -618,19 +621,13 @@ func TestThumbnailNodeExecutorRollbackRemovesFilesAndClearsCover(t *testing.T) {
 	executor := newThumbnailNodeExecutor(fs.NewOSAdapter(), folderRepo)
 	err := executor.Rollback(ctx, NodeRollbackInput{
 		NodeRun: &repository.NodeRun{ID: "node-run-thumbnail-rb-1"},
-		Folder:  folder,
 		Snapshots: []*repository.NodeSnapshot{{
 			ID:   "snapshot-thumbnail-rb-1",
 			Kind: "post",
-			OutputJSON: mustJSONMarshal(t, map[string]any{
-				"outputs": []any{
-					map[string]any{
-						"folder_id":   folder.ID,
-						"source_path": "/source/album",
-					},
-					[]string{thumbPath},
-				},
-			}),
+			OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, map[string]TypedValue{
+				"items":           {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
+				"thumbnail_paths": {Type: PortTypeStringList, Value: []string{thumbPath}},
+			})),
 		}},
 	})
 	if err != nil {
@@ -749,8 +746,8 @@ func TestEngineV2_AC_ROLL3_CompressNodeRollbackTypedFormat(t *testing.T) {
 }
 
 // TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat verifies backward
-// compatibility: rollback still works when output_json uses the old array
-// format instead of the typed-value map format.
+// compatibility cleanup: rollback rejects legacy output_json array format and
+// only accepts typed-value map format.
 func TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat(t *testing.T) {
 	t.Parallel()
 
@@ -781,11 +778,11 @@ func TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat(t *testing.T) {
 				}),
 			}},
 		})
-		if err != nil {
-			t.Fatalf("Rollback() legacy format error = %v", err)
+		if err == nil {
+			t.Fatalf("Rollback() expected error for legacy format, got nil")
 		}
-		if pathExists(t, archivePath) {
-			t.Fatalf("archive should be deleted when rollback uses legacy array format")
+		if !pathExists(t, archivePath) {
+			t.Fatalf("archive should remain when rollback receives legacy array format")
 		}
 	})
 
@@ -813,7 +810,6 @@ func TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat(t *testing.T) {
 		executor := newThumbnailNodeExecutor(fs.NewOSAdapter(), folderRepo)
 		err := executor.Rollback(ctx, NodeRollbackInput{
 			NodeRun: &repository.NodeRun{ID: "node-run-thumbnail-legacy-compat"},
-			Folder:  folder,
 			Snapshots: []*repository.NodeSnapshot{{
 				ID:   "snap-thumbnail-legacy-compat",
 				Kind: "post",
@@ -826,11 +822,11 @@ func TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat(t *testing.T) {
 				}),
 			}},
 		})
-		if err != nil {
-			t.Fatalf("Rollback() legacy thumbnail format error = %v", err)
+		if err == nil {
+			t.Fatalf("Rollback() expected error for legacy thumbnail format, got nil")
 		}
-		if pathExists(t, thumbPath) {
-			t.Fatalf("thumbnail should be deleted when rollback uses legacy array format")
+		if !pathExists(t, thumbPath) {
+			t.Fatalf("thumbnail should remain when rollback receives legacy array format")
 		}
 	})
 }
@@ -883,4 +879,15 @@ func mustJSONMarshal(t *testing.T, value any) string {
 	}
 
 	return string(data)
+}
+
+func mustTypedOutputsMap(t *testing.T, values map[string]TypedValue) map[string]TypedValueJSON {
+	t.Helper()
+
+	encoded, err := typedValueMapToJSON(values, NewTypeRegistry())
+	if err != nil {
+		t.Fatalf("typedValueMapToJSON() error = %v", err)
+	}
+
+	return encoded
 }

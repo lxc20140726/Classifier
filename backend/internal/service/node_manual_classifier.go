@@ -49,17 +49,6 @@ func (e *manualClassifierNodeExecutor) Schema() NodeSchema {
 
 func (e *manualClassifierNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
 	rawInputs := typedInputsToAny(input.Inputs)
-	rawLegacySignal, hasLegacySignal := rawInputs["signal"]
-	if hasLegacySignal && rawLegacySignal != nil {
-		legacySignals, found, err := parseSignalListInput(rawLegacySignal)
-		if err != nil {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute parse signal: %w", e.Type(), err)
-		}
-		if found {
-			return NodeExecutionOutput{Outputs: map[string]TypedValue{"signal": {Type: PortTypeClassificationSignalList, Value: legacySignals}}, Status: ExecutionSuccess}, nil
-		}
-	}
-
 	rawTrees, hasTrees := firstPresent(rawInputs, "trees")
 	trees := []FolderTree{}
 	if hasTrees {

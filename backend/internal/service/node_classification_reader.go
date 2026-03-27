@@ -40,30 +40,7 @@ func (e *classificationReaderNodeExecutor) Execute(_ context.Context, input Node
 	rawInputs := typedInputsToAny(input.Inputs)
 	entry, ok := classificationReaderResolveInputEntry(rawInputs)
 	if !ok {
-		if input.Folder == nil || input.Folder.ID == "" {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder is required when entry input is missing", e.Type())
-		}
-		entry = ClassifiedEntry{
-			FolderID: input.Folder.ID,
-			Path:     input.Folder.Path,
-			Name:     input.Folder.Name,
-			Category: input.Folder.Category,
-		}
-	}
-
-	if input.Folder != nil {
-		if entry.FolderID == "" {
-			entry.FolderID = input.Folder.ID
-		}
-		if entry.Path == "" {
-			entry.Path = input.Folder.Path
-		}
-		if entry.Name == "" {
-			entry.Name = input.Folder.Name
-		}
-		if entry.Category == "" {
-			entry.Category = input.Folder.Category
-		}
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: entry input is required", e.Type())
 	}
 
 	if entry.Category == "" {
