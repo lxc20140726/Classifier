@@ -169,7 +169,7 @@ func NewWorkflowRunnerService(
 	}
 
 	svc.RegisterExecutor(&triggerNodeExecutor{})
-	svc.RegisterExecutor(newFolderTreeScannerExecutor(fsAdapter))
+	svc.RegisterExecutor(newFolderTreeScannerExecutor(fsAdapter, ""))
 	svc.RegisterExecutor(newNameKeywordClassifierExecutor())
 	svc.RegisterExecutor(newFileTreeClassifierExecutor())
 	svc.RegisterExecutor(newConfidenceCheckExecutor())

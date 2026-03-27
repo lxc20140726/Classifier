@@ -657,14 +657,9 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'folder-tree-scanner':
       return (
         <div className="space-y-3">
-          <ConfigField label="扫描根目录" hint="留空则使用环境变量 SOURCE_DIR">
-            <DirPickerField
-              value={cfgStr(config, 'source_dir')}
-              onChange={(v) => set('source_dir', v)}
-              placeholder="/data/source"
-              title="选择扫描根目录"
-            />
-          </ConfigField>
+          <NodeUsageHint>
+            扫描根目录由系统环境变量 SOURCE_DIR 决定，无需在此配置。如需动态覆盖，可将文件夹选择器（folder-picker）的输出连入本节点的 source_dir 端口。
+          </NodeUsageHint>
           <ConfigField label="最大扫描深度" hint="向下递归的最大层级数（默认 5）">
             <input
               type="number"

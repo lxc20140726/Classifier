@@ -264,7 +264,7 @@ func newPhase3WorkflowTestEnv(t *testing.T, adapter *fs.MockAdapter) (*WorkflowR
 	auditRepo := repository.NewAuditRepository(database)
 
 	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
-	svc.RegisterExecutor(NewFolderTreeScannerExecutor(adapter))
+	svc.RegisterExecutor(NewFolderTreeScannerExecutor(adapter, ""))
 	svc.RegisterExecutor(NewNameKeywordClassifierExecutor())
 	svc.RegisterExecutor(NewFileTreeClassifierExecutor())
 	svc.RegisterExecutor(NewConfidenceCheckExecutor())
