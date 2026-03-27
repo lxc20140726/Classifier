@@ -33,6 +33,7 @@ import type { NodeRun, NodeRunStatus } from '@/types'
 import { listNodeTypes } from '@/api/nodeTypes'
 import { getWorkflowDef, updateWorkflowDef } from '@/api/workflowDefs'
 import { cn } from '@/lib/utils'
+import { useConfigStore } from '@/store/configStore'
 import { useThemeStore } from '@/store/themeStore'
 import type {
   NodeInputSpec,
@@ -532,6 +533,12 @@ interface DirPickerFieldProps {
 
 function DirPickerField({ value, onChange, placeholder, title }: DirPickerFieldProps) {
   const [open, setOpen] = useState(false)
+  const { sourceDir, load } = useConfigStore()
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
   return (
     <>
       <div className="flex gap-2">
@@ -552,7 +559,7 @@ function DirPickerField({ value, onChange, placeholder, title }: DirPickerFieldP
       </div>
       <DirPicker
         open={open}
-        initialPath={value || '/'}
+        initialPath={value || sourceDir}
         title={title}
         onConfirm={(path) => { onChange(path); setOpen(false) }}
         onCancel={() => setOpen(false)}
@@ -658,7 +665,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
       return (
         <div className="space-y-3">
           <NodeUsageHint>
-            扫描根目录由系统环境变量 SOURCE_DIR 决定，无需在此配置。如需动态覆盖，可将文件夹选择器（folder-picker）的输出连入本节点的 source_dir 端口。
+            必须将上游节点的输出连入本节点的 source_dir 端口以提供扫描根目录；不支持节点内配置，不读取系统环境变量。
           </NodeUsageHint>
           <ConfigField label="最大扫描深度" hint="向下递归的最大层级数（默认 5）">
             <input

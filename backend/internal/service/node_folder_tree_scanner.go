@@ -16,16 +16,15 @@ const folderTreeScannerExecutorType = "folder-tree-scanner"
 var defaultFolderTreeScannerExcludePatterns = []string{".DS_Store", "Thumbs.db", "desktop.ini", "@eaDir"}
 
 type folderTreeScannerExecutor struct {
-	fs               fs.FSAdapter
-	defaultSourceDir string
+	fs fs.FSAdapter
 }
 
-func newFolderTreeScannerExecutor(fsAdapter fs.FSAdapter, defaultSourceDir string) *folderTreeScannerExecutor {
-	return &folderTreeScannerExecutor{fs: fsAdapter, defaultSourceDir: defaultSourceDir}
+func newFolderTreeScannerExecutor(fsAdapter fs.FSAdapter) *folderTreeScannerExecutor {
+	return &folderTreeScannerExecutor{fs: fsAdapter}
 }
 
-func NewFolderTreeScannerExecutor(fsAdapter fs.FSAdapter, defaultSourceDir string) WorkflowNodeExecutor {
-	return newFolderTreeScannerExecutor(fsAdapter, defaultSourceDir)
+func NewFolderTreeScannerExecutor(fsAdapter fs.FSAdapter) WorkflowNodeExecutor {
+	return newFolderTreeScannerExecutor(fsAdapter)
 }
 
 func (e *folderTreeScannerExecutor) Type() string {
@@ -40,8 +39,8 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 		Inputs: []PortDef{{
 			Name:        "source_dir",
 			Type:        PortTypePath,
-			Description: "扫描根目录（可由上游节点动态注入；不连线则使用系统 SOURCE_DIR）",
-			Required:    false,
+			Description: "扫描根目录，必须由上游节点连入",
+			Required:    true,
 		}},
 		Outputs: []PortDef{{
 			Name:        "tree",
@@ -52,17 +51,10 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 }
 
 func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	// 优先读取上游端口注入的路径，其次兼容旧图中 config.source_dir，最后回退到系统默认目录
 	rawInputs := typedInputsToAny(input.Inputs)
 	sourceDir := strings.TrimSpace(anyString(rawInputs["source_dir"]))
 	if sourceDir == "" {
-		sourceDir = stringConfig(input.Node.Config, "source_dir")
-	}
-	if sourceDir == "" {
-		sourceDir = strings.TrimSpace(e.defaultSourceDir)
-	}
-	if sourceDir == "" {
-		return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute: source_dir is required (set SOURCE_DIR env or connect an upstream node)")
+		return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute: source_dir is required, connect an upstream node to the source_dir port")
 	}
 
 	maxDepth := intConfig(input.Node.Config, "max_depth", 5)

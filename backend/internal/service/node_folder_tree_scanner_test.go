@@ -33,7 +33,7 @@ func (a *folderTreeScannerTestFS) ReadDir(ctx context.Context, path string) ([]f
 func TestFolderTreeScannerExecutorSchema(t *testing.T) {
 	t.Parallel()
 
-	executor := newFolderTreeScannerExecutor(fs.NewMockAdapter(), "")
+	executor := newFolderTreeScannerExecutor(fs.NewMockAdapter())
 	schema := executor.Schema()
 
 	if schema.Type != "folder-tree-scanner" {
@@ -49,11 +49,8 @@ func TestFolderTreeScannerExecutorSchema(t *testing.T) {
 	if len(schema.Inputs) != 1 {
 		t.Fatalf("len(schema.Inputs) = %d, want 1", len(schema.Inputs))
 	}
-	if schema.Inputs[0].Name != "source_dir" {
-		t.Fatalf("input port name = %q, want source_dir", schema.Inputs[0].Name)
-	}
-	if schema.Inputs[0].Required {
-		t.Fatalf("input port source_dir should not be required (config is also accepted)")
+	if schema.Inputs[0].Name != "source_dir" || !schema.Inputs[0].Required {
+		t.Fatalf("input port = %+v, want source_dir required", schema.Inputs[0])
 	}
 
 	if len(schema.Outputs) != 1 {
@@ -67,14 +64,14 @@ func TestFolderTreeScannerExecutorSchema(t *testing.T) {
 func TestFolderTreeScannerExecutorExecuteRequiresSourceDir(t *testing.T) {
 	t.Parallel()
 
-	executor := newFolderTreeScannerExecutor(fs.NewMockAdapter(), "")
+	executor := newFolderTreeScannerExecutor(fs.NewMockAdapter())
 	_, err := executor.Execute(context.Background(), NodeExecutionInput{Node: repository.WorkflowGraphNode{Config: map[string]any{}}})
 	if err == nil {
 		t.Fatalf("Execute() error = nil, want source_dir required error")
 	}
 }
 
-func TestFolderTreeScannerExecutorExecuteUsesInputFallbackAndDefaultExcludes(t *testing.T) {
+func TestFolderTreeScannerExecutorExecuteUsesPortAndDefaultExcludes(t *testing.T) {
 	t.Parallel()
 
 	adapter := newFolderTreeScannerTestFS()
@@ -94,9 +91,9 @@ func TestFolderTreeScannerExecutorExecuteUsesInputFallbackAndDefaultExcludes(t *
 	})
 	adapter.AddDir(subPath, []fs.DirEntry{{Name: "b.mp4", IsDir: false, Size: 20}})
 
-	executor := newFolderTreeScannerExecutor(adapter, "")
+	executor := newFolderTreeScannerExecutor(adapter)
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
-		Node: repository.WorkflowGraphNode{Config: map[string]any{"source_dir": " "}},
+		Node: repository.WorkflowGraphNode{Config: map[string]any{}},
 		Inputs: testInputs(map[string]any{
 			"source_dir": root,
 		}),
@@ -148,12 +145,14 @@ func TestFolderTreeScannerExecutorExecuteRespectsMaxDepthAndMinFileCount(t *test
 	adapter.AddDir(deepPath, []fs.DirEntry{{Name: "clip.mp4", IsDir: false, Size: 6}})
 	adapter.AddDir(smallPath, []fs.DirEntry{{Name: "x.jpg", IsDir: false, Size: 1}})
 
-	executor := newFolderTreeScannerExecutor(adapter, "")
-	out, err := executor.Execute(context.Background(), NodeExecutionInput{Node: repository.WorkflowGraphNode{Config: map[string]any{
-		"source_dir":     root,
-		"max_depth":      0,
-		"min_file_count": 2,
-	}}})
+	executor := newFolderTreeScannerExecutor(adapter)
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{Config: map[string]any{
+			"max_depth":      0,
+			"min_file_count": 2,
+		}},
+		Inputs: testInputs(map[string]any{"source_dir": root}),
+	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -169,11 +168,13 @@ func TestFolderTreeScannerExecutorExecuteRespectsMaxDepthAndMinFileCount(t *test
 		t.Fatalf("len(trees) = %d, want 0 because max_depth=0 drops deep files and min_file_count=2 filters all", len(trees))
 	}
 
-	out, err = executor.Execute(context.Background(), NodeExecutionInput{Node: repository.WorkflowGraphNode{Config: map[string]any{
-		"source_dir":     root,
-		"max_depth":      5,
-		"min_file_count": 2,
-	}}})
+	out, err = executor.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{Config: map[string]any{
+			"max_depth":      5,
+			"min_file_count": 2,
+		}},
+		Inputs: testInputs(map[string]any{"source_dir": root}),
+	})
 	if err != nil {
 		t.Fatalf("Execute() second call error = %v", err)
 	}
@@ -206,8 +207,11 @@ func TestFolderTreeScannerExecutorExecuteReadErrors(t *testing.T) {
 
 	adapter.readErr[root] = fmt.Errorf("boom-root")
 
-	executor := newFolderTreeScannerExecutor(adapter, "")
-	_, err := executor.Execute(context.Background(), NodeExecutionInput{Node: repository.WorkflowGraphNode{Config: map[string]any{"source_dir": root}}})
+	executor := newFolderTreeScannerExecutor(adapter)
+	_, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Node:   repository.WorkflowGraphNode{Config: map[string]any{}},
+		Inputs: testInputs(map[string]any{"source_dir": root}),
+	})
 	if err == nil {
 		t.Fatalf("Execute() root error = nil, want error")
 	}
@@ -216,7 +220,10 @@ func TestFolderTreeScannerExecutorExecuteReadErrors(t *testing.T) {
 	adapter.AddDir(root, []fs.DirEntry{{Name: "child", IsDir: true}})
 	adapter.readErr[child] = fmt.Errorf("boom-child")
 
-	_, err = executor.Execute(context.Background(), NodeExecutionInput{Node: repository.WorkflowGraphNode{Config: map[string]any{"source_dir": root}}})
+	_, err = executor.Execute(context.Background(), NodeExecutionInput{
+		Node:   repository.WorkflowGraphNode{Config: map[string]any{}},
+		Inputs: testInputs(map[string]any{"source_dir": root}),
+	})
 	if err == nil {
 		t.Fatalf("Execute() child error = nil, want error")
 	}

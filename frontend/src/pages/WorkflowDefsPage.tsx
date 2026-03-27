@@ -13,7 +13,7 @@ export type WorkflowDefsPageProps = Record<string, never>
 const TEMPLATE_CLASSIFICATION_ONLY = JSON.stringify({
   nodes: [
     { id: 'n-trigger', type: 'trigger', label: '触发器', config: {}, inputs: {}, enabled: true, ui_position: { x: 60, y: 280 } },
-    { id: 'n-scanner', type: 'folder-tree-scanner', label: '目录树扫描器', config: { source_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 260, y: 280 } },
+    { id: 'n-scanner', type: 'folder-tree-scanner', label: '目录树扫描器', config: {}, inputs: {}, enabled: true, ui_position: { x: 260, y: 280 } },
     { id: 'n-kw', type: 'name-keyword-classifier', label: '关键词分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 100 } },
     { id: 'n-ft', type: 'file-tree-classifier', label: '文件树分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 260 } },
     { id: 'n-ext', type: 'ext-ratio-classifier', label: '扩展名分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 420 } },
@@ -32,7 +32,7 @@ const TEMPLATE_CLASSIFICATION_ONLY = JSON.stringify({
 const TEMPLATE_CLASSIFY_AND_MOVE = JSON.stringify({
   nodes: [
     { id: 'n-trigger', type: 'trigger', label: '触发器', config: {}, inputs: {}, enabled: true, ui_position: { x: 60, y: 320 } },
-    { id: 'n-scanner', type: 'folder-tree-scanner', label: '目录树扫描器', config: { source_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 260, y: 320 } },
+    { id: 'n-scanner', type: 'folder-tree-scanner', label: '目录树扫描器', config: {}, inputs: {}, enabled: true, ui_position: { x: 260, y: 320 } },
     { id: 'n-kw', type: 'name-keyword-classifier', label: '关键词分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 120 } },
     { id: 'n-ft', type: 'file-tree-classifier', label: '文件树分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 300 } },
     { id: 'n-ext', type: 'ext-ratio-classifier', label: '扩展名分类器', config: {}, inputs: {}, enabled: true, ui_position: { x: 520, y: 480 } },

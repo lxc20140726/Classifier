@@ -60,7 +60,7 @@ func main() {
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
 	scheduledWorkflowSvc := service.NewScheduledWorkflowService(scheduledWorkflowRepo, workflowRunnerSvc, scanJobStarterSvc)
 	scheduledWorkflowScheduler := service.NewScheduledWorkflowScheduler(scheduledWorkflowRepo, scheduledWorkflowSvc)
-	workflowRunnerSvc.RegisterExecutor(service.NewFolderTreeScannerExecutor(fsAdapter, cfg.SourceDir))
+	workflowRunnerSvc.RegisterExecutor(service.NewFolderTreeScannerExecutor(fsAdapter))
 	workflowRunnerSvc.RegisterExecutor(service.NewNameKeywordClassifierExecutor())
 	workflowRunnerSvc.RegisterExecutor(service.NewFileTreeClassifierExecutor())
 	workflowRunnerSvc.RegisterExecutor(service.NewConfidenceCheckExecutor())
