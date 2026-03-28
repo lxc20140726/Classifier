@@ -128,6 +128,9 @@ func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilt
 		term := "%" + filter.Q + "%"
 		args = append(args, term, term)
 	}
+	if filter.TopLevelOnly {
+		where = append(where, "relative_path <> ''", "instr(relative_path, '/') = 0", "instr(relative_path, char(92)) = 0")
+	}
 
 	whereClause := ""
 	if len(where) > 0 {
@@ -182,6 +185,44 @@ LIMIT ? OFFSET ?`,
 	}
 
 	return folders, total, nil
+}
+
+func (r *SQLiteFolderRepository) ListByPathPrefix(ctx context.Context, prefix string) ([]*Folder, error) {
+	trimmedPrefix := strings.TrimSpace(prefix)
+	if trimmedPrefix == "" {
+		return []*Folder{}, nil
+	}
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, path, source_dir, relative_path, name, category, category_source, status,
+	image_count, video_count, total_files, total_size, marked_for_move,
+	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
+FROM folders
+WHERE deleted_at IS NULL AND (path = ? OR path LIKE ? OR path LIKE ?)
+ORDER BY LENGTH(path) ASC, path ASC`,
+		trimmedPrefix,
+		trimmedPrefix+"/%",
+		trimmedPrefix+`\%`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("folderRepo.ListByPathPrefix query: %w", err)
+	}
+	defer rows.Close()
+
+	folders := make([]*Folder, 0)
+	for rows.Next() {
+		folder, scanErr := scanFolder(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("folderRepo.ListByPathPrefix scan: %w", scanErr)
+		}
+		folders = append(folders, folder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("folderRepo.ListByPathPrefix rows: %w", err)
+	}
+
+	return folders, nil
 }
 
 func (r *SQLiteFolderRepository) UpdateCategory(ctx context.Context, id, category, source string) error {

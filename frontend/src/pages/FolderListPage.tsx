@@ -650,6 +650,19 @@ export default function FolderListPage() {
         >
           已隐藏
         </button>
+        <div className="mx-2 w-0.5 bg-foreground" />
+        <button
+          type="button"
+          onClick={() => { setPage(1); setFilters({ ...filters, topLevelOnly: filters.topLevelOnly === false ? true : false }) }}
+          className={cn(
+            'border-2 px-4 py-1.5 text-xs font-bold transition-all hover:-translate-y-0.5 hover:shadow-hard',
+            (filters.topLevelOnly ?? true)
+              ? 'border-foreground bg-foreground text-background shadow-hard -translate-y-0.5'
+              : 'border-foreground bg-background text-foreground',
+          )}
+        >
+          {(filters.topLevelOnly ?? true) ? '仅一级目录' : '显示全部层级'}
+        </button>
       </div>
 
       <div className="flex flex-col gap-6 xl:flex-row">

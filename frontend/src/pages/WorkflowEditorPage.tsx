@@ -25,10 +25,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import gsap from 'gsap'
 
 import { ApiRequestError } from '@/api/client'
+import { listFolders } from '@/api/folders'
 import { DirPicker } from '@/components/DirPicker'
 import { Modal } from '@/components/Modal'
 import { startWorkflowJob } from '@/api/workflowRuns'
-import type { NodeRun, NodeRunStatus } from '@/types'
+import type { Folder, NodeRun, NodeRunStatus } from '@/types'
 import { listNodeTypes } from '@/api/nodeTypes'
 import { getWorkflowDef, updateWorkflowDef } from '@/api/workflowDefs'
 import { cn } from '@/lib/utils'
@@ -113,7 +114,7 @@ const NODE_CATEGORIES: NodeCategory[] = [
     iconColor: 'text-blue-600 dark:text-blue-400',
     accentClass: 'from-blue-500/20 to-indigo-500/10 border-blue-200 dark:from-blue-500/25 dark:to-indigo-500/15 dark:border-blue-700',
     borderHoverClass: 'hover:border-blue-300 dark:hover:border-blue-500',
-    types: new Set(['folder-tree-scanner', 'folder-picker', 'classification-reader', 'classification-preview']),
+    types: new Set(['folder-tree-scanner', 'folder-picker', 'classification-reader', 'db-subtree-reader', 'classification-preview']),
   },
   {
     label: '分类器',
@@ -647,6 +648,13 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
         </NodeUsageHint>
       )
 
+    case 'db-subtree-reader':
+      return (
+        <NodeUsageHint>
+          从数据库读取指定目录及其子目录的分类结果，重建完整子树供处理流使用。通常接在 folder-picker（记录模式）之后，再接 folder-splitter。
+        </NodeUsageHint>
+      )
+
     case 'classification-preview':
       return (
         <NodeUsageHint>
@@ -657,7 +665,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'folder-splitter':
       return (
         <NodeUsageHint>
-          将分类条目转为处理项列表。mixed 类别的文件夹会被拆分为一级子目录分别处理；其他类别直接透传。接在 classification-reader 之后，无需配置。
+          将分类条目拆分为处理项列表。开启 split_with_subdirs 后会递归拆分到叶子目录（不限 mixed），确保后续处理流聚焦单个目录。
         </NodeUsageHint>
       )
 
@@ -934,13 +942,59 @@ interface FolderPickerConfigPanelProps {
 }
 
 function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPickerConfigPanelProps) {
+  const [query, setQuery] = useState('')
+  const [recordsLoading, setRecordsLoading] = useState(true)
+  const [recordsError, setRecordsError] = useState<string | null>(null)
+  const [records, setRecords] = useState<Folder[]>([])
+
+  const sourceMode = typeof config['source_mode'] === 'string' && config['source_mode'] === 'folders'
+    ? 'folders'
+    : 'path'
+
   const rawPaths = config['paths']
   const paths: string[] = Array.isArray(rawPaths)
     ? rawPaths.filter((p): p is string => typeof p === 'string')
     : []
+  const rawFolderIDs = config['folder_ids']
+  const folderIDs: string[] = Array.isArray(rawFolderIDs)
+    ? rawFolderIDs.filter((item): item is string => typeof item === 'string')
+    : []
+
+  useEffect(() => {
+    let active = true
+    void listFolders({
+      q: query.trim() || undefined,
+      limit: 100,
+      page: 1,
+      top_level_only: false,
+    }).then((res) => {
+      if (!active) return
+      setRecords(res.data)
+    }).catch((err: unknown) => {
+      if (!active) return
+      setRecordsError(err instanceof Error ? err.message : '读取文件夹记录失败')
+    }).finally(() => {
+      if (active) setRecordsLoading(false)
+    })
+
+    return () => { active = false }
+  }, [query])
+
+  function setSourceMode(mode: 'path' | 'folders') {
+    updateNodeConfig(nodeId, 'source_mode', mode)
+    if (mode === 'path') {
+      updateNodeConfig(nodeId, 'folder_ids', '[]')
+      return
+    }
+    updateNodeConfig(nodeId, 'paths', '[]')
+  }
 
   function setPaths(next: string[]) {
     updateNodeConfig(nodeId, 'paths', JSON.stringify(next))
+  }
+
+  function setFolderIDs(next: string[]) {
+    updateNodeConfig(nodeId, 'folder_ids', JSON.stringify(next))
   }
 
   function addPath() {
@@ -956,42 +1010,118 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     setPaths(paths.filter((_, i) => i !== index))
   }
 
+  function toggleFolderRecord(id: string) {
+    if (folderIDs.includes(id)) {
+      setFolderIDs(folderIDs.filter((item) => item !== id))
+      return
+    }
+    setFolderIDs([...folderIDs, id])
+  }
+
   return (
     <div className="space-y-3">
       <NodeUsageHint>
-        folders 端口输出所有路径的目录树（接分类器）；path 端口输出第一个路径字符串（接目录树扫描器的 source_dir）。
+        支持两种互斥模式：路径模式（自选目录）与记录模式（从媒体文件夹记录选择）。folders 端口输出目录树，path 端口输出第一个目录路径。
       </NodeUsageHint>
-      <ConfigField label="文件夹路径列表" hint="每行一个文件夹路径，运行时直接作为目录树输出">
-        <div className="space-y-2">
-          {paths.map((p, i) => (
-            <div key={i} className="flex gap-2">
-              <div className="flex-1">
-                <DirPickerField
-                  value={p}
-                  onChange={(v) => updatePath(i, v)}
-                  placeholder="/data/folder"
-                  title="选择文件夹"
-                />
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setSourceMode('path')}
+          className={cn(
+            'border-2 px-3 py-2 text-xs font-bold transition-all',
+            sourceMode === 'path'
+              ? 'border-foreground bg-foreground text-background'
+              : 'border-foreground bg-background text-foreground',
+          )}
+        >
+          路径模式
+        </button>
+        <button
+          type="button"
+          onClick={() => setSourceMode('folders')}
+          className={cn(
+            'border-2 px-3 py-2 text-xs font-bold transition-all',
+            sourceMode === 'folders'
+              ? 'border-foreground bg-foreground text-background'
+              : 'border-foreground bg-background text-foreground',
+          )}
+        >
+          记录模式
+        </button>
+      </div>
+
+      {sourceMode === 'path' ? (
+        <ConfigField label="文件夹路径列表" hint="每行一个文件夹路径，运行时直接作为目录树输出">
+          <div className="space-y-2">
+            {paths.map((p, i) => (
+              <div key={i} className="flex gap-2">
+                <div className="flex-1">
+                  <DirPickerField
+                    value={p}
+                    onChange={(v) => updatePath(i, v)}
+                    placeholder="/data/folder"
+                    title="选择文件夹"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removePath(i)}
+                  className="shrink-0 border-2 border-foreground bg-background px-2 py-2 text-foreground transition-all hover:bg-foreground hover:text-background"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => removePath(i)}
-                className="shrink-0 border-2 border-foreground bg-background px-2 py-2 text-foreground transition-all hover:bg-foreground hover:text-background"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+            ))}
+            <button
+              type="button"
+              onClick={addPath}
+              className="flex w-full items-center justify-center gap-2 border-2 border-dashed border-foreground bg-background py-2 text-sm font-bold text-muted-foreground transition-all hover:border-solid hover:text-foreground"
+            >
+              <Plus className="h-4 w-4" />
+              添加文件夹
+            </button>
+          </div>
+        </ConfigField>
+      ) : (
+        <ConfigField label="媒体文件夹记录" hint="从已存在的媒体文件夹记录中选择多个目录">
+          <div className="space-y-2">
+            <input
+              value={query}
+              onChange={(e) => {
+                setRecordsLoading(true)
+                setRecordsError(null)
+                setQuery(e.target.value)
+              }}
+              placeholder="搜索路径或目录名"
+              className={FIELD_CLS}
+            />
+            <div className="max-h-64 space-y-1 overflow-auto border-2 border-foreground bg-muted/20 p-2">
+              {recordsLoading ? (
+                <p className="py-6 text-center text-xs font-bold text-muted-foreground">加载中...</p>
+              ) : recordsError ? (
+                <p className="py-6 text-center text-xs font-bold text-red-600">{recordsError}</p>
+              ) : records.length === 0 ? (
+                <p className="py-6 text-center text-xs font-bold text-muted-foreground">暂无可选记录</p>
+              ) : (
+                records.map((record) => (
+                  <label key={record.id} className="flex cursor-pointer items-start gap-2 border-2 border-foreground bg-background px-2 py-2">
+                    <input
+                      type="checkbox"
+                      checked={folderIDs.includes(record.id)}
+                      onChange={() => toggleFolderRecord(record.id)}
+                      className="mt-0.5 h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs font-black">{record.name}</span>
+                      <span className="block truncate font-mono text-[10px] text-muted-foreground">{record.path}</span>
+                    </span>
+                  </label>
+                ))
+              )}
             </div>
-          ))}
-          <button
-            type="button"
-            onClick={addPath}
-            className="flex w-full items-center justify-center gap-2 border-2 border-dashed border-foreground bg-background py-2 text-sm font-bold text-muted-foreground transition-all hover:border-solid hover:text-foreground"
-          >
-            <Plus className="h-4 w-4" />
-            添加文件夹
-          </button>
-        </div>
-      </ConfigField>
+          </div>
+        </ConfigField>
+      )}
     </div>
   )
 }

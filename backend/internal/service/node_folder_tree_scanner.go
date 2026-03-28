@@ -52,7 +52,7 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 
 func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
 	rawInputs := typedInputsToAny(input.Inputs)
-	sourceDir := strings.TrimSpace(anyString(rawInputs["source_dir"]))
+	sourceDir := normalizeWorkflowPath(anyString(rawInputs["source_dir"]))
 	if sourceDir == "" {
 		return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute: source_dir is required, connect an upstream node to the source_dir port")
 	}
@@ -87,7 +87,7 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 			continue
 		}
 
-		treePath := filepath.Join(sourceDir, entry.Name)
+		treePath := joinWorkflowPath(sourceDir, entry.Name)
 		tree, fileCount, err := e.buildTree(ctx, treePath, 0, maxDepth, excludeSet)
 		if err != nil {
 			return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute build tree for %q: %w", treePath, err)
@@ -130,7 +130,7 @@ func (e *folderTreeScannerExecutor) buildTree(ctx context.Context, path string, 
 				continue
 			}
 
-			childPath := filepath.Join(path, entry.Name)
+			childPath := joinWorkflowPath(path, entry.Name)
 			childTree, childFileCount, childErr := e.buildTree(ctx, childPath, depth+1, maxDepth, excludePatterns)
 			if childErr != nil {
 				return FolderTree{}, 0, childErr
@@ -157,7 +157,7 @@ func (e *folderTreeScannerExecutor) buildTree(ctx context.Context, path string, 
 	})
 
 	return FolderTree{
-		Path:    path,
+		Path:    normalizeWorkflowPath(path),
 		Name:    filepath.Base(path),
 		Files:   files,
 		Subdirs: subdirs,

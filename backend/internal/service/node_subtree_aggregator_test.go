@@ -47,6 +47,10 @@ func (r *subtreeAggregatorFakeFolderRepo) List(_ context.Context, _ repository.F
 	return nil, 0, nil
 }
 
+func (r *subtreeAggregatorFakeFolderRepo) ListByPathPrefix(_ context.Context, _ string) ([]*repository.Folder, error) {
+	return nil, nil
+}
+
 func (r *subtreeAggregatorFakeFolderRepo) UpdateCategory(_ context.Context, id, category, source string) error {
 	r.updateCategoryCalls = append(r.updateCategoryCalls, subtreeAggregatorUpdateCategoryCall{id: id, category: category, source: source})
 	if r.updateCategoryErr != nil {
@@ -98,7 +102,7 @@ func TestSubtreeAggregatorExecutorBatchMergeBySourcePath(t *testing.T) {
 
 	folderRepo := &subtreeAggregatorFakeFolderRepo{}
 	auditRepo := &subtreeAggregatorFakeAuditRepo{}
-	executor := newSubtreeAggregatorExecutor(folderRepo, NewAuditService(auditRepo))
+	executor := newSubtreeAggregatorExecutor(folderRepo, nil, NewAuditService(auditRepo))
 
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
 		SourceDir: "/src",
@@ -152,7 +156,7 @@ func TestSubtreeAggregatorExecutorRecursiveMixedAggregation(t *testing.T) {
 	t.Parallel()
 
 	folderRepo := &subtreeAggregatorFakeFolderRepo{}
-	executor := newSubtreeAggregatorExecutor(folderRepo, nil)
+	executor := newSubtreeAggregatorExecutor(folderRepo, nil, nil)
 
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
 		SourceDir: "/src",
@@ -199,7 +203,7 @@ func TestSubtreeAggregatorExecutorUniformChildrenAndStrongDirectSignalOverride(t
 
 	t.Run("uniform children inherit category", func(t *testing.T) {
 		folderRepo := &subtreeAggregatorFakeFolderRepo{}
-		executor := newSubtreeAggregatorExecutor(folderRepo, nil)
+		executor := newSubtreeAggregatorExecutor(folderRepo, nil, nil)
 
 		out, err := executor.Execute(context.Background(), NodeExecutionInput{
 			SourceDir: "/src",
@@ -230,7 +234,7 @@ func TestSubtreeAggregatorExecutorUniformChildrenAndStrongDirectSignalOverride(t
 
 	t.Run("strong direct signal overrides inferred category", func(t *testing.T) {
 		folderRepo := &subtreeAggregatorFakeFolderRepo{}
-		executor := newSubtreeAggregatorExecutor(folderRepo, nil)
+		executor := newSubtreeAggregatorExecutor(folderRepo, nil, nil)
 
 		out, err := executor.Execute(context.Background(), NodeExecutionInput{
 			SourceDir: "/src",
@@ -265,7 +269,7 @@ func TestSubtreeAggregatorExecutorUpdateError(t *testing.T) {
 	t.Parallel()
 
 	folderRepo := &subtreeAggregatorFakeFolderRepo{updateCategoryErr: errors.New("update-failed")}
-	executor := newSubtreeAggregatorExecutor(folderRepo, nil)
+	executor := newSubtreeAggregatorExecutor(folderRepo, nil, nil)
 	_, err := executor.Execute(context.Background(), NodeExecutionInput{
 		SourceDir: "/src",
 		Inputs: testInputs(map[string]any{

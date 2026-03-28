@@ -45,6 +45,7 @@ export interface AppConfig {
   scan_cron?: string
   source_dir?: string
   target_dir?: string
+  target_dirs?: string[]
   scan_input_dirs?: string[]
   output_dirs?: {
     video?: string
@@ -161,6 +162,7 @@ export type NodeType =
   | 'manual-classifier'
   | 'subtree-aggregator'
   | 'classification-reader'
+  | 'db-subtree-reader'
   | 'classification-preview'
   | 'folder-splitter'
   | 'category-router'

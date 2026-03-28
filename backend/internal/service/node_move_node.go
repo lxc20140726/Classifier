@@ -48,6 +48,7 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 	}
 
 	targetDir := stringConfig(input.Node.Config, "target_dir")
+	targetDir = normalizeWorkflowPath(targetDir)
 	if targetDir == "" {
 		targetDir = stringConfig(input.Node.Config, "targetDir")
 	}
@@ -96,19 +97,19 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 		if itemName == "" {
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: target item name is empty", e.Type())
 		}
-		sourcePath := strings.TrimSpace(item.SourcePath)
+		sourcePath := normalizeWorkflowPath(item.SourcePath)
 		if sourcePath == "" {
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item source_path is required", e.Type())
 		}
 
-		destinationPath := filepath.Join(targetDir, itemName)
+		destinationPath := joinWorkflowPath(targetDir, itemName)
 		finalPath, skipped, err := e.resolveDestinationPath(ctx, destinationPath, conflictPolicy)
 		if err != nil {
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: resolve destination for %q: %w", e.Type(), sourcePath, err)
 		}
 
 		if skipped {
-			results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: destinationPath, Status: "skipped"})
+			results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: normalizeWorkflowPath(destinationPath), Status: "skipped"})
 			movedItems = append(movedItems, item)
 			continue
 		}
@@ -123,11 +124,11 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 			}
 		}
 
-		item.SourcePath = finalPath
-		item.ParentPath = filepath.Dir(finalPath)
+		item.SourcePath = normalizeWorkflowPath(finalPath)
+		item.ParentPath = normalizeWorkflowPath(filepath.Dir(finalPath))
 		item.TargetName = filepath.Base(finalPath)
 		movedItems = append(movedItems, item)
-		results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: finalPath, Status: "moved"})
+		results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: normalizeWorkflowPath(finalPath), Status: "moved"})
 	}
 
 	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: movedItems}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
@@ -144,6 +145,8 @@ func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbac
 	}
 
 	for _, entry := range entries {
+		entry.TargetPath = normalizeWorkflowPath(entry.TargetPath)
+		entry.SourcePath = normalizeWorkflowPath(entry.SourcePath)
 		if strings.TrimSpace(entry.TargetPath) == "" || strings.TrimSpace(entry.SourcePath) == "" || entry.TargetPath == entry.SourcePath {
 			continue
 		}
@@ -332,9 +335,9 @@ func (e *phase4MoveNodeExecutor) resolveDestinationPath(ctx context.Context, des
 		return destinationPath, false, nil
 	case "auto_rename":
 		baseName := filepath.Base(destinationPath)
-		parentDir := filepath.Dir(destinationPath)
+		parentDir := normalizeWorkflowPath(filepath.Dir(destinationPath))
 		for index := 1; index <= 9999; index++ {
-			candidate := filepath.Join(parentDir, fmt.Sprintf("%s (%d)", baseName, index))
+			candidate := joinWorkflowPath(parentDir, fmt.Sprintf("%s (%d)", baseName, index))
 			taken, err := e.fs.Exists(ctx, candidate)
 			if err != nil {
 				return "", false, err

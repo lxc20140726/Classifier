@@ -372,6 +372,7 @@ func TestWorkflowRunnerServiceStartAndResume(t *testing.T) {
 	svc := NewWorkflowRunnerService(
 		jobRepo,
 		folderRepo,
+		repository.NewSnapshotRepository(database),
 		workflowDefRepo,
 		workflowRunRepo,
 		nodeRunRepo,
@@ -487,6 +488,7 @@ func TestWorkflowRunnerServicePortInputPropagation(t *testing.T) {
 	svc := NewWorkflowRunnerService(
 		jobRepo,
 		folderRepo,
+		repository.NewSnapshotRepository(database),
 		workflowDefRepo,
 		workflowRunRepo,
 		nodeRunRepo,
@@ -554,7 +556,7 @@ func TestWorkflowRunnerServiceRunsFoldersInParallel(t *testing.T) {
 	}
 
 	executor := &slowParallelExecutor{}
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(executor)
 
 	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
@@ -646,7 +648,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 				t.Fatalf("workflowDefRepo.Create() error = %v", err)
 			}
 
-			svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, auditSvc)
+			svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, auditSvc)
 			svc.RegisterExecutor(&auditOutputExecutor{nodeType: tc.nodeType, outputs: tc.outputs})
 
 			jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
@@ -706,7 +708,7 @@ func TestWorkflowRunnerServiceNamedSourcePortCompatibility(t *testing.T) {
 	}
 
 	consumer := &namedPortConsumerExecutor{}
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
 	svc.RegisterExecutor(&namedPortProducerExecutor{})
 	svc.RegisterExecutor(consumer)
 
@@ -764,7 +766,7 @@ func TestWorkflowRunnerServiceLazyRequiredInputSkipSemantics(t *testing.T) {
 		t.Fatalf("workflowDefRepo.Create() error = %v", err)
 	}
 
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
 	svc.RegisterExecutor(strict)
 	svc.RegisterExecutor(lazy)
 
@@ -825,7 +827,7 @@ func TestWorkflowRunnerServiceResumeDataPersistence(t *testing.T) {
 		t.Fatalf("workflowDefRepo.Create() error = %v", err)
 	}
 
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
 	svc.RegisterExecutor(resumeExecutor)
 
 	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
@@ -918,7 +920,7 @@ func TestWorkflowRunnerServicePhase4MoveRollback(t *testing.T) {
 		t.Fatalf("workflowDefRepo.Create() error = %v", err)
 	}
 
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(producer)
 
 	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
@@ -1029,7 +1031,7 @@ func TestEngineV2_AC_PROC1_ProcessingChainRenameAndMove(t *testing.T) {
 		t.Fatalf("workflowDefRepo.Create() error = %v", err)
 	}
 
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(producer)
 
 	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
@@ -1125,7 +1127,7 @@ func TestEngineV2_AC_ROLL4_MultiNodeReverseRollback(t *testing.T) {
 		t.Fatalf("workflowDefRepo.Create() error = %v", err)
 	}
 
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(producer)
 
 	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})

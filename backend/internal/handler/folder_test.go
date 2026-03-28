@@ -159,16 +159,15 @@ func TestFolderHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("scan returns 202 from scheduled scan jobs", func(t *testing.T) {
-		if err := scheduledRepo.Create(context.Background(), &repository.ScheduledWorkflow{
-			ID:         "scan-job",
-			Name:       "scan-job",
-			JobType:    "scan",
-			SourceDirs: `["/task/source","/task/other"]`,
-			CronSpec:   "0 * * * *",
-			Enabled:    true,
-		}); err != nil {
-			t.Fatalf("scheduledRepo.Create() error = %v", err)
+	t.Run("scan returns 202 from app_config target_dirs", func(t *testing.T) {
+		appConfig, err := configRepo.GetAppConfig(context.Background())
+		if err != nil {
+			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
+		}
+		appConfig.TargetDirs = []string{"/task/source", "/task/other"}
+		appConfig.TargetDir = "/task/source"
+		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
+			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
 		}
 
 		req := httptest.NewRequest(http.MethodPost, "/folders/scan", nil)
@@ -182,16 +181,19 @@ func TestFolderHandler(t *testing.T) {
 
 		call := <-starter.called
 		if len(call.sourceDirs) != 2 || call.sourceDirs[0] != "/task/source" || call.sourceDirs[1] != "/task/other" {
-			t.Fatalf("sourceDirs = %#v, want scheduled dirs", call.sourceDirs)
+			t.Fatalf("sourceDirs = %#v, want target_dirs", call.sourceDirs)
 		}
 	})
 
-	t.Run("scan falls back to config when no scheduled scan jobs", func(t *testing.T) {
-		if err := scheduledRepo.Delete(context.Background(), "scan-job"); err != nil {
-			t.Fatalf("scheduledRepo.Delete() error = %v", err)
+	t.Run("scan falls back to target_dir when target_dirs empty", func(t *testing.T) {
+		appConfig, err := configRepo.GetAppConfig(context.Background())
+		if err != nil {
+			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
 		}
-		if err := configRepo.Set(context.Background(), "scan_input_dirs", `["/test/source","/test/other"]`); err != nil {
-			t.Fatalf("configRepo.Set() error = %v", err)
+		appConfig.TargetDirs = []string{}
+		appConfig.TargetDir = "/test/source"
+		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
+			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
 		}
 
 		req := httptest.NewRequest(http.MethodPost, "/folders/scan", nil)
@@ -204,8 +206,8 @@ func TestFolderHandler(t *testing.T) {
 		}
 
 		call := <-starter.called
-		if len(call.sourceDirs) != 2 || call.sourceDirs[0] != "/test/source" || call.sourceDirs[1] != "/test/other" {
-			t.Fatalf("sourceDirs = %#v, want configured dirs", call.sourceDirs)
+		if len(call.sourceDirs) != 1 || call.sourceDirs[0] != "/test/source" {
+			t.Fatalf("sourceDirs = %#v, want target_dir fallback", call.sourceDirs)
 		}
 	})
 

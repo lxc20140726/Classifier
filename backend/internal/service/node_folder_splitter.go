@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,7 +30,7 @@ func (e *folderSplitterNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
 		Label:       "文件夹拆分器",
-		Description: "将分类条目转为处理项列表；mixed 类别的文件夹会拆分为一级子目录分别处理",
+		Description: "将分类条目转为处理项列表；支持递归拆分到叶子目录，确保后续处理流聚焦单个目录",
 		Inputs: []PortDef{
 			{Name: "entry", Type: PortTypeJSON, Description: "已分类条目", Required: true},
 		},
@@ -47,11 +48,17 @@ func (e *folderSplitterNodeExecutor) Execute(_ context.Context, input NodeExecut
 	}
 
 	splitMixed := folderSplitterBoolConfig(input.Node.Config, "split_mixed", true)
+	splitWithSubdirs := folderSplitterBoolConfig(input.Node.Config, "split_with_subdirs", true)
 	splitDepth := intConfig(input.Node.Config, "split_depth", 1)
+	if splitWithSubdirs {
+		splitDepth = math.MaxInt32
+	}
 
 	items := []ProcessingItem{folderSplitterBuildSelfItem(entry)}
-	if strings.EqualFold(entry.Category, "mixed") && splitMixed && splitDepth > 0 {
-		splitItems := folderSplitterBuildFirstLevelItems(entry)
+	shouldSplit := (splitWithSubdirs && len(entry.Subtree) > 0) ||
+		(strings.EqualFold(entry.Category, "mixed") && splitMixed && splitDepth > 0)
+	if shouldSplit {
+		splitItems := folderSplitterBuildRecursiveItems(entry, splitDepth, splitWithSubdirs)
 		if len(splitItems) > 0 {
 			items = splitItems
 		}
@@ -106,48 +113,46 @@ func folderSplitterBuildSelfItem(entry ClassifiedEntry) ProcessingItem {
 	}
 }
 
-func folderSplitterBuildFirstLevelItems(entry ClassifiedEntry) []ProcessingItem {
-	if len(entry.Subtree) == 0 {
+func folderSplitterBuildRecursiveItems(entry ClassifiedEntry, splitDepth int, splitWithSubdirs bool) []ProcessingItem {
+	if len(entry.Subtree) == 0 || splitDepth <= 0 {
 		return nil
 	}
 
-	out := make([]ProcessingItem, 0, len(entry.Subtree))
-	for _, child := range entry.Subtree {
-		if !folderSplitterIsFirstLevelChild(entry, child) {
-			continue
+	collected := make([]ProcessingItem, 0)
+	folderSplitterCollectItems(entry, splitDepth, splitWithSubdirs, &collected)
+	sort.Slice(collected, func(i, j int) bool {
+		if collected[i].SourcePath == collected[j].SourcePath {
+			return collected[i].FolderName < collected[j].FolderName
 		}
-
-		category := child.Category
-		if category == "" {
-			category = entry.Category
-		}
-		folderID := child.FolderID
-		if folderID == "" {
-			folderID = entry.FolderID
-		}
-
-		out = append(out, ProcessingItem{
-			SourcePath: child.Path,
-			FolderID:   folderID,
-			FolderName: child.Name,
-			TargetName: child.Name,
-			Category:   category,
-			Files:      append([]FileEntry(nil), child.Files...),
-			ParentPath: entry.Path,
-		})
-	}
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SourcePath == out[j].SourcePath {
-			return out[i].FolderName < out[j].FolderName
-		}
-		return out[i].SourcePath < out[j].SourcePath
+		return collected[i].SourcePath < collected[j].SourcePath
 	})
 
-	return out
+	return collected
 }
 
-func folderSplitterIsFirstLevelChild(entry ClassifiedEntry, child ClassifiedEntry) bool {
+func folderSplitterCollectItems(entry ClassifiedEntry, depth int, splitWithSubdirs bool, out *[]ProcessingItem) {
+	if depth <= 0 || len(entry.Subtree) == 0 {
+		*out = append(*out, folderSplitterBuildSelfItem(entry))
+		return
+	}
+
+	for _, child := range entry.Subtree {
+		if !folderSplitterIsDirectChild(entry, child) {
+			continue
+		}
+		if splitWithSubdirs && len(child.Subtree) > 0 {
+			folderSplitterCollectItems(child, depth-1, splitWithSubdirs, out)
+			continue
+		}
+		if !splitWithSubdirs && len(child.Subtree) > 0 && depth-1 > 0 {
+			folderSplitterCollectItems(child, depth-1, splitWithSubdirs, out)
+			continue
+		}
+		*out = append(*out, folderSplitterBuildSelfItem(child))
+	}
+}
+
+func folderSplitterIsDirectChild(entry ClassifiedEntry, child ClassifiedEntry) bool {
 	if entry.Path != "" && child.Path != "" {
 		rel, err := filepath.Rel(entry.Path, child.Path)
 		if err == nil && rel != "." && !strings.HasPrefix(rel, "..") {

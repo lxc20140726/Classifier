@@ -82,6 +82,7 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 	if outputDir == "" {
 		outputDir = ".thumbnails"
 	}
+	outputDir = normalizeWorkflowPath(outputDir)
 
 	createTarget := folderSplitterBoolConfig(input.Node.Config, "create_target_if_missing", true)
 	outExists, err := e.fs.Exists(ctx, outputDir)
@@ -114,7 +115,7 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 		if strings.TrimSpace(outputName) == "" {
 			outputName = filepath.Base(strings.TrimSpace(item.SourcePath))
 		}
-		thumbnailPath := filepath.Join(outputDir, outputName+".jpg")
+		thumbnailPath := joinWorkflowPath(outputDir, outputName+".jpg")
 
 		args := thumbnailNodeBuildArgs(videoPath, thumbnailPath, offsetSeconds, width)
 		combined, err := e.runFFmpeg(ctx, ffmpegPath, args...)
@@ -355,7 +356,7 @@ func (e *thumbnailNodeExecutor) representativeVideoPath(ctx context.Context, ite
 		return "", fmt.Errorf("no direct video file found in %q", sourcePath)
 	}
 
-	return filepath.Join(sourcePath, bestName), nil
+	return joinWorkflowPath(sourcePath, bestName), nil
 }
 
 func thumbnailNodeBuildArgs(videoPath, outputPath string, offsetSeconds, width int) []string {

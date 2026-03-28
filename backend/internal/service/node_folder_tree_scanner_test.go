@@ -117,8 +117,8 @@ func TestFolderTreeScannerExecutorExecuteUsesPortAndDefaultExcludes(t *testing.T
 		t.Fatalf("len(trees) = %d, want 1", len(trees))
 	}
 	tree := trees[0]
-	if tree.Name != "album" || tree.Path != albumPath {
-		t.Fatalf("tree name/path = %q/%q, want album/%q", tree.Name, tree.Path, albumPath)
+	if tree.Name != "album" || tree.Path != normalizeWorkflowPath(albumPath) {
+		t.Fatalf("tree name/path = %q/%q, want album/%q", tree.Name, tree.Path, normalizeWorkflowPath(albumPath))
 	}
 	if len(tree.Files) != 1 || tree.Files[0].Name != "a.jpg" || tree.Files[0].Ext != ".jpg" {
 		t.Fatalf("tree files = %+v, want only a.jpg", tree.Files)

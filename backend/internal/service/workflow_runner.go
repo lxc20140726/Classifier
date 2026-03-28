@@ -127,6 +127,7 @@ type WorkflowNodeExecutor interface {
 type WorkflowRunnerService struct {
 	jobs          repository.JobRepository
 	folders       repository.FolderRepository
+	snapshots     repository.SnapshotRepository
 	workflowDefs  repository.WorkflowDefinitionRepository
 	workflowRuns  repository.WorkflowRunRepository
 	nodeRuns      repository.NodeRunRepository
@@ -140,6 +141,7 @@ type WorkflowRunnerService struct {
 func NewWorkflowRunnerService(
 	jobRepo repository.JobRepository,
 	folderRepo repository.FolderRepository,
+	snapshotRepo repository.SnapshotRepository,
 	workflowDefRepo repository.WorkflowDefinitionRepository,
 	workflowRunRepo repository.WorkflowRunRepository,
 	nodeRunRepo repository.NodeRunRepository,
@@ -151,6 +153,7 @@ func NewWorkflowRunnerService(
 	svc := &WorkflowRunnerService{
 		jobs:          jobRepo,
 		folders:       folderRepo,
+		snapshots:     snapshotRepo,
 		workflowDefs:  workflowDefRepo,
 		workflowRuns:  workflowRunRepo,
 		nodeRuns:      nodeRunRepo,
@@ -168,8 +171,9 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newConfidenceCheckExecutor())
 	svc.RegisterExecutor(&extRatioClassifierNodeExecutor{fs: fsAdapter})
 	svc.RegisterExecutor(newManualClassifierExecutor())
-	svc.RegisterExecutor(newSubtreeAggregatorExecutor(folderRepo, auditSvc))
+	svc.RegisterExecutor(newSubtreeAggregatorExecutor(folderRepo, snapshotRepo, auditSvc))
 	svc.RegisterExecutor(newClassificationReaderExecutor())
+	svc.RegisterExecutor(newDBSubtreeReaderExecutor(folderRepo))
 	svc.RegisterExecutor(newFolderSplitterExecutor())
 	svc.RegisterExecutor(newCategoryRouterExecutor())
 	svc.RegisterExecutor(newRenameNodeExecutor())
@@ -179,7 +183,7 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newAuditLogNodeExecutor(auditSvc))
 	svc.RegisterExecutor(newClassificationPreviewNodeExecutor())
 	svc.RegisterExecutor(newFolderSelectorNodeExecutor())
-	svc.RegisterExecutor(newFolderPickerNodeExecutor(fsAdapter))
+	svc.RegisterExecutor(newFolderPickerNodeExecutor(fsAdapter, folderRepo))
 
 	return svc
 }

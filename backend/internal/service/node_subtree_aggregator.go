@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,16 +16,25 @@ import (
 const subtreeAggregatorExecutorType = "subtree-aggregator"
 
 type subtreeAggregatorNodeExecutor struct {
-	folders repository.FolderRepository
-	audit   *AuditService
+	folders   repository.FolderRepository
+	snapshots repository.SnapshotRepository
+	audit     *AuditService
 }
 
-func newSubtreeAggregatorExecutor(folders repository.FolderRepository, audit *AuditService) *subtreeAggregatorNodeExecutor {
-	return &subtreeAggregatorNodeExecutor{folders: folders, audit: audit}
+func newSubtreeAggregatorExecutor(
+	folders repository.FolderRepository,
+	snapshots repository.SnapshotRepository,
+	audit *AuditService,
+) *subtreeAggregatorNodeExecutor {
+	return &subtreeAggregatorNodeExecutor{folders: folders, snapshots: snapshots, audit: audit}
 }
 
-func NewSubtreeAggregatorExecutor(folders repository.FolderRepository, audit *AuditService) WorkflowNodeExecutor {
-	return newSubtreeAggregatorExecutor(folders, audit)
+func NewSubtreeAggregatorExecutor(
+	folders repository.FolderRepository,
+	snapshots repository.SnapshotRepository,
+	audit *AuditService,
+) WorkflowNodeExecutor {
+	return newSubtreeAggregatorExecutor(folders, snapshots, audit)
 }
 
 func (e *subtreeAggregatorNodeExecutor) Type() string {
@@ -103,7 +114,7 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 	}
 
 	bestSignal := pickBestSignalByPath(tree.Path, signalsBySource)
-	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, subtreeEntries)
+	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, subtreeEntries, tree.Files)
 	if finalCategory == "" {
 		finalCategory = folder.Category
 	}
@@ -111,8 +122,16 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 		finalCategory = "other"
 	}
 
+	snapshotID, err := e.createCategorySnapshot(ctx, input, folder, tree.Path)
+	if err != nil {
+		return ClassifiedEntry{}, fmt.Errorf("create category snapshot for folder %q: %w", folder.ID, err)
+	}
+
 	if err := e.folders.UpdateCategory(ctx, folder.ID, finalCategory, "workflow"); err != nil {
 		return ClassifiedEntry{}, fmt.Errorf("update category for folder %q: %w", folder.ID, err)
+	}
+	if err := e.commitCategorySnapshot(ctx, snapshotID, folder, finalCategory); err != nil {
+		return ClassifiedEntry{}, fmt.Errorf("commit category snapshot for folder %q: %w", folder.ID, err)
 	}
 
 	entry := ClassifiedEntry{
@@ -149,12 +168,16 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 	return entry, nil
 }
 
-func aggregateTreeCategory(bestSignal ClassificationSignal, subtreeEntries []ClassifiedEntry) (string, float64, string) {
+func aggregateTreeCategory(bestSignal ClassificationSignal, subtreeEntries []ClassifiedEntry, leafFiles []FileEntry) (string, float64, string) {
 	if len(subtreeEntries) == 0 {
 		if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) != "" {
 			return bestSignal.Category, bestSignal.Confidence, bestSignal.Reason
 		}
-		return "other", 0, "no signal"
+		leafCategory := inferLeafCategory(leafFiles)
+		if leafCategory != "other" {
+			return leafCategory, 0.7, "leaf:ext-ratio"
+		}
+		return "other", 0, "leaf:no-signal"
 	}
 
 	childCategories := make(map[string]struct{}, len(subtreeEntries))
@@ -183,6 +206,26 @@ func aggregateTreeCategory(bestSignal ClassificationSignal, subtreeEntries []Cla
 		return inferredCategory, 1, "subtree:mixed"
 	}
 	return inferredCategory, 1, "subtree:uniform"
+}
+
+func inferLeafCategory(files []FileEntry) string {
+	if len(files) == 0 {
+		return "other"
+	}
+
+	fileNames := make([]string, 0, len(files))
+	for _, file := range files {
+		name := strings.TrimSpace(file.Name)
+		if name == "" {
+			continue
+		}
+		fileNames = append(fileNames, name)
+	}
+	if len(fileNames) == 0 {
+		return "other"
+	}
+
+	return Classify("", fileNames)
 }
 
 func (e *subtreeAggregatorNodeExecutor) ensureFolderForTree(ctx context.Context, input NodeExecutionInput, tree FolderTree) (*repository.Folder, error) {
@@ -250,8 +293,163 @@ func (e *subtreeAggregatorNodeExecutor) Resume(_ context.Context, _ NodeExecutio
 	return NodeExecutionOutput{}, fmt.Errorf("%s: Resume not supported", e.Type())
 }
 
-func (e *subtreeAggregatorNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+func (e *subtreeAggregatorNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {
+	if e.snapshots == nil || input.WorkflowRun == nil || input.NodeRun == nil {
+		return nil
+	}
+
+	allSnapshots, err := e.snapshots.ListByJobID(ctx, input.WorkflowRun.JobID)
+	if err != nil {
+		return fmt.Errorf("%s.Rollback list snapshots: %w", e.Type(), err)
+	}
+
+	filtered := make([]*repository.Snapshot, 0, len(allSnapshots))
+	for _, snapshot := range allSnapshots {
+		if snapshot == nil || snapshot.OperationType != "classify" {
+			continue
+		}
+		if !snapshotMatchesNodeRun(snapshot.Detail, input.WorkflowRun.ID, input.NodeRun.ID) {
+			continue
+		}
+		filtered = append(filtered, snapshot)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+	})
+
+	for _, snapshot := range filtered {
+		before := snapshotBeforeFolder{}
+		if err := json.Unmarshal(snapshot.Before, &before); err != nil {
+			return fmt.Errorf("%s.Rollback parse snapshot before %q: %w", e.Type(), snapshot.ID, err)
+		}
+		category := strings.TrimSpace(before.Category)
+		if category == "" {
+			category = "other"
+		}
+		source := strings.TrimSpace(before.CategorySource)
+		if source == "" {
+			source = "workflow"
+		}
+		if err := e.folders.UpdateCategory(ctx, snapshot.FolderID, category, source); err != nil {
+			return fmt.Errorf("%s.Rollback restore category for folder %q: %w", e.Type(), snapshot.FolderID, err)
+		}
+		_ = e.snapshots.UpdateStatus(ctx, snapshot.ID, "reverted")
+	}
+
 	return nil
+}
+
+type snapshotBeforeFolder struct {
+	Category       string `json:"category"`
+	CategorySource string `json:"category_source"`
+}
+
+type snapshotAfterFolder struct {
+	Category       string `json:"category"`
+	CategorySource string `json:"category_source"`
+}
+
+func (e *subtreeAggregatorNodeExecutor) createCategorySnapshot(
+	ctx context.Context,
+	input NodeExecutionInput,
+	folder *repository.Folder,
+	folderPath string,
+) (string, error) {
+	if e.snapshots == nil || folder == nil {
+		return "", nil
+	}
+
+	before, err := json.Marshal(snapshotBeforeFolder{
+		Category:       folder.Category,
+		CategorySource: folder.CategorySource,
+	})
+	if err != nil {
+		return "", err
+	}
+	detail, err := json.Marshal(map[string]any{
+		"workflow_run_id": workflowRunID(input.WorkflowRun),
+		"node_run_id":     nodeRunIDForSnapshot(input.NodeRun),
+		"folder_path":     folderPath,
+		"node_type":       e.Type(),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	snapshotID := uuid.NewString()
+	if err := e.snapshots.Create(ctx, &repository.Snapshot{
+		ID:            snapshotID,
+		JobID:         workflowJobIDForSnapshot(input.WorkflowRun),
+		FolderID:      folder.ID,
+		OperationType: "classify",
+		Before:        before,
+		After:         nil,
+		Detail:        detail,
+		Status:        "pending",
+	}); err != nil {
+		return "", err
+	}
+
+	return snapshotID, nil
+}
+
+func (e *subtreeAggregatorNodeExecutor) commitCategorySnapshot(
+	ctx context.Context,
+	snapshotID string,
+	folder *repository.Folder,
+	finalCategory string,
+) error {
+	if e.snapshots == nil || strings.TrimSpace(snapshotID) == "" || folder == nil {
+		return nil
+	}
+
+	after, err := json.Marshal(snapshotAfterFolder{
+		Category:       finalCategory,
+		CategorySource: "workflow",
+	})
+	if err != nil {
+		return err
+	}
+	if err := e.snapshots.CommitAfter(ctx, snapshotID, after); err != nil {
+		return err
+	}
+	if err := e.snapshots.UpdateStatus(ctx, snapshotID, "committed"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func workflowJobIDForSnapshot(run *repository.WorkflowRun) string {
+	if run == nil {
+		return ""
+	}
+
+	return run.JobID
+}
+
+func nodeRunIDForSnapshot(run *repository.NodeRun) string {
+	if run == nil {
+		return ""
+	}
+
+	return run.ID
+}
+
+func snapshotMatchesNodeRun(detail json.RawMessage, workflowRunID, nodeRunID string) bool {
+	if len(detail) == 0 {
+		return false
+	}
+	var parsed struct {
+		WorkflowRunID string `json:"workflow_run_id"`
+		NodeRunID     string `json:"node_run_id"`
+	}
+	if err := json.Unmarshal(detail, &parsed); err != nil {
+		return false
+	}
+
+	return strings.TrimSpace(parsed.WorkflowRunID) == strings.TrimSpace(workflowRunID) &&
+		strings.TrimSpace(parsed.NodeRunID) == strings.TrimSpace(nodeRunID)
 }
 
 func buildSignalIndex(inputs map[string]any) (map[string]map[string]ClassificationSignal, error) {

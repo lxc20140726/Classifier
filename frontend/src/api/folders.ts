@@ -8,6 +8,7 @@ export interface FolderQueryParams {
   page?: number
   limit?: number
   only_deleted?: boolean
+  top_level_only?: boolean
 }
 
 interface RawFolder {
@@ -78,6 +79,7 @@ export async function listFolders(params: FolderQueryParams = {}): Promise<Pagin
   if (params.page) search.set('page', String(params.page))
   if (params.limit) search.set('limit', String(params.limit))
   if (params.only_deleted) search.set('only_deleted', 'true')
+  if (params.top_level_only) search.set('top_level_only', 'true')
 
   const suffix = search.toString() ? `?${search.toString()}` : ''
   const response = await request<PaginatedResponse<RawFolder>>(`/folders${suffix}`)

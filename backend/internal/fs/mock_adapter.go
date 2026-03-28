@@ -33,7 +33,7 @@ func (m *MockAdapter) AddDir(path string, entries []DirEntry) {
 
 	cloned := make([]DirEntry, len(entries))
 	copy(cloned, entries)
-	m.dirs[path] = cloned
+	m.dirs[normalizePath(path)] = cloned
 }
 
 func (m *MockAdapter) ReadDir(ctx context.Context, path string) ([]DirEntry, error) {
@@ -44,7 +44,7 @@ func (m *MockAdapter) ReadDir(ctx context.Context, path string) ([]DirEntry, err
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	entries, ok := m.dirs[path]
+	entries, ok := m.dirs[normalizePath(path)]
 	if !ok {
 		return nil, fmt.Errorf("MockAdapter.ReadDir: %w", os.ErrNotExist)
 	}
@@ -58,10 +58,11 @@ func (m *MockAdapter) AddFile(path string, content []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	normalizedPath := normalizePath(path)
 	data := append([]byte(nil), content...)
-	m.fileContents[path] = data
-	m.files[path] = FileInfo{
-		Name:    filepath.Base(path),
+	m.fileContents[normalizedPath] = data
+	m.files[normalizedPath] = FileInfo{
+		Name:    filepath.Base(normalizedPath),
 		IsDir:   false,
 		Size:    int64(len(data)),
 		ModTime: time.Now().UTC(),
@@ -76,7 +77,7 @@ func (m *MockAdapter) Stat(ctx context.Context, path string) (FileInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	info, ok := m.files[path]
+	info, ok := m.files[normalizePath(path)]
 	if !ok {
 		return FileInfo{}, fmt.Errorf("MockAdapter.Stat: %w", os.ErrNotExist)
 	}
@@ -92,15 +93,17 @@ func (m *MockAdapter) MoveDir(ctx context.Context, src, dst string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	entries, ok := m.dirs[src]
+	normalizedSrc := normalizePath(src)
+	normalizedDst := normalizePath(dst)
+	entries, ok := m.dirs[normalizedSrc]
 	if !ok {
 		return fmt.Errorf("MockAdapter.MoveDir: %w", os.ErrNotExist)
 	}
 
 	cloned := make([]DirEntry, len(entries))
 	copy(cloned, entries)
-	m.dirs[dst] = cloned
-	delete(m.dirs, src)
+	m.dirs[normalizedDst] = cloned
+	delete(m.dirs, normalizedSrc)
 	return nil
 }
 
@@ -112,8 +115,9 @@ func (m *MockAdapter) MkdirAll(ctx context.Context, path string, _ os.FileMode) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, ok := m.dirs[path]; !ok {
-		m.dirs[path] = []DirEntry{}
+	normalizedPath := normalizePath(path)
+	if _, ok := m.dirs[normalizedPath]; !ok {
+		m.dirs[normalizedPath] = []DirEntry{}
 	}
 
 	return nil
@@ -127,20 +131,22 @@ func (m *MockAdapter) Remove(ctx context.Context, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	normalizedPath := normalizePath(path)
+	prefix := normalizedPath + "/"
 	for key := range m.dirs {
-		if key == path || strings.HasPrefix(key, path+string(os.PathSeparator)) {
+		if key == normalizedPath || strings.HasPrefix(key, prefix) {
 			delete(m.dirs, key)
 		}
 	}
 	for key := range m.files {
-		if key == path || strings.HasPrefix(key, path+string(os.PathSeparator)) {
+		if key == normalizedPath || strings.HasPrefix(key, prefix) {
 			delete(m.files, key)
 			delete(m.fileContents, key)
 		}
 	}
 
-	delete(m.files, path)
-	delete(m.fileContents, path)
+	delete(m.files, normalizedPath)
+	delete(m.fileContents, normalizedPath)
 	return nil
 }
 
@@ -152,11 +158,12 @@ func (m *MockAdapter) Exists(ctx context.Context, path string) (bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if _, ok := m.dirs[path]; ok {
+	normalizedPath := normalizePath(path)
+	if _, ok := m.dirs[normalizedPath]; ok {
 		return true, nil
 	}
 
-	if _, ok := m.files[path]; ok {
+	if _, ok := m.files[normalizedPath]; ok {
 		return true, nil
 	}
 
@@ -171,9 +178,10 @@ func (m *MockAdapter) OpenFileRead(ctx context.Context, path string) (io.ReadClo
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	content, ok := m.fileContents[path]
+	normalizedPath := normalizePath(path)
+	content, ok := m.fileContents[normalizedPath]
 	if !ok {
-		if _, exists := m.files[path]; !exists {
+		if _, exists := m.files[normalizedPath]; !exists {
 			return nil, fmt.Errorf("MockAdapter.OpenFileRead: %w", os.ErrNotExist)
 		}
 		content = nil
@@ -187,7 +195,7 @@ func (m *MockAdapter) OpenFileWrite(ctx context.Context, path string, _ os.FileM
 		return nil, err
 	}
 
-	return &mockWriteCloser{adapter: m, path: path}, nil
+	return &mockWriteCloser{adapter: m, path: normalizePath(path)}, nil
 }
 
 type mockWriteCloser struct {
@@ -216,9 +224,10 @@ func (w *mockWriteCloser) Close() error {
 	w.adapter.mu.Lock()
 	defer w.adapter.mu.Unlock()
 
-	w.adapter.fileContents[w.path] = data
-	w.adapter.files[w.path] = FileInfo{
-		Name:    filepath.Base(w.path),
+	normalizedPath := normalizePath(w.path)
+	w.adapter.fileContents[normalizedPath] = data
+	w.adapter.files[normalizedPath] = FileInfo{
+		Name:    filepath.Base(normalizedPath),
 		IsDir:   false,
 		Size:    int64(len(data)),
 		ModTime: time.Now().UTC(),
@@ -228,3 +237,12 @@ func (w *mockWriteCloser) Close() error {
 }
 
 var _ FSAdapter = (*MockAdapter)(nil)
+
+func normalizePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+
+	return filepath.ToSlash(filepath.Clean(trimmed))
+}

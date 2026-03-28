@@ -305,16 +305,17 @@ func newPhase3WorkflowTestEnv(t *testing.T, adapter *fs.MockAdapter) (*WorkflowR
 	workflowRunRepo := repository.NewWorkflowRunRepository(database)
 	nodeRunRepo := repository.NewNodeRunRepository(database)
 	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+	snapshotRepo := repository.NewSnapshotRepository(database)
 	auditRepo := repository.NewAuditRepository(database)
 
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
-	svc.RegisterExecutor(newFolderPickerNodeExecutor(adapter))
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, snapshotRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc.RegisterExecutor(newFolderPickerNodeExecutor(adapter, folderRepo))
 	svc.RegisterExecutor(NewFolderTreeScannerExecutor(adapter))
 	svc.RegisterExecutor(NewNameKeywordClassifierExecutor())
 	svc.RegisterExecutor(NewFileTreeClassifierExecutor())
 	svc.RegisterExecutor(NewConfidenceCheckExecutor())
 	svc.RegisterExecutor(NewManualClassifierExecutor())
-	svc.RegisterExecutor(NewSubtreeAggregatorExecutor(folderRepo, NewAuditService(auditRepo)))
+	svc.RegisterExecutor(NewSubtreeAggregatorExecutor(folderRepo, snapshotRepo, NewAuditService(auditRepo)))
 
 	return svc, jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo
 }

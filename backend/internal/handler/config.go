@@ -33,6 +33,7 @@ type appConfigPatchRequest struct {
 	ScanCron      *string                   `json:"scan_cron"`
 	SourceDir     *string                   `json:"source_dir"`
 	TargetDir     *string                   `json:"target_dir"`
+	TargetDirs    *[]string                 `json:"target_dirs"`
 	OutputDirs    *appConfigOutputDirsPatch `json:"output_dirs"`
 }
 
@@ -116,6 +117,9 @@ func applyAppConfigPatch(target *repository.AppConfig, patch appConfigPatchReque
 	}
 	if patch.TargetDir != nil {
 		target.TargetDir = *patch.TargetDir
+	}
+	if patch.TargetDirs != nil {
+		target.TargetDirs = *patch.TargetDirs
 	}
 	if patch.OutputDirs != nil {
 		if patch.OutputDirs.Video != nil {

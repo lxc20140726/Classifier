@@ -17,6 +17,7 @@ export interface FolderFilters {
   category?: Category
   q?: string
   onlyDeleted?: boolean
+  topLevelOnly?: boolean
 }
 
 interface ScanProgressState {
@@ -62,6 +63,7 @@ function buildQuery(filters: FolderFilters, page: number, limit: number): Folder
     category: filters.category,
     q: filters.q,
     only_deleted: filters.onlyDeleted,
+    top_level_only: filters.topLevelOnly ?? true,
     page,
     limit,
   }

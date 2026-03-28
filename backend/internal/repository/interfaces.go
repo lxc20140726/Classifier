@@ -10,6 +10,7 @@ type FolderRepository interface {
 	Upsert(ctx context.Context, f *Folder) error
 	GetByID(ctx context.Context, id string) (*Folder, error)
 	GetByPath(ctx context.Context, path string) (*Folder, error)
+	ListByPathPrefix(ctx context.Context, prefix string) ([]*Folder, error)
 	List(ctx context.Context, filter FolderListFilter) ([]*Folder, int, error)
 	UpdateCategory(ctx context.Context, id, category, source string) error
 	UpdateStatus(ctx context.Context, id, status string) error

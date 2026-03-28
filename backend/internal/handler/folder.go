@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -82,6 +81,7 @@ func (h *FolderHandler) List(c *gin.Context) {
 		Limit:          limit,
 		IncludeDeleted: c.Query("include_deleted") == "true",
 		OnlyDeleted:    c.Query("only_deleted") == "true",
+		TopLevelOnly:   c.Query("top_level_only") == "true",
 	}
 
 	items, total, err := h.folders.List(c.Request.Context(), filter)
@@ -141,89 +141,37 @@ func (h *FolderHandler) Scan(c *gin.Context) {
 }
 
 func (h *FolderHandler) resolveScanSourceDirs(ctx context.Context) ([]string, error) {
-	// Priority order:
-	// 1) enabled scheduled scan jobs source_dirs
-	// 2) app config scan_input_dirs
-	// 3) app config source_dir
-	// 4) process env fallback SOURCE_DIR (injected as defaultSourceDir)
-	if h.scheduledJobs != nil {
-		sourceDirs, err := h.resolveScheduledScanDirs(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if len(sourceDirs) > 0 {
-			return sourceDirs, nil
-		}
+	if h.config == nil {
+		return nil, errors.New("config repository is required")
 	}
 
-	if h.config != nil {
-		sourceDirs, err := h.resolveConfigScanDirs(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if len(sourceDirs) > 0 {
-			return sourceDirs, nil
-		}
-	}
-
-	if h.defaultSourceDir == "" {
-		return nil, nil
-	}
-	return []string{h.defaultSourceDir}, nil
-}
-
-func (h *FolderHandler) resolveScheduledScanDirs(ctx context.Context) ([]string, error) {
-	items, err := h.scheduledJobs.ListEnabled(ctx)
+	appConfig, err := h.config.GetAppConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	sourceDirs := make([]string, 0)
-	seen := map[string]struct{}{}
-	for _, item := range items {
-		if item == nil || strings.TrimSpace(item.JobType) != "scan" || strings.TrimSpace(item.SourceDirs) == "" {
+	sourceDirs := make([]string, 0, len(appConfig.TargetDirs))
+	seen := make(map[string]struct{}, len(appConfig.TargetDirs))
+	for _, dir := range appConfig.TargetDirs {
+		trimmed := strings.TrimSpace(dir)
+		if trimmed == "" {
 			continue
 		}
-		var dirs []string
-		if err := json.Unmarshal([]byte(item.SourceDirs), &dirs); err != nil {
-			return nil, errors.New("invalid scheduled workflow source_dirs")
+		if _, ok := seen[trimmed]; ok {
+			continue
 		}
-		for _, dir := range dirs {
-			trimmed := strings.TrimSpace(dir)
-			if trimmed == "" {
-				continue
-			}
-			if _, ok := seen[trimmed]; ok {
-				continue
-			}
-			seen[trimmed] = struct{}{}
-			sourceDirs = append(sourceDirs, trimmed)
+		seen[trimmed] = struct{}{}
+		sourceDirs = append(sourceDirs, trimmed)
+	}
+
+	if len(sourceDirs) == 0 {
+		trimmedTargetDir := strings.TrimSpace(appConfig.TargetDir)
+		if trimmedTargetDir != "" {
+			sourceDirs = append(sourceDirs, trimmedTargetDir)
 		}
 	}
 
 	return sourceDirs, nil
-}
-
-func (h *FolderHandler) resolveConfigScanDirs(ctx context.Context) ([]string, error) {
-	if raw, err := h.config.Get(ctx, "scan_input_dirs"); err == nil {
-		var dirs []string
-		if unmarshalErr := json.Unmarshal([]byte(raw), &dirs); unmarshalErr != nil {
-			return nil, errors.New("invalid config value for scan_input_dirs")
-		}
-		if len(dirs) > 0 {
-			return dirs, nil
-		}
-	} else if !errors.Is(err, repository.ErrNotFound) {
-		return nil, err
-	}
-
-	if raw, err := h.config.Get(ctx, "source_dir"); err == nil && raw != "" {
-		return []string{raw}, nil
-	} else if err != nil && !errors.Is(err, repository.ErrNotFound) {
-		return nil, err
-	}
-
-	return nil, nil
 }
 
 func (h *FolderHandler) UpdateCategory(c *gin.Context) {

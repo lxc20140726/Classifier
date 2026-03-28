@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderSearch } from 'lucide-react'
+import { FolderSearch, Plus, Trash2 } from 'lucide-react'
 
 import { getConfig, updateConfig } from '@/api/config'
 import { DirPicker } from '@/components/DirPicker'
@@ -7,12 +7,12 @@ import { useConfigStore } from '@/store/configStore'
 import type { AppConfig } from '@/types'
 
 interface FormState {
-  targetDir: string
+  targetDirs: string[]
   outputDirs: NonNullable<AppConfig['output_dirs']>
 }
 
 const INITIAL_FORM: FormState = {
-  targetDir: '',
+  targetDirs: [''],
   outputDirs: {
     video: '',
     manga: '',
@@ -37,7 +37,7 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [pickerTarget, setPickerTarget] = useState<'target' | keyof NonNullable<AppConfig['output_dirs']>>('target')
+  const [pickerTarget, setPickerTarget] = useState<{ kind: 'target'; index: number } | { kind: 'output'; key: keyof NonNullable<AppConfig['output_dirs']> }>({ kind: 'target', index: 0 })
   const { sourceDir, load: loadSourceDir } = useConfigStore()
 
   useEffect(() => {
@@ -49,7 +49,11 @@ export default function SettingsPage() {
         if (!active) return
 
         setForm({
-          targetDir: response.data.target_dir ?? '',
+          targetDirs: response.data.target_dirs?.length
+            ? response.data.target_dirs
+            : response.data.target_dir
+              ? [response.data.target_dir]
+              : [''],
           outputDirs: {
             video: response.data.output_dirs?.video ?? '',
             manga: response.data.output_dirs?.manga ?? '',
@@ -75,12 +79,14 @@ export default function SettingsPage() {
     void loadSourceDir()
   }, [loadSourceDir])
 
-	function addDir(path: string) {
-		setForm((prev) => {
-			if (pickerTarget === 'target') {
+  function addDir(path: string) {
+    setForm((prev) => {
+      if (pickerTarget.kind === 'target') {
+        const nextTargetDirs = [...prev.targetDirs]
+        nextTargetDirs[pickerTarget.index] = path
         return {
           ...prev,
-          targetDir: path,
+          targetDirs: nextTargetDirs,
         }
       }
 
@@ -88,11 +94,29 @@ export default function SettingsPage() {
         ...prev,
         outputDirs: {
           ...prev.outputDirs,
-          [pickerTarget]: path,
+          [pickerTarget.key]: path,
         },
       }
     })
     setPickerOpen(false)
+  }
+
+  function addTargetDirRow() {
+    setForm((prev) => ({ ...prev, targetDirs: [...prev.targetDirs, ''] }))
+  }
+
+  function removeTargetDirRow(index: number) {
+    setForm((prev) => {
+      const next = prev.targetDirs.filter((_, i) => i !== index)
+      return { ...prev, targetDirs: next.length > 0 ? next : [''] }
+    })
+  }
+
+  function updateTargetDirRow(index: number, value: string) {
+    setForm((prev) => ({
+      ...prev,
+      targetDirs: prev.targetDirs.map((item, i) => (i === index ? value : item)),
+    }))
   }
 
   async function handleSubmit(e: { preventDefault(): void }) {
@@ -103,7 +127,8 @@ export default function SettingsPage() {
 
     try {
         await updateConfig({
-          target_dir: form.targetDir,
+          target_dirs: form.targetDirs.map((item) => item.trim()).filter((item) => item.length > 0),
+          target_dir: form.targetDirs.map((item) => item.trim()).find((item) => item.length > 0) ?? '',
           output_dirs: form.outputDirs,
         })
       setSuccess('配置已保存')
@@ -122,27 +147,49 @@ export default function SettingsPage() {
         <div className="space-y-4 border-2 border-foreground bg-card p-6 shadow-hard">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <label className="block text-sm font-black tracking-widest">默认目标根目录</label>
-              <p className="mt-1 text-xs font-bold text-muted-foreground">用于自动补全各分类输出路径，可单独覆盖。</p>
+              <label className="block text-sm font-black tracking-widest">目标根目录（可多个）</label>
+              <p className="mt-1 text-xs font-bold text-muted-foreground">扫描按钮只会扫描这里配置的目录。</p>
             </div>
             <button
               type="button"
               onClick={() => {
-                setPickerTarget('target')
-                setPickerOpen(true)
+                addTargetDirRow()
               }}
               className="flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
             >
-              <FolderSearch className="h-4 w-4" />
-              选择目录
+              <Plus className="h-4 w-4" />
+              添加目录
             </button>
           </div>
-          <input
-            value={form.targetDir}
-            onChange={(event) => setForm((prev) => ({ ...prev, targetDir: event.target.value }))}
-            className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-mono font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
-            placeholder="/data/target"
-          />
+          <div className="space-y-2">
+            {form.targetDirs.map((targetDir, index) => (
+              <div key={index} className="flex gap-2">
+                <input
+                  value={targetDir}
+                  onChange={(event) => updateTargetDirRow(index, event.target.value)}
+                  className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-mono font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
+                  placeholder="/data/target"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPickerTarget({ kind: 'target', index })
+                    setPickerOpen(true)
+                  }}
+                  className="border-2 border-foreground bg-background px-3 py-2 text-foreground transition-all hover:bg-foreground hover:text-background"
+                >
+                  <FolderSearch className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeTargetDirRow(index)}
+                  className="border-2 border-red-900 bg-red-100 px-3 py-2 text-red-900 transition-all hover:bg-red-900 hover:text-red-100"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="space-y-4">
@@ -161,7 +208,7 @@ export default function SettingsPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      setPickerTarget(key as keyof NonNullable<AppConfig['output_dirs']>)
+                      setPickerTarget({ kind: 'output', key: key as keyof NonNullable<AppConfig['output_dirs']> })
                       setPickerOpen(true)
                     }}
                     className="border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
@@ -203,7 +250,7 @@ export default function SettingsPage() {
         <DirPicker
           open={pickerOpen}
           initialPath={sourceDir}
-          title={pickerTarget === 'target' ? '选择目标目录' : '选择输出目录'}
+          title={pickerTarget.kind === 'target' ? '选择目标目录' : '选择输出目录'}
           onConfirm={addDir}
           onCancel={() => setPickerOpen(false)}
         />

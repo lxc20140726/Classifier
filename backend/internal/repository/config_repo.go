@@ -205,6 +205,9 @@ func mapLegacyConfig(values map[string]string) AppConfig {
 	if value, ok := values["target_dir"]; ok {
 		cfg.TargetDir = strings.TrimSpace(value)
 	}
+	if cfg.TargetDir != "" {
+		cfg.TargetDirs = []string{cfg.TargetDir}
+	}
 
 	rawScanInputDirs, hasScanInputDirs := values["scan_input_dirs"]
 	if hasScanInputDirs && strings.TrimSpace(rawScanInputDirs) != "" {
@@ -229,6 +232,7 @@ func defaultAppConfig() AppConfig {
 		ScanCron:      "",
 		SourceDir:     "",
 		TargetDir:     "",
+		TargetDirs:    []string{},
 		OutputDirs: AppConfigOutputDirs{
 			Video: "",
 			Manga: "",
@@ -249,6 +253,13 @@ func normalizeAppConfig(value AppConfig) AppConfig {
 	normalized.ScanCron = strings.TrimSpace(value.ScanCron)
 	normalized.SourceDir = strings.TrimSpace(value.SourceDir)
 	normalized.TargetDir = strings.TrimSpace(value.TargetDir)
+	normalized.TargetDirs = cleanPathList(value.TargetDirs)
+	if len(normalized.TargetDirs) == 0 && normalized.TargetDir != "" {
+		normalized.TargetDirs = []string{normalized.TargetDir}
+	}
+	if normalized.TargetDir == "" && len(normalized.TargetDirs) > 0 {
+		normalized.TargetDir = normalized.TargetDirs[0]
+	}
 	normalized.ScanInputDirs = cleanPathList(value.ScanInputDirs)
 	if len(normalized.ScanInputDirs) == 0 && normalized.SourceDir != "" {
 		normalized.ScanInputDirs = []string{normalized.SourceDir}
@@ -277,6 +288,20 @@ func normalizeAppConfigForSave(value AppConfig) (AppConfig, error) {
 	normalized.TargetDir, err = normalizeOptionalAbsPath(normalized.TargetDir)
 	if err != nil {
 		return AppConfig{}, fmt.Errorf("%w: target_dir: %v", ErrInvalidConfig, err)
+	}
+	normalized.TargetDirs = cleanPathList(normalized.TargetDirs)
+	for index, item := range normalized.TargetDirs {
+		normalizedItem, normalizeErr := normalizeOptionalAbsPath(item)
+		if normalizeErr != nil {
+			return AppConfig{}, fmt.Errorf("%w: target_dirs[%d]: %v", ErrInvalidConfig, index, normalizeErr)
+		}
+		normalized.TargetDirs[index] = normalizedItem
+	}
+	if len(normalized.TargetDirs) == 0 && normalized.TargetDir != "" {
+		normalized.TargetDirs = []string{normalized.TargetDir}
+	}
+	if normalized.TargetDir == "" && len(normalized.TargetDirs) > 0 {
+		normalized.TargetDir = normalized.TargetDirs[0]
 	}
 
 	normalized.ScanInputDirs = cleanPathList(normalized.ScanInputDirs)

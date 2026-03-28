@@ -91,6 +91,7 @@ type FolderListFilter struct {
 	Limit          int
 	IncludeDeleted bool
 	OnlyDeleted    bool
+	TopLevelOnly   bool
 }
 
 type JobListFilter struct {
@@ -130,6 +131,7 @@ type AppConfig struct {
 	ScanCron      string              `json:"scan_cron"`
 	SourceDir     string              `json:"source_dir"`
 	TargetDir     string              `json:"target_dir"`
+	TargetDirs    []string            `json:"target_dirs"`
 	OutputDirs    AppConfigOutputDirs `json:"output_dirs"`
 }
 
