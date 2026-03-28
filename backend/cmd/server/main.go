@@ -10,10 +10,12 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/liqiye/classifier/internal/config"
 	"github.com/liqiye/classifier/internal/db"
 	internalfs "github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/handler"
+	applogger "github.com/liqiye/classifier/internal/logger"
 	"github.com/liqiye/classifier/internal/repository"
 	"github.com/liqiye/classifier/internal/service"
 	"github.com/liqiye/classifier/internal/sse"
@@ -24,6 +26,13 @@ var webDist embed.FS
 
 func main() {
 	cfg := config.Load()
+
+	logWriters, err := applogger.Setup(cfg.LogDir)
+	if err != nil {
+		log.Printf("init log dir: %v (file logging disabled)", err)
+	} else {
+		gin.DefaultWriter = logWriters.App
+	}
 
 	dataDir := cfg.ConfigDir
 	dbPath := filepath.Join(dataDir, "classifier.db")
@@ -52,6 +61,9 @@ func main() {
 	broker := sse.NewBroker()
 
 	auditSvc := service.NewAuditService(auditRepo)
+	if logWriters != nil {
+		auditSvc.SetFileWriter(logWriters.Audit)
+	}
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
 	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, scannerSvc)
@@ -84,7 +96,7 @@ func main() {
 	}()
 
 	folderHandler := handler.NewFolderHandler(folderRepo, configRepo, scheduledWorkflowRepo, scanJobStarterSvc, fsAdapter, cfg.SourceDir, cfg.DeleteStagingDir)
-	jobHandler := handler.NewJobHandlerWithWorkflow(jobRepo, workflowRunnerSvc)
+	jobHandler := handler.NewJobHandlerWithWorkflow(jobRepo, workflowRunnerSvc, configRepo, cfg.SourceDir)
 	snapshotHandler := handler.NewSnapshotHandler(snapshotRepo, snapshotSvc)
 	configHandler := handler.NewConfigHandler(configRepo, nil)
 	auditHandler := handler.NewAuditHandler(auditRepo)

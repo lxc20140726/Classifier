@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -242,14 +243,53 @@ func TestConfigHandler(t *testing.T) {
 		if payload.Data.TargetDir != "/legacy/target" {
 			t.Fatalf("target_dir = %q, want /legacy/target", payload.Data.TargetDir)
 		}
-		if payload.Data.OutputDirs.Video != "/legacy/target/video" {
-			t.Fatalf("output_dirs.video = %q, want /legacy/target/video", payload.Data.OutputDirs.Video)
+		expectedVideoDir := filepath.Join("/legacy/target", "video")
+		if payload.Data.OutputDirs.Video != expectedVideoDir {
+			t.Fatalf("output_dirs.video = %q, want %q", payload.Data.OutputDirs.Video, expectedVideoDir)
 		}
 		if !reflect.DeepEqual(payload.Data.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/legacy/source /legacy/source-2]", payload.Data.ScanInputDirs)
 		}
 		if payload.Data.ScanCron != "" {
 			t.Fatalf("scan_cron = %q, want empty", payload.Data.ScanCron)
+		}
+	})
+
+	t.Run("put partial payload preserves existing scan fields", func(t *testing.T) {
+		err := repo.SaveAppConfig(context.Background(), &repository.AppConfig{
+			ScanInputDirs: []string{"/seed/source"},
+			ScanCron:      "0 * * * *",
+			SourceDir:     "/seed/source",
+			TargetDir:     "/seed/target",
+		})
+		if err != nil {
+			t.Fatalf("repo.SaveAppConfig() error = %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
+			"target_dir":"/seed/new-target",
+			"output_dirs":{"video":"/seed/new-target/video"}
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+		}
+
+		storedConfig, getErr := repo.GetAppConfig(context.Background())
+		if getErr != nil {
+			t.Fatalf("repo.GetAppConfig() error = %v", getErr)
+		}
+		if storedConfig.SourceDir != "/seed/source" {
+			t.Fatalf("source_dir = %q, want /seed/source", storedConfig.SourceDir)
+		}
+		if storedConfig.ScanCron != "0 * * * *" {
+			t.Fatalf("scan_cron = %q, want 0 * * * *", storedConfig.ScanCron)
+		}
+		if !reflect.DeepEqual(storedConfig.ScanInputDirs, []string{"/seed/source"}) {
+			t.Fatalf("scan_input_dirs = %#v, want [/seed/source]", storedConfig.ScanInputDirs)
 		}
 	})
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/liqiye/classifier/internal/repository"
@@ -17,16 +18,28 @@ type WorkflowJobStarter interface {
 }
 
 type JobHandler struct {
-	jobs            repository.JobRepository
-	workflowStarter WorkflowJobStarter
+	jobs             repository.JobRepository
+	workflowStarter  WorkflowJobStarter
+	config           repository.ConfigRepository
+	defaultSourceDir string
 }
 
 func NewJobHandler(jobRepo repository.JobRepository) *JobHandler {
 	return &JobHandler{jobs: jobRepo}
 }
 
-func NewJobHandlerWithWorkflow(jobRepo repository.JobRepository, workflowStarter WorkflowJobStarter) *JobHandler {
-	return &JobHandler{jobs: jobRepo, workflowStarter: workflowStarter}
+func NewJobHandlerWithWorkflow(
+	jobRepo repository.JobRepository,
+	workflowStarter WorkflowJobStarter,
+	config repository.ConfigRepository,
+	defaultSourceDir string,
+) *JobHandler {
+	return &JobHandler{
+		jobs:             jobRepo,
+		workflowStarter:  workflowStarter,
+		config:           config,
+		defaultSourceDir: strings.TrimSpace(defaultSourceDir),
+	}
 }
 
 func (h *JobHandler) List(c *gin.Context) {
@@ -111,6 +124,7 @@ func (h *JobHandler) StartWorkflow(c *gin.Context) {
 
 	var req struct {
 		WorkflowDefID string `json:"workflow_def_id"`
+		SourceDir     string `json:"source_dir"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -122,8 +136,14 @@ func (h *JobHandler) StartWorkflow(c *gin.Context) {
 		return
 	}
 
+	sourceDir := strings.TrimSpace(req.SourceDir)
+	if sourceDir == "" {
+		sourceDir = h.resolveWorkflowSourceDir(c.Request.Context())
+	}
+
 	jobID, err := h.workflowStarter.StartJob(c.Request.Context(), service.StartWorkflowJobInput{
 		WorkflowDefID: req.WorkflowDefID,
+		SourceDir:     sourceDir,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start workflow job"})
@@ -131,6 +151,18 @@ func (h *JobHandler) StartWorkflow(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"job_id": jobID})
+}
+
+func (h *JobHandler) resolveWorkflowSourceDir(ctx context.Context) string {
+	if h.config != nil {
+		if raw, err := h.config.Get(ctx, "source_dir"); err == nil {
+			if trimmed := strings.TrimSpace(raw); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+
+	return strings.TrimSpace(h.defaultSourceDir)
 }
 
 func serializeJob(job *repository.Job) gin.H {

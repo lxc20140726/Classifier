@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -170,11 +171,26 @@ func TestConfigRepositoryGetAppConfigFallsBackToLegacyKV(t *testing.T) {
 	if got.TargetDir != "/legacy/target" {
 		t.Fatalf("TargetDir = %q, want /legacy/target", got.TargetDir)
 	}
-	if got.OutputDirs.Video != "/legacy/target/video" {
-		t.Fatalf("OutputDirs.Video = %q, want /legacy/target/video", got.OutputDirs.Video)
+	expectedVideoDir := filepath.Join("/legacy/target", "video")
+	if got.OutputDirs.Video != expectedVideoDir {
+		t.Fatalf("OutputDirs.Video = %q, want %q", got.OutputDirs.Video, expectedVideoDir)
 	}
 	if !reflect.DeepEqual(got.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 		t.Fatalf("ScanInputDirs = %#v, want [/legacy/source /legacy/source-2]", got.ScanInputDirs)
+	}
+}
+
+func TestConfigRepositorySaveAppConfigRejectsRelativePath(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewConfigRepository(database)
+
+	err := repo.SaveAppConfig(context.Background(), &AppConfig{
+		SourceDir: "relative/source",
+	})
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
 	}
 }
 

@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 )
 
@@ -11,6 +13,7 @@ type Config struct {
 	TargetDir        string
 	DeleteStagingDir string
 	ConfigDir        string
+	LogDir           string
 	Port             string
 	TZ               string
 	MaxConcurrency   int
@@ -25,11 +28,15 @@ func Load() *Config {
 		}
 	}
 
+	defaults := defaultPathDefaults()
+	configDir := getEnv("CONFIG_DIR", defaults.ConfigDir)
+
 	return &Config{
-		SourceDir:        getEnv("SOURCE_DIR", "/data/source"),
-		TargetDir:        getEnv("TARGET_DIR", "/data/target"),
-		DeleteStagingDir: getEnv("DELETE_STAGING_DIR", "/data/delete_staging"),
-		ConfigDir:        getEnv("CONFIG_DIR", "/data/config"),
+		SourceDir:        getEnv("SOURCE_DIR", defaults.SourceDir),
+		TargetDir:        getEnv("TARGET_DIR", defaults.TargetDir),
+		DeleteStagingDir: getEnv("DELETE_STAGING_DIR", defaults.DeleteStagingDir),
+		ConfigDir:        configDir,
+		LogDir:           getEnv("LOG_DIR", filepath.Join(configDir, "logs")),
 		Port:             getEnv("PORT", "8080"),
 		TZ:               getEnv("TZ", "Asia/Shanghai"),
 		MaxConcurrency:   maxConcurrency,
@@ -42,4 +49,36 @@ func getEnv(key, defaultVal string) string {
 	}
 
 	return defaultVal
+}
+
+type pathDefaults struct {
+	SourceDir        string
+	TargetDir        string
+	DeleteStagingDir string
+	ConfigDir        string
+}
+
+func defaultPathDefaults() pathDefaults {
+	// Keep Linux defaults stable for container/NAS deployments.
+	if runtime.GOOS == "linux" {
+		return pathDefaults{
+			SourceDir:        "/data/source",
+			TargetDir:        "/data/target",
+			DeleteStagingDir: "/data/delete_staging",
+			ConfigDir:        "/data/config",
+		}
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		homeDir = "."
+	}
+	baseDir := filepath.Join(homeDir, ".classifier")
+
+	return pathDefaults{
+		SourceDir:        filepath.Join(baseDir, "source"),
+		TargetDir:        filepath.Join(baseDir, "target"),
+		DeleteStagingDir: filepath.Join(baseDir, "delete_staging"),
+		ConfigDir:        filepath.Join(baseDir, "config"),
+	}
 }

@@ -16,6 +16,7 @@ import (
 
 type StartWorkflowJobInput struct {
 	WorkflowDefID string
+	SourceDir     string
 }
 
 type WorkflowRunDetail struct {
@@ -124,16 +125,16 @@ type WorkflowNodeExecutor interface {
 }
 
 type WorkflowRunnerService struct {
-	jobs              repository.JobRepository
-	folders           repository.FolderRepository
-	workflowDefs      repository.WorkflowDefinitionRepository
-	workflowRuns      repository.WorkflowRunRepository
-	nodeRuns          repository.NodeRunRepository
-	nodeSnapshots     repository.NodeSnapshotRepository
-	executors         map[string]WorkflowNodeExecutor
-	broker            *sse.Broker
-	auditSvc          *AuditService
-	typeRegistry      *TypeRegistry
+	jobs          repository.JobRepository
+	folders       repository.FolderRepository
+	workflowDefs  repository.WorkflowDefinitionRepository
+	workflowRuns  repository.WorkflowRunRepository
+	nodeRuns      repository.NodeRunRepository
+	nodeSnapshots repository.NodeSnapshotRepository
+	executors     map[string]WorkflowNodeExecutor
+	broker        *sse.Broker
+	auditSvc      *AuditService
+	typeRegistry  *TypeRegistry
 }
 
 func NewWorkflowRunnerService(
@@ -148,16 +149,16 @@ func NewWorkflowRunnerService(
 	auditSvc *AuditService,
 ) *WorkflowRunnerService {
 	svc := &WorkflowRunnerService{
-		jobs:              jobRepo,
-		folders:           folderRepo,
-		workflowDefs:      workflowDefRepo,
-		workflowRuns:      workflowRunRepo,
-		nodeRuns:          nodeRunRepo,
-		nodeSnapshots:     nodeSnapshotRepo,
-		executors:         make(map[string]WorkflowNodeExecutor),
-		broker:            broker,
-		auditSvc:          auditSvc,
-		typeRegistry:      NewTypeRegistry(),
+		jobs:          jobRepo,
+		folders:       folderRepo,
+		workflowDefs:  workflowDefRepo,
+		workflowRuns:  workflowRunRepo,
+		nodeRuns:      nodeRunRepo,
+		nodeSnapshots: nodeSnapshotRepo,
+		executors:     make(map[string]WorkflowNodeExecutor),
+		broker:        broker,
+		auditSvc:      auditSvc,
+		typeRegistry:  NewTypeRegistry(),
 	}
 
 	svc.RegisterExecutor(&triggerNodeExecutor{})
@@ -217,12 +218,14 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 		return "", fmt.Errorf("workflowRunner.StartJob marshal folder_ids: %w", err)
 	}
 
+	sourceDir := strings.TrimSpace(input.SourceDir)
+
 	jobID := uuid.NewString()
 	if err := s.jobs.Create(ctx, &repository.Job{
 		ID:            jobID,
 		Type:          "workflow",
 		WorkflowDefID: input.WorkflowDefID,
-		SourceDir:     "",
+		SourceDir:     sourceDir,
 		Status:        "pending",
 		FolderIDs:     string(folderIDsJSON),
 		Total:         1,
@@ -230,16 +233,17 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 		return "", fmt.Errorf("workflowRunner.StartJob create job: %w", err)
 	}
 
-	go s.runJob(context.Background(), jobID, input.WorkflowDefID)
+	go s.runJob(context.Background(), jobID, input.WorkflowDefID, sourceDir)
 	return jobID, nil
 }
 
-func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID string) {
+func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID, sourceDir string) {
 	_ = s.jobs.UpdateStatus(ctx, jobID, "running", "")
 
 	run := &repository.WorkflowRun{
 		ID:            uuid.NewString(),
 		JobID:         jobID,
+		SourceDir:     sourceDir,
 		WorkflowDefID: workflowDefID,
 		Status:        "pending",
 	}
@@ -967,6 +971,11 @@ func (s *WorkflowRunnerService) resolveNodeInputs(node repository.WorkflowGraphN
 	}
 
 	if strings.TrimSpace(sourceDir) != "" {
+		if existing, exists := inputs["source_dir"]; exists && existing != nil {
+			if text, ok := existing.Value.(string); ok && strings.TrimSpace(text) == "" {
+				inputs["source_dir"] = nil
+			}
+		}
 		if _, exists := inputs["source_dir"]; exists && inputs["source_dir"] == nil {
 			inputs["source_dir"] = &TypedValue{Type: PortTypePath, Value: sourceDir}
 		}
@@ -1456,4 +1465,3 @@ func stringConfig(config map[string]any, key string) string {
 
 	return strings.TrimSpace(text)
 }
-

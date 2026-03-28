@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -112,14 +113,23 @@ func (r *SQLiteConfigRepository) SaveAppConfig(ctx context.Context, value *AppCo
 		return fmt.Errorf("configRepo.SaveAppConfig: value is nil")
 	}
 
-	normalized := normalizeAppConfig(*value)
+	normalized, err := normalizeAppConfigForSave(*value)
+	if err != nil {
+		return err
+	}
 	rawValue, err := json.Marshal(normalized)
 	if err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig marshal: %w", err)
 	}
 
 	checksum := checksumHex(rawValue)
-	_, err = r.db.ExecContext(
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO app_config (id, version, value, checksum, updated_at)
 VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -131,8 +141,7 @@ ON CONFLICT(id) DO UPDATE SET
 		normalized.Version,
 		string(rawValue),
 		checksum,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig upsert: %w", err)
 	}
 
@@ -141,17 +150,21 @@ ON CONFLICT(id) DO UPDATE SET
 		return fmt.Errorf("configRepo.SaveAppConfig marshal scan_input_dirs: %w", err)
 	}
 
-	if err := r.Set(ctx, "scan_input_dirs", string(scanDirsJSON)); err != nil {
+	if err := setConfigValue(ctx, tx, "scan_input_dirs", string(scanDirsJSON)); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig set scan_input_dirs: %w", err)
 	}
-	if err := r.Set(ctx, "scan_cron", normalized.ScanCron); err != nil {
+	if err := setConfigValue(ctx, tx, "scan_cron", normalized.ScanCron); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig set scan_cron: %w", err)
 	}
-	if err := r.Set(ctx, "source_dir", normalized.SourceDir); err != nil {
+	if err := setConfigValue(ctx, tx, "source_dir", normalized.SourceDir); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig set source_dir: %w", err)
 	}
-	if err := r.Set(ctx, "target_dir", normalized.TargetDir); err != nil {
+	if err := setConfigValue(ctx, tx, "target_dir", normalized.TargetDir); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig set target_dir: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig commit: %w", err)
 	}
 
 	return nil
@@ -253,6 +266,53 @@ func normalizeAppConfig(value AppConfig) AppConfig {
 	return normalized
 }
 
+func normalizeAppConfigForSave(value AppConfig) (AppConfig, error) {
+	normalized := normalizeAppConfig(value)
+	var err error
+
+	normalized.SourceDir, err = normalizeOptionalAbsPath(normalized.SourceDir)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("%w: source_dir: %v", ErrInvalidConfig, err)
+	}
+	normalized.TargetDir, err = normalizeOptionalAbsPath(normalized.TargetDir)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("%w: target_dir: %v", ErrInvalidConfig, err)
+	}
+
+	normalized.ScanInputDirs = cleanPathList(normalized.ScanInputDirs)
+	for index, item := range normalized.ScanInputDirs {
+		normalizedItem, normalizeErr := normalizeOptionalAbsPath(item)
+		if normalizeErr != nil {
+			return AppConfig{}, fmt.Errorf("%w: scan_input_dirs[%d]: %v", ErrInvalidConfig, index, normalizeErr)
+		}
+		normalized.ScanInputDirs[index] = normalizedItem
+	}
+
+	normalized.OutputDirs.Video, err = normalizeOptionalAbsPath(normalized.OutputDirs.Video)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("%w: output_dirs.video: %v", ErrInvalidConfig, err)
+	}
+	normalized.OutputDirs.Manga, err = normalizeOptionalAbsPath(normalized.OutputDirs.Manga)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("%w: output_dirs.manga: %v", ErrInvalidConfig, err)
+	}
+	normalized.OutputDirs.Photo, err = normalizeOptionalAbsPath(normalized.OutputDirs.Photo)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("%w: output_dirs.photo: %v", ErrInvalidConfig, err)
+	}
+	normalized.OutputDirs.Other, err = normalizeOptionalAbsPath(normalized.OutputDirs.Other)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("%w: output_dirs.other: %v", ErrInvalidConfig, err)
+	}
+	normalized.OutputDirs.Mixed, err = normalizeOptionalAbsPath(normalized.OutputDirs.Mixed)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("%w: output_dirs.mixed: %v", ErrInvalidConfig, err)
+	}
+
+	normalized.OutputDirs = fillDefaultOutputDirs(normalized.OutputDirs, normalized.TargetDir)
+	return normalized, nil
+}
+
 func fillDefaultOutputDirs(dirs AppConfigOutputDirs, targetDir string) AppConfigOutputDirs {
 	baseDir := strings.TrimSpace(targetDir)
 	if baseDir == "" {
@@ -298,6 +358,50 @@ func cleanPathList(raw []string) []string {
 	}
 
 	return cleaned
+}
+
+func normalizeOptionalAbsPath(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+
+	if !isAbsoluteConfigPath(trimmed) {
+		return "", fmt.Errorf("path must be absolute")
+	}
+
+	return trimmed, nil
+}
+
+func isAbsoluteConfigPath(path string) bool {
+	if filepath.IsAbs(path) {
+		return true
+	}
+	if runtime.GOOS == "windows" && (strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`)) {
+		return true
+	}
+
+	return false
+}
+
+type configValueSetter interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func setConfigValue(ctx context.Context, setter configValueSetter, key, value string) error {
+	_, err := setter.ExecContext(
+		ctx,
+		`INSERT INTO config (key, value)
+VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key,
+		value,
+	)
+	if err != nil {
+		return fmt.Errorf("set config key %q: %w", key, err)
+	}
+
+	return nil
 }
 
 func checksumHex(value []byte) string {

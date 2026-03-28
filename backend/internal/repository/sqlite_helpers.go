@@ -9,6 +9,7 @@ import (
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrInvalidConfig = errors.New("invalid config")
 
 func boolToInt(v bool) int {
 	if v {

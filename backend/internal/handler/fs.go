@@ -2,7 +2,9 @@ package handler
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -24,12 +26,9 @@ type dirEntry struct {
 }
 
 // ListDirs returns immediate subdirectories of `path`.
-// If path is empty or "/" it returns top-level filesystem roots (on Unix, just "/").
+// If path is empty, it falls back to a platform-appropriate root path.
 func (h *FSHandler) ListDirs(c *gin.Context) {
-	rawPath := c.Query("path")
-	if rawPath == "" {
-		rawPath = "/"
-	}
+	rawPath := normalizeBrowsePath(c.Query("path"))
 
 	// Normalise and clean to prevent path-traversal tricks.
 	cleanPath := filepath.Clean(rawPath)
@@ -75,9 +74,9 @@ func (h *FSHandler) ListDirs(c *gin.Context) {
 		return dirs[i].Name < dirs[j].Name
 	})
 
-	parent := ""
-	if cleanPath != "/" {
-		parent = filepath.Dir(cleanPath)
+	parent := filepath.Dir(cleanPath)
+	if parent == cleanPath {
+		parent = ""
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -85,4 +84,32 @@ func (h *FSHandler) ListDirs(c *gin.Context) {
 		"parent":  parent,
 		"entries": dirs,
 	})
+}
+
+func normalizeBrowsePath(rawPath string) string {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" {
+		return defaultBrowseRoot()
+	}
+
+	// On Windows users may still input "/" from old UI defaults.
+	if runtime.GOOS == "windows" && (trimmed == "/" || trimmed == `\`) {
+		return defaultBrowseRoot()
+	}
+
+	return trimmed
+}
+
+func defaultBrowseRoot() string {
+	if runtime.GOOS != "windows" {
+		return "/"
+	}
+
+	if cwd, err := os.Getwd(); err == nil {
+		if volume := filepath.VolumeName(cwd); volume != "" {
+			return volume + `\`
+		}
+	}
+
+	return `C:\`
 }
