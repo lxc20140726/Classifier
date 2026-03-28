@@ -9,13 +9,13 @@ interface ConfigState {
 }
 
 export const useConfigStore = create<ConfigState>((set, get) => ({
-  sourceDir: '/',
+  sourceDir: '',
   loaded: false,
   load: async () => {
     if (get().loaded) return
     try {
       const res = await getConfig()
-      set({ sourceDir: res.data.source_dir ?? '/', loaded: true })
+      set({ sourceDir: res.data.source_dir ?? '', loaded: true })
     } catch {
       set({ loaded: true })
     }

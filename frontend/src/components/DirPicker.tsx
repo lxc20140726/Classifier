@@ -15,10 +15,11 @@ export interface DirPickerProps {
 
 interface NavEntry {
   path: string
+  parent: string
   entries: FsDirEntry[]
 }
 
-export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title }: DirPickerProps) {
+export function DirPicker({ open, initialPath = '', onConfirm, onCancel, title }: DirPickerProps) {
   const [current, setCurrent] = useState<NavEntry | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -33,7 +34,7 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
     setError(null)
     try {
       const res = await listDirs(path)
-      setCurrent({ path: res.path, entries: res.entries })
+      setCurrent({ path: res.path, parent: res.parent, entries: res.entries })
       setSelected(res.path)
       setPathInput(res.path)
     } catch (e) {
@@ -45,7 +46,7 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
 
   useEffect(() => {
     if (open) {
-      void navigate(initialPath)
+      void navigate(initialPath.trim())
       
       // GSAP Animation
       if (overlayRef.current && modalRef.current) {
@@ -104,12 +105,11 @@ export function DirPicker({ open, initialPath = '/', onConfirm, onCancel, title 
         {/* Directory listing */}
         <div className="max-h-72 overflow-y-auto bg-background">
           {/* Parent dir navigation */}
-          {current && current.path !== '/' && (
+          {current && current.parent !== '' && (
             <button
               type="button"
               onClick={() => {
-                const parent = current.path.split('/').slice(0, -1).join('/') || '/'
-                void navigate(parent)
+                void navigate(current.parent)
               }}
               className="group flex w-full items-center gap-2 border-b-2 border-foreground px-5 py-3 text-sm font-medium transition-colors hover:bg-foreground hover:text-background"
             >

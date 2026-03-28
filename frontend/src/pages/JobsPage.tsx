@@ -15,6 +15,7 @@ import { listWorkflowDefs } from '@/api/workflowDefs'
 import { CronExpressionField } from '@/components/CronExpressionField'
 import { DirPicker } from '@/components/DirPicker'
 import { cn } from '@/lib/utils'
+import { useConfigStore } from '@/store/configStore'
 import { useJobStore } from '@/store/jobStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import type {
@@ -670,6 +671,7 @@ function ScheduledWorkflowModal({
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
   const overlayRef = useRef<HTMLDivElement | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
+  const { sourceDir, load: loadConfig } = useConfigStore()
 
   useEffect(() => {
     if (modal && overlayRef.current && modalRef.current) {
@@ -677,6 +679,10 @@ function ScheduledWorkflowModal({
       gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.7)" })
     }
   }, [modal])
+
+  useEffect(() => {
+    void loadConfig()
+  }, [loadConfig])
 
   if (!modal) return null
 
@@ -818,6 +824,7 @@ function ScheduledWorkflowModal({
 
         <DirPicker
           open={dirPickerOpen}
+          initialPath={sourceDir}
           title="选择扫描输入目录"
           onCancel={() => setDirPickerOpen(false)}
           onConfirm={(path) => {

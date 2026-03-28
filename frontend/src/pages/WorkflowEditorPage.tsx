@@ -26,7 +26,7 @@ import gsap from 'gsap'
 
 import { ApiRequestError } from '@/api/client'
 import { DirPicker } from '@/components/DirPicker'
-import { useWorkflowRunStore } from '@/store/workflowRunStore'
+import { Modal } from '@/components/Modal'
 import { startWorkflowJob } from '@/api/workflowRuns'
 import type { NodeRun, NodeRunStatus } from '@/types'
 import { listNodeTypes } from '@/api/nodeTypes'
@@ -34,6 +34,7 @@ import { getWorkflowDef, updateWorkflowDef } from '@/api/workflowDefs'
 import { cn } from '@/lib/utils'
 import { useConfigStore } from '@/store/configStore'
 import { useThemeStore } from '@/store/themeStore'
+import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import type {
   NodeInputSpec,
   NodeSchema,
@@ -64,6 +65,7 @@ interface EditorContextValue {
   deleteNode: (nodeId: string) => void
   nodeRunByNodeId: Record<string, NodeRun>
   onRollbackRun: (runId: string) => Promise<void>
+  onViewNodeError: (nodeId: string) => void
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null)
@@ -77,6 +79,7 @@ function useEditorContext(): EditorContextValue {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const INITIAL_GRAPH: WorkflowGraph = { nodes: [], edges: [] }
+const CONFIG_AUTO_SAVE_DEBOUNCE_MS = 700
 
 /**
  * 节点分类定义：按业务语义划分颜色主题，保证同类节点颜色一致。
@@ -1018,7 +1021,7 @@ const PORT_TYPE_COLORS: Record<string, string> = {
 }
 
 function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
-  const { workflowNodes, updateNode, updateNodeConfig, deleteNode, nodeRunByNodeId, onRollbackRun } =
+  const { workflowNodes, updateNode, updateNodeConfig, deleteNode, nodeRunByNodeId, onRollbackRun, onViewNodeError } =
     useEditorContext()
   const workflowNode = workflowNodes[id] ?? null
   const nodeRun = nodeRunByNodeId[id] ?? null
@@ -1161,10 +1164,20 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
         {nodeRun && (() => {
           const cfg = NODE_STATUS_CFG[nodeRun.status]
           return (
-            <div className={cn('mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold', cfg.cls)}>
-              {cfg.icon}
-              {cfg.label}
-              {nodeRun.error && <span className="ml-1 opacity-80 truncate max-w-[150px]">— {nodeRun.error}</span>}
+            <div className="mt-2 flex items-center gap-2">
+              <div className={cn('inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold', cfg.cls)}>
+                {cfg.icon}
+                {cfg.label}
+              </div>
+              {nodeRun.error && (
+                <button
+                  type="button"
+                  onClick={() => onViewNodeError(id)}
+                  className="nodrag border-2 border-red-900 bg-red-100 px-2 py-1 text-[10px] font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100"
+                >
+                  查看错误
+                </button>
+              )}
             </div>
           )
         })()}
@@ -1261,8 +1274,10 @@ function WorkflowEditorScreen() {
   const [notice, setNotice] = useState<string | null>(null)
   const [isNodePanelOpen, setIsNodePanelOpen] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
+  const [configAutoSaveTick, setConfigAutoSaveTick] = useState(0)
   const [selectionModeOn, setSelectionModeOn] = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [nodeErrorModal, setNodeErrorModal] = useState<{ nodeId: string; nodeLabel: string; error: string } | null>(null)
 
   const nodesByRunId = useWorkflowRunStore((s) => s.nodesByRunId)
   const runsByJobId = useWorkflowRunStore((s) => s.runsByJobId)
@@ -1283,6 +1298,33 @@ function WorkflowEditorScreen() {
     return result
   }, [activeJobId, runsByJobId, nodesByRunId])
 
+  const shownNodeErrorKeysRef = useRef<Set<string>>(new Set())
+
+  const openNodeErrorModal = useCallback((nodeId: string) => {
+    const nodeRun = nodeRunByNodeId[nodeId]
+    if (!nodeRun?.error) return
+    const fallbackLabel = workflowNodes[nodeId]?.label || nodeId
+    const currentLabel = nodes.find((node) => node.id === nodeId)?.data.label || fallbackLabel
+    setNodeErrorModal({ nodeId, nodeLabel: currentLabel, error: nodeRun.error })
+  }, [nodeRunByNodeId, workflowNodes, nodes])
+
+  useEffect(() => {
+    const errorRuns = Object.values(nodeRunByNodeId)
+      .filter((run) => typeof run.error === 'string' && run.error.trim() !== '')
+      .sort((a, b) => b.sequence - a.sequence)
+
+    const nextErrorRun = errorRuns.find((run) => {
+      const errorKey = `${run.id}:${run.node_id}:${run.sequence}:${run.error ?? ''}`
+      return !shownNodeErrorKeysRef.current.has(errorKey)
+    })
+
+    if (!nextErrorRun) return
+
+    const errorKey = `${nextErrorRun.id}:${nextErrorRun.node_id}:${nextErrorRun.sequence}:${nextErrorRun.error ?? ''}`
+    shownNodeErrorKeysRef.current.add(errorKey)
+    openNodeErrorModal(nextErrorRun.node_id)
+  }, [nodeRunByNodeId, openNodeErrorModal])
+
   useEffect(() => {
     if (!activeJobId) return
     void fetchRunsForJob(activeJobId)
@@ -1296,6 +1338,14 @@ function WorkflowEditorScreen() {
   const schemaMap = useMemo(() => new Map(schemas.map((schema) => [schema.type, schema])), [schemas])
   const schemaMapRef = useRef(schemaMap)
   schemaMapRef.current = schemaMap
+  const workflowDefRef = useRef(workflowDef)
+  workflowDefRef.current = workflowDef
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+  const edgesRef = useRef(edges)
+  edgesRef.current = edges
+  const workflowNodesRef = useRef(workflowNodes)
+  workflowNodesRef.current = workflowNodes
 
   useEffect(() => {
     let active = true
@@ -1353,6 +1403,42 @@ function WorkflowEditorScreen() {
     [setEdges],
   )
 
+  const persistGraph = useCallback(async (showNotice: boolean) => {
+    const currentWorkflowDef = workflowDefRef.current
+    if (!currentWorkflowDef) return
+
+    setIsSaving(true)
+    if (showNotice) {
+      setError(null)
+      setNotice(null)
+    }
+
+    try {
+      const graph = nodesToGraph(nodesRef.current, edgesRef.current, workflowNodesRef.current, schemaMapRef.current)
+      const graphJson = JSON.stringify(graph, null, 2)
+      await updateWorkflowDef(currentWorkflowDef.id, { graph_json: graphJson })
+      setWorkflowDef((prev) => (prev ? { ...prev, graph_json: graphJson } : prev))
+      setWorkflowNodes(Object.fromEntries(graph.nodes.map((node) => [node.id, node])))
+      if (showNotice) setNotice('工作流已保存')
+    } catch (saveError) {
+      if (saveError instanceof ApiRequestError) {
+        setError(saveError.message)
+      } else {
+        setError(saveError instanceof Error ? saveError.message : '保存失败')
+      }
+    } finally {
+      setIsSaving(false)
+    }
+  }, [setWorkflowDef, setWorkflowNodes])
+
+  useEffect(() => {
+    if (configAutoSaveTick === 0) return
+    const timer = window.setTimeout(() => {
+      void persistGraph(false)
+    }, CONFIG_AUTO_SAVE_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [configAutoSaveTick, persistGraph])
+
   // ─── Context callbacks (stable via refs) ────────────────────────────────────
 
   const updateNode = useCallback(
@@ -1403,6 +1489,7 @@ function WorkflowEditorScreen() {
           },
         }
       })
+      setConfigAutoSaveTick((value) => value + 1)
     },
     [setWorkflowNodes],
   )
@@ -1416,6 +1503,7 @@ function WorkflowEditorScreen() {
         delete nextConfig[key]
         return { ...currentNodes, [nodeId]: { ...previous, config: nextConfig } }
       })
+      setConfigAutoSaveTick((value) => value + 1)
     },
     [setWorkflowNodes],
   )
@@ -1433,6 +1521,7 @@ function WorkflowEditorScreen() {
           },
         }
       })
+      setConfigAutoSaveTick((value) => value + 1)
     },
     [setWorkflowNodes],
   )
@@ -1453,8 +1542,19 @@ function WorkflowEditorScreen() {
   )
 
   const editorContextValue: EditorContextValue = useMemo(
-    () => ({ workflowNodes, schemas, updateNode, updateNodeConfig, removeNodeConfig, addNodeConfig, deleteNode, nodeRunByNodeId, onRollbackRun: handleRollbackRun }),
-    [workflowNodes, schemas, updateNode, updateNodeConfig, removeNodeConfig, addNodeConfig, deleteNode, nodeRunByNodeId, handleRollbackRun],
+    () => ({
+      workflowNodes,
+      schemas,
+      updateNode,
+      updateNodeConfig,
+      removeNodeConfig,
+      addNodeConfig,
+      deleteNode,
+      nodeRunByNodeId,
+      onRollbackRun: handleRollbackRun,
+      onViewNodeError: openNodeErrorModal,
+    }),
+    [workflowNodes, schemas, updateNode, updateNodeConfig, removeNodeConfig, addNodeConfig, deleteNode, nodeRunByNodeId, handleRollbackRun, openNodeErrorModal],
   )
 
   // ─── Add node ────────────────────────────────────────────────────────────────
@@ -1494,26 +1594,7 @@ function WorkflowEditorScreen() {
   }
 
   async function handleSave() {
-    if (!workflowDef) return
-    setIsSaving(true)
-    setError(null)
-    setNotice(null)
-    try {
-      const graph = nodesToGraph(nodes, edges, workflowNodes, schemaMap)
-      const graphJson = JSON.stringify(graph, null, 2)
-      await updateWorkflowDef(workflowDef.id, { graph_json: graphJson })
-      setWorkflowDef({ ...workflowDef, graph_json: graphJson })
-      setWorkflowNodes(Object.fromEntries(graph.nodes.map((node) => [node.id, node])))
-      setNotice('工作流已保存')
-    } catch (saveError) {
-      if (saveError instanceof ApiRequestError) {
-        setError(saveError.message)
-      } else {
-        setError(saveError instanceof Error ? saveError.message : '保存失败')
-      }
-    } finally {
-      setIsSaving(false)
-    }
+    await persistGraph(true)
   }
 
   async function handleRunWorkflow() {
@@ -1761,6 +1842,20 @@ function WorkflowEditorScreen() {
           </div>
         </div>
       </div>
+      <Modal
+        open={nodeErrorModal !== null}
+        title={nodeErrorModal ? `节点执行失败：${nodeErrorModal.nodeLabel}` : '节点执行失败'}
+        description={nodeErrorModal ? `节点 ID：${nodeErrorModal.nodeId}` : undefined}
+        onClose={() => setNodeErrorModal(null)}
+        size="lg"
+      >
+        <div className="space-y-3">
+          <p className="text-sm font-bold text-foreground">错误详情</p>
+          <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words border-2 border-red-900 bg-red-50 p-3 font-mono text-xs font-bold text-red-900">
+            {nodeErrorModal?.error ?? ''}
+          </pre>
+        </div>
+      </Modal>
     </EditorContext.Provider>
   )
 }
