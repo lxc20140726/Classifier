@@ -31,11 +31,11 @@ func (e *categoryRouterNodeExecutor) Schema() NodeSchema {
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待路由的处理项列表", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "video", Type: PortTypeProcessingItemList, Description: "视频类处理项"},
-			{Name: "manga", Type: PortTypeProcessingItemList, Description: "漫画类处理项"},
-			{Name: "photo", Type: PortTypeProcessingItemList, Description: "图片类处理项"},
-			{Name: "other", Type: PortTypeProcessingItemList, Description: "其他类处理项"},
-			{Name: "mixed_leaf", Type: PortTypeProcessingItemList, Description: "混合叶节点处理项"},
+			{Name: "video", Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "视频类处理项"},
+			{Name: "manga", Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "漫画类处理项"},
+			{Name: "photo", Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "图片类处理项"},
+			{Name: "other", Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "其他类处理项"},
+			{Name: "mixed_leaf", Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "混合叶节点处理项"},
 		},
 	}
 }

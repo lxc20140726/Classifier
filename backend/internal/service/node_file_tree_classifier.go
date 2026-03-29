@@ -89,13 +89,16 @@ func (e *fileTreeClassifierNodeExecutor) Schema() NodeSchema {
 			Required:    false,
 		}},
 		Outputs: []PortDef{{
-			Name:        "signal",
-			Type:        PortTypeClassificationSignalList,
-			Description: "分类信号列表",
+			Name:           "signal",
+			Type:           PortTypeClassificationSignalList,
+			RequiredOutput: true,
+			Description:    "分类信号列表",
 		}, {
-			Name:        "pass",
-			Type:        PortTypeFolderTreeList,
-			Description: "未命中透传目录树列表",
+			Name:           "pass",
+			Type:           PortTypeFolderTreeList,
+			RequiredOutput: true,
+			AllowEmpty:     true,
+			Description:    "未命中透传目录树列表",
 		}},
 	}
 }

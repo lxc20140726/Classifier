@@ -19,10 +19,18 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db.Open sql.Open: %w", err)
 	}
+	// SQLite 在并发写入时容易触发 SQLITE_BUSY；限制连接池并启用 busy_timeout
+	// 可以让并发节点写库时排队等待，而不是立即失败。
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
 
 	if _, err := database.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		database.Close()
 		return nil, fmt.Errorf("db.Open enable WAL: %w", err)
+	}
+	if _, err := database.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("db.Open set busy timeout: %w", err)
 	}
 
 	if _, err := database.Exec("PRAGMA foreign_keys=ON;"); err != nil {

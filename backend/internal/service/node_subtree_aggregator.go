@@ -52,7 +52,6 @@ func (e *subtreeAggregatorNodeExecutor) Schema() NodeSchema {
 			{Name: "signal_ft", Type: PortTypeClassificationSignalList, Description: "文件树分类器信号", Required: false, Lazy: true},
 			{Name: "signal_ext", Type: PortTypeClassificationSignalList, Description: "扩展名分类器信号", Required: false, Lazy: true},
 			{Name: "signal_high", Type: PortTypeClassificationSignalList, Description: "置信度检查高置信度信号", Required: false, Lazy: true},
-			{Name: "signal_manual", Type: PortTypeClassificationSignalList, Description: "人工分类信号", Required: false, Lazy: true},
 		},
 		Outputs: []PortDef{
 			{Name: "entry", Type: PortTypeClassifiedEntryList, Description: "已分类条目列表"},
@@ -576,7 +575,7 @@ func snapshotMatchesNodeRun(detail json.RawMessage, workflowRunID, nodeRunID str
 }
 
 func buildSignalIndex(inputs map[string]any) (map[string]map[string]ClassificationSignal, error) {
-	portKeys := []string{"signal_kw", "signal_ft", "signal_manual", "signal_high", "signal_ext"}
+	portKeys := []string{"signal_kw", "signal_ft", "signal_high", "signal_ext"}
 	index := make(map[string]map[string]ClassificationSignal)
 
 	for _, key := range portKeys {
@@ -612,7 +611,7 @@ func pickBestSignalByPath(path string, indexed map[string]map[string]Classificat
 		return ClassificationSignal{}
 	}
 
-	for _, key := range []string{"signal_kw", "signal_ft", "signal_manual", "signal_high", "signal_ext"} {
+	for _, key := range []string{"signal_kw", "signal_ft", "signal_high", "signal_ext"} {
 		signal, ok := byPath[key]
 		if !ok {
 			continue

@@ -27,7 +27,7 @@ func (e *folderSelectorNodeExecutor) Schema() NodeSchema {
 			{Name: "trees", Type: PortTypeFolderTreeList, Description: "候选目录树列表", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "trees", Type: PortTypeFolderTreeList, Description: "用户选中的目录树列表"},
+			{Name: "trees", Type: PortTypeFolderTreeList, RequiredOutput: true, Description: "用户选中的目录树列表"},
 		},
 		ConfigSchema: map[string]any{
 			"auto_select_all": map[string]any{
@@ -77,12 +77,12 @@ func (e *folderSelectorNodeExecutor) Execute(_ context.Context, input NodeExecut
 	}
 
 	pendingState := map[string]any{
-		"candidate_paths":  candidatePaths,
-		"trees_snapshot":   trees,
+		"candidate_paths": candidatePaths,
+		"trees_snapshot":  trees,
 	}
 
 	return NodeExecutionOutput{
-		Outputs:       map[string]TypedValue{"state": {Type: PortTypeJSON, Value: pendingState}},
+		PendingState:  pendingState,
 		Status:        ExecutionPending,
 		PendingReason: "awaiting folder selection",
 	}, nil
@@ -132,4 +132,30 @@ func (e *folderSelectorNodeExecutor) Resume(_ context.Context, input NodeExecuti
 
 func (e *folderSelectorNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
+}
+
+func parsePendingPaths(raw any) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	items, ok := raw.([]any)
+	if ok {
+		out := make([]string, 0, len(items))
+		for idx, item := range items {
+			path, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("pending_paths[%d] must be string", idx)
+			}
+			out = append(out, path)
+		}
+		return compactPaths(out), nil
+	}
+
+	paths, ok := raw.([]string)
+	if ok {
+		return compactPaths(paths), nil
+	}
+
+	return nil, fmt.Errorf("pending_paths must be string array")
 }

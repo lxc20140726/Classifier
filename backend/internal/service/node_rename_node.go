@@ -39,7 +39,7 @@ func (e *renameNodeExecutor) Schema() NodeSchema {
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待重命名的处理项列表", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "已重命名的处理项列表"},
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已重命名的处理项列表"},
 		},
 	}
 }

@@ -94,6 +94,14 @@ type processingItemSourceExecutor struct {
 	items []ProcessingItem
 }
 
+type emptyRequiredOutputExecutor struct{}
+
+type branchSlowItemsExecutor struct {
+	branch    string
+	active    *int32
+	maxActive *int32
+}
+
 func (e *consumeInputExecutor) Type() string {
 	return "consume-input"
 }
@@ -194,7 +202,7 @@ func (e *namedPortProducerExecutor) Schema() NodeSchema {
 		Type:        e.Type(),
 		Label:       "Named Port Producer",
 		Description: "Emit multi-port outputs for named-port compatibility tests",
-		Outputs: []PortDef{{Name: "first"}, {Name: "second"}},
+		Outputs:     []PortDef{{Name: "first"}, {Name: "second"}},
 	}
 }
 
@@ -219,7 +227,7 @@ func (e *namedPortConsumerExecutor) Schema() NodeSchema {
 		Type:        e.Type(),
 		Label:       "Named Port Consumer",
 		Description: "Consume upstream output through named source port",
-		Inputs: []PortDef{{Name: "upstream", Required: true}},
+		Inputs:      []PortDef{{Name: "upstream", Required: true}},
 	}
 }
 
@@ -250,7 +258,7 @@ func (e *requiredInputProbeExecutor) Schema() NodeSchema {
 		Type:        e.Type(),
 		Label:       e.Type(),
 		Description: "Probe skip behavior for required inputs",
-		Inputs: []PortDef{{Name: e.portName, Required: true, Lazy: e.lazy}},
+		Inputs:      []PortDef{{Name: e.portName, Required: true, Lazy: e.lazy}},
 	}
 }
 
@@ -316,6 +324,85 @@ func (e *processingItemSourceExecutor) Resume(_ context.Context, _ NodeExecution
 }
 
 func (e *processingItemSourceExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *emptyRequiredOutputExecutor) Type() string {
+	return "empty-required-output"
+}
+
+func (e *emptyRequiredOutputExecutor) Schema() NodeSchema {
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "Empty Required Output",
+		Description: "Return empty list on required output",
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true},
+		},
+	}
+}
+
+func (e *emptyRequiredOutputExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}}},
+		Status:  ExecutionSuccess,
+	}, nil
+}
+
+func (e *emptyRequiredOutputExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *emptyRequiredOutputExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *branchSlowItemsExecutor) Type() string {
+	return "slow-items-" + e.branch
+}
+
+func (e *branchSlowItemsExecutor) Schema() NodeSchema {
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       e.Type(),
+		Description: "Emit one processing item after delay",
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true},
+		},
+	}
+}
+
+func (e *branchSlowItemsExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	current := atomic.AddInt32(e.active, 1)
+	for {
+		observed := atomic.LoadInt32(e.maxActive)
+		if current <= observed {
+			break
+		}
+		if atomic.CompareAndSwapInt32(e.maxActive, observed, current) {
+			break
+		}
+	}
+	time.Sleep(60 * time.Millisecond)
+	atomic.AddInt32(e.active, -1)
+
+	item := ProcessingItem{
+		SourcePath: "/source/" + e.branch,
+		FolderName: e.branch,
+		TargetName: e.branch,
+		Category:   "other",
+	}
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{item}}},
+		Status:  ExecutionSuccess,
+	}, nil
+}
+
+func (e *branchSlowItemsExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *branchSlowItemsExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
 }
 
@@ -726,7 +813,7 @@ func TestWorkflowRunnerServiceNamedSourcePortCompatibility(t *testing.T) {
 	}
 }
 
-func TestWorkflowRunnerServiceLazyRequiredInputSkipSemantics(t *testing.T) {
+func TestWorkflowRunnerServiceLazyRequiredInputFailureSemantics(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -776,8 +863,8 @@ func TestWorkflowRunnerServiceLazyRequiredInputSkipSemantics(t *testing.T) {
 	}
 
 	job := waitJobDone(t, jobRepo, jobID)
-	if job.Status != "succeeded" {
-		t.Fatalf("job status = %q, want succeeded", job.Status)
+	if job.Status != "failed" {
+		t.Fatalf("job status = %q, want failed", job.Status)
 	}
 
 	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
@@ -786,18 +873,14 @@ func TestWorkflowRunnerServiceLazyRequiredInputSkipSemantics(t *testing.T) {
 		t.Fatalf("nodeRunRepo.List() error = %v", err)
 	}
 
-	if got := nodeRunStatusByID(nodeRuns, "strict"); got != "skipped" {
-		t.Fatalf("strict node status = %q, want skipped", got)
+	if got := nodeRunStatusByID(nodeRuns, "strict"); got != "failed" {
+		t.Fatalf("strict node status = %q, want failed", got)
 	}
-	if got := nodeRunStatusByID(nodeRuns, "lazy"); got != "succeeded" {
-		t.Fatalf("lazy node status = %q, want succeeded", got)
-	}
-
 	if atomic.LoadInt32(&strict.executed) != 0 {
 		t.Fatalf("strict executed = %d, want 0", atomic.LoadInt32(&strict.executed))
 	}
 	if atomic.LoadInt32(&lazy.executed) != 1 {
-		t.Fatalf("lazy executed = %d, want 1", atomic.LoadInt32(&lazy.executed))
+		t.Fatalf("lazy executed = %d, want 1 because same-level nodes execute concurrently", atomic.LoadInt32(&lazy.executed))
 	}
 }
 
@@ -966,6 +1049,117 @@ func TestWorkflowRunnerServicePhase4MoveRollback(t *testing.T) {
 	}
 	if !existsSource {
 		t.Fatalf("source path should exist after rollback")
+	}
+}
+
+func TestWorkflowRunnerServiceRejectsEmptyRequiredOutput(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "n1", Type: "empty-required-output", Enabled: true},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-empty-required-output", Name: "wf-empty-required-output", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc.RegisterExecutor(&emptyRequiredOutputExecutor{})
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "failed" {
+		t.Fatalf("job status = %q, want failed", job.Status)
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	nodeRuns, _, err := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("nodeRunRepo.List() error = %v", err)
+	}
+	if len(nodeRuns) == 0 {
+		t.Fatalf("node runs len = 0, want >= 1")
+	}
+	if nodeRuns[0].Status != "failed" {
+		t.Fatalf("node status = %q, want failed", nodeRuns[0].Status)
+	}
+}
+
+func TestWorkflowRunnerServiceRunsSameLevelNodesConcurrentlyWithCollect(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	var active int32
+	var maxActive int32
+	branchA := &branchSlowItemsExecutor{branch: "a", active: &active, maxActive: &maxActive}
+	branchB := &branchSlowItemsExecutor{branch: "b", active: &active, maxActive: &maxActive}
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "trigger", Type: "trigger", Enabled: true},
+			{ID: "a", Type: branchA.Type(), Enabled: true},
+			{ID: "b", Type: branchB.Type(), Enabled: true},
+			{ID: "collect", Type: collectNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items_1": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "a", SourcePort: "items"}},
+				"items_2": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "b", SourcePort: "items"}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e3", Source: "a", SourcePort: "items", Target: "collect", TargetPort: "items_1"},
+			{ID: "e4", Source: "b", SourcePort: "items", Target: "collect", TargetPort: "items_2"},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-level-concurrency", Name: "wf-level-concurrency", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc.RegisterExecutor(branchA)
+	svc.RegisterExecutor(branchB)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+	if atomic.LoadInt32(&maxActive) < 2 {
+		t.Fatalf("maxActive = %d, want >=2 for same-level parallelism", atomic.LoadInt32(&maxActive))
 	}
 }
 

@@ -35,7 +35,7 @@ func (e *folderSplitterNodeExecutor) Schema() NodeSchema {
 			{Name: "entry", Type: PortTypeJSON, Description: "已分类条目", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "拆分后的处理项列表"},
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "拆分后的处理项列表"},
 		},
 	}
 }

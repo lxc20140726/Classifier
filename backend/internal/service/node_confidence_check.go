@@ -29,11 +29,11 @@ func (e *confidenceCheckNodeExecutor) Schema() NodeSchema {
 		Label:       "置信度检查",
 		Description: "按置信度阈值将分类信号路由至高置信度或低置信度端口",
 		Inputs: []PortDef{
-			{Name: "signals", Type: PortTypeClassificationSignalList, Description: "分类信号列表", Required: false},
+			{Name: "signals", Type: PortTypeClassificationSignalList, Description: "分类信号列表", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "high", Type: PortTypeClassificationSignalList, Description: "高置信度信号"},
-			{Name: "low", Type: PortTypeClassificationSignalList, Description: "低置信度信号"},
+			{Name: "high", Type: PortTypeClassificationSignalList, RequiredOutput: true, Description: "高置信度信号"},
+			{Name: "low", Type: PortTypeClassificationSignalList, RequiredOutput: true, Description: "低置信度信号"},
 		},
 	}
 }

@@ -54,8 +54,8 @@ func TestSeedDefaultWorkflow_CreatesExpectedGraphAndIsIdempotent(t *testing.T) {
 		"file-tree-classifier",
 		"ext-ratio-classifier",
 		"confidence-check",
-		"manual-classifier",
-		"subtree-aggregator",
+		"signal-aggregator",
+		"classification-writer",
 	}
 	if len(gotTypes) != len(wantTypes) {
 		t.Fatalf("node count = %d, want %d; got %v", len(gotTypes), len(wantTypes), gotTypes)

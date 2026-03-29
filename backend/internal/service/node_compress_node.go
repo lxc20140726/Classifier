@@ -38,8 +38,8 @@ func (e *compressNodeExecutor) Schema() NodeSchema {
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待压缩的处理项列表", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "已处理的处理项列表"},
-			{Name: "archives", Type: PortTypeStringList, Description: "生成的压缩包路径列表"},
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已处理的处理项列表"},
+			{Name: "archives", Type: PortTypeStringList, RequiredOutput: true, Description: "生成的压缩包路径列表"},
 		},
 	}
 }
@@ -125,6 +125,10 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: create archive for %q: %w", e.Type(), sourcePath, err)
 		}
 		archives = append(archives, archivePath)
+		if input.ProgressFn != nil {
+			percent := len(archives) * 100 / len(items)
+			input.ProgressFn(percent, fmt.Sprintf("已完成 %d/%d 项压缩", len(archives), len(items)))
+		}
 	}
 
 	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "archives": {Type: PortTypeStringList, Value: archives}}, Status: ExecutionSuccess}, nil

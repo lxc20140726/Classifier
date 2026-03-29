@@ -43,9 +43,10 @@ func (e *folderTreeScannerExecutor) Schema() NodeSchema {
 			Required:    true,
 		}},
 		Outputs: []PortDef{{
-			Name:        "tree",
-			Type:        PortTypeFolderTreeList,
-			Description: "顶层子目录 FolderTree 列表",
+			Name:           "tree",
+			Type:           PortTypeFolderTreeList,
+			RequiredOutput: true,
+			Description:    "顶层子目录 FolderTree 列表",
 		}},
 	}
 }

@@ -70,12 +70,6 @@ func main() {
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, snapshotRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
 	scheduledWorkflowSvc := service.NewScheduledWorkflowService(scheduledWorkflowRepo, workflowRunnerSvc, scanJobStarterSvc)
 	scheduledWorkflowScheduler := service.NewScheduledWorkflowScheduler(scheduledWorkflowRepo, scheduledWorkflowSvc)
-	workflowRunnerSvc.RegisterExecutor(service.NewFolderTreeScannerExecutor(fsAdapter))
-	workflowRunnerSvc.RegisterExecutor(service.NewNameKeywordClassifierExecutor())
-	workflowRunnerSvc.RegisterExecutor(service.NewFileTreeClassifierExecutor())
-	workflowRunnerSvc.RegisterExecutor(service.NewConfidenceCheckExecutor())
-	workflowRunnerSvc.RegisterExecutor(service.NewManualClassifierExecutor())
-	workflowRunnerSvc.RegisterExecutor(service.NewSubtreeAggregatorExecutor(folderRepo, snapshotRepo, auditSvc))
 	if err := service.SeedDefaultWorkflow(context.Background(), workflowDefRepo); err != nil {
 		log.Fatalf("seed default workflow: %v", err)
 	}

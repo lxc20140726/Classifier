@@ -89,22 +89,8 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 				Enabled: true,
 			},
 			{
-				ID:     "n-manual",
-				Type:   "manual-classifier",
-				Config: map[string]any{},
-				Inputs: map[string]repository.NodeInputSpec{
-					"trees": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-scanner", SourcePort: "tree"},
-					},
-					"hint": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-cc", SourcePort: "low"},
-					},
-				},
-				Enabled: true,
-			},
-			{
 				ID:     "n-agg",
-				Type:   "subtree-aggregator",
+				Type:   "signal-aggregator",
 				Config: map[string]any{},
 				Inputs: map[string]repository.NodeInputSpec{
 					"trees": {
@@ -119,8 +105,16 @@ func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinition
 					"signal_ext": {
 						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-cc", SourcePort: "high"},
 					},
-					"signal_manual": {
-						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-manual", SourcePort: "signal"},
+				},
+				Enabled: true,
+			},
+			{
+				ID:     "n-writer",
+				Type:   "classification-writer",
+				Config: map[string]any{},
+				Inputs: map[string]repository.NodeInputSpec{
+					"entries": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "n-agg", SourcePort: "entries"},
 					},
 				},
 				Enabled: true,

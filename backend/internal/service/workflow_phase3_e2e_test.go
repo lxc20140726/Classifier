@@ -40,16 +40,14 @@ func TestPhase3WorkflowE2E_BatchSourceDirClassification(t *testing.T) {
 			{ID: "cc", Type: "confidence-check", Enabled: true, Config: map[string]any{"threshold": 0.75}, Inputs: map[string]repository.NodeInputSpec{
 				"signals": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ext", OutputPortIndex: 0}},
 			}},
-			{ID: "manual", Type: "manual-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
-				"hint":  {LinkSource: &repository.NodeLinkSource{SourceNodeID: "cc", OutputPortIndex: 1}},
+			{ID: "agg", Type: "signal-aggregator", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"trees":       {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
+				"signal_kw":   {LinkSource: &repository.NodeLinkSource{SourceNodeID: "kw", OutputPortIndex: 0}},
+				"signal_ft":   {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ft", OutputPortIndex: 0}},
+				"signal_high": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "cc", OutputPortIndex: 0}},
 			}},
-			{ID: "agg", Type: subtreeAggregatorExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"trees":         {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
-				"signal_kw":     {LinkSource: &repository.NodeLinkSource{SourceNodeID: "kw", OutputPortIndex: 0}},
-				"signal_ft":     {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ft", OutputPortIndex: 0}},
-				"signal_high":   {LinkSource: &repository.NodeLinkSource{SourceNodeID: "cc", OutputPortIndex: 0}},
-				"signal_manual": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "manual", OutputPortIndex: 0}},
+			{ID: "writer", Type: "classification-writer", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"entries": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "agg", SourcePort: "entries"}},
 			}},
 		},
 		Edges: []repository.WorkflowGraphEdge{
@@ -58,13 +56,11 @@ func TestPhase3WorkflowE2E_BatchSourceDirClassification(t *testing.T) {
 			{ID: "e2", Source: "scanner", SourcePort: "tree", Target: "ft", TargetPort: "trees"},
 			{ID: "e3", Source: "scanner", SourcePort: "tree", Target: "ext", TargetPort: "trees"},
 			{ID: "e4", Source: "ext", SourcePort: "signal", Target: "cc", TargetPort: "signals"},
-			{ID: "e5", Source: "scanner", SourcePort: "tree", Target: "manual", TargetPort: "trees"},
-			{ID: "e6", Source: "cc", SourcePort: "low", Target: "manual", TargetPort: "hint"},
 			{ID: "e7", Source: "scanner", SourcePort: "tree", Target: "agg", TargetPort: "trees"},
 			{ID: "e8", Source: "kw", SourcePort: "signal", Target: "agg", TargetPort: "signal_kw"},
 			{ID: "e9", Source: "ft", SourcePort: "signal", Target: "agg", TargetPort: "signal_ft"},
 			{ID: "e10", Source: "cc", SourcePort: "high", Target: "agg", TargetPort: "signal_high"},
-			{ID: "e11", Source: "manual", SourcePort: "signal", Target: "agg", TargetPort: "signal_manual"},
+			{ID: "e11", Source: "agg", SourcePort: "entries", Target: "writer", TargetPort: "entries"},
 		},
 	})
 
@@ -106,122 +102,8 @@ func TestPhase3WorkflowE2E_BatchSourceDirClassification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nodeRunRepo.List() error = %v", err)
 	}
-	if got := nodeRunStatusByID(nodeRuns, "manual"); got != "succeeded" {
-		t.Fatalf("manual node status = %q, want succeeded", got)
-	}
-}
-
-func TestPhase3WorkflowE2E_BatchManualResume(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	adapter := fs.NewMockAdapter()
-	adapter.AddDir("/source", []fs.DirEntry{{Name: "needs-a", IsDir: true}, {Name: "needs-b", IsDir: true}})
-	adapter.AddDir("/source/needs-a", []fs.DirEntry{{Name: "notes.txt", IsDir: false, Size: 10}})
-	adapter.AddDir("/source/needs-b", []fs.DirEntry{{Name: "readme.md", IsDir: false, Size: 10}})
-
-	svc, _, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, _ := newPhase3WorkflowTestEnv(t, adapter)
-
-	def := createPhase3WorkflowDef(t, workflowDefRepo, "wf-batch-manual", repository.WorkflowGraph{
-		Nodes: []repository.WorkflowGraphNode{
-			{ID: "picker", Type: "folder-picker", Enabled: true, Config: map[string]any{"paths": []any{"/source"}}},
-			{ID: "scanner", Type: folderTreeScannerExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"source_dir": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "picker", SourcePort: "path"}},
-			}},
-			{ID: "kw", Type: "name-keyword-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
-			}},
-			{ID: "ft", Type: "file-tree-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
-			}},
-			{ID: "ext", Type: "ext-ratio-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
-			}},
-			{ID: "cc", Type: "confidence-check", Enabled: true, Config: map[string]any{"threshold": 0.9}, Inputs: map[string]repository.NodeInputSpec{
-				"signals": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ext", OutputPortIndex: 0}},
-			}},
-			{ID: "manual", Type: "manual-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
-				"hint":  {LinkSource: &repository.NodeLinkSource{SourceNodeID: "cc", OutputPortIndex: 1}},
-			}},
-			{ID: "agg", Type: subtreeAggregatorExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
-				"trees":         {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
-				"signal_kw":     {LinkSource: &repository.NodeLinkSource{SourceNodeID: "kw", OutputPortIndex: 0}},
-				"signal_ft":     {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ft", OutputPortIndex: 0}},
-				"signal_high":   {LinkSource: &repository.NodeLinkSource{SourceNodeID: "cc", OutputPortIndex: 0}},
-				"signal_manual": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "manual", OutputPortIndex: 0}},
-			}},
-		},
-		Edges: []repository.WorkflowGraphEdge{
-			{ID: "e0", Source: "picker", SourcePort: "path", Target: "scanner", TargetPort: "source_dir"},
-			{ID: "e1", Source: "scanner", SourcePort: "tree", Target: "kw", TargetPort: "trees"},
-			{ID: "e2", Source: "scanner", SourcePort: "tree", Target: "ft", TargetPort: "trees"},
-			{ID: "e3", Source: "scanner", SourcePort: "tree", Target: "ext", TargetPort: "trees"},
-			{ID: "e4", Source: "ext", SourcePort: "signal", Target: "cc", TargetPort: "signals"},
-			{ID: "e5", Source: "scanner", SourcePort: "tree", Target: "manual", TargetPort: "trees"},
-			{ID: "e6", Source: "cc", SourcePort: "low", Target: "manual", TargetPort: "hint"},
-			{ID: "e7", Source: "scanner", SourcePort: "tree", Target: "agg", TargetPort: "trees"},
-			{ID: "e8", Source: "kw", SourcePort: "signal", Target: "agg", TargetPort: "signal_kw"},
-			{ID: "e9", Source: "ft", SourcePort: "signal", Target: "agg", TargetPort: "signal_ft"},
-			{ID: "e10", Source: "cc", SourcePort: "high", Target: "agg", TargetPort: "signal_high"},
-			{ID: "e11", Source: "manual", SourcePort: "signal", Target: "agg", TargetPort: "signal_manual"},
-		},
-	})
-
-	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
-	if err != nil {
-		t.Fatalf("StartJob() error = %v", err)
-	}
-
-	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
-	deadline := time.Now().Add(2 * time.Second)
-	for run.Status != "waiting_input" && time.Now().Before(deadline) {
-		if run.Status == "failed" || run.Status == "succeeded" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-		fresh, getErr := workflowRunRepo.GetByID(ctx, run.ID)
-		if getErr != nil {
-			t.Fatalf("workflowRunRepo.GetByID() error = %v", getErr)
-		}
-		run = fresh
-	}
-	if run.Status != "waiting_input" {
-		nodeRuns, _, listErr := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 50})
-		if listErr != nil {
-			t.Fatalf("workflow run status = %q, want waiting_input; failed listing node runs: %v", run.Status, listErr)
-		}
-		t.Fatalf("workflow run status = %q, want waiting_input (resume_node_id=%q node_runs=%v)", run.Status, run.ResumeNodeID, compactNodeRuns(nodeRuns))
-	}
-	if run.ResumeNodeID != "manual" {
-		t.Fatalf("resume node id = %q, want manual", run.ResumeNodeID)
-	}
-
-	err = svc.ResumeWorkflowRunWithData(ctx, run.ID, map[string]any{
-		"classifications": []any{
-			map[string]any{"source_path": "/source/needs-a", "category": "video"},
-			map[string]any{"source_path": "/source/needs-b", "category": "photo"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("ResumeWorkflowRunWithData() error = %v", err)
-	}
-
-	_ = waitWorkflowRunIDStatus(t, workflowRunRepo, run.ID, "succeeded")
-
-	folderA, err := folderRepo.GetByPath(ctx, "/source/needs-a")
-	if err != nil {
-		t.Fatalf("folderRepo.GetByPath(needs-a) error = %v", err)
-	}
-	folderB, err := folderRepo.GetByPath(ctx, "/source/needs-b")
-	if err != nil {
-		t.Fatalf("folderRepo.GetByPath(needs-b) error = %v", err)
-	}
-	if folderA.Category != "video" {
-		t.Fatalf("needs-a category = %q, want video", folderA.Category)
-	}
-	if folderB.Category != "photo" {
-		t.Fatalf("needs-b category = %q, want photo", folderB.Category)
+	if got := nodeRunStatusByID(nodeRuns, "writer"); got != "succeeded" {
+		t.Fatalf("writer node status = %q, want succeeded", got)
 	}
 }
 
@@ -314,8 +196,9 @@ func newPhase3WorkflowTestEnv(t *testing.T, adapter *fs.MockAdapter) (*WorkflowR
 	svc.RegisterExecutor(NewNameKeywordClassifierExecutor())
 	svc.RegisterExecutor(NewFileTreeClassifierExecutor())
 	svc.RegisterExecutor(NewConfidenceCheckExecutor())
-	svc.RegisterExecutor(NewManualClassifierExecutor())
-	svc.RegisterExecutor(NewSubtreeAggregatorExecutor(folderRepo, snapshotRepo, NewAuditService(auditRepo)))
+	svc.RegisterExecutor(newSignalAggregatorExecutor())
+	svc.RegisterExecutor(newClassificationWriterExecutor(folderRepo, snapshotRepo))
+	_ = auditRepo
 
 	return svc, jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo
 }
@@ -352,7 +235,7 @@ func TestEngineV2_AC_CLASS2_KeywordPriorityOverExtRatio(t *testing.T) {
 		{Name: "ep2.mkv", IsDir: false, Size: 220},
 	})
 
-	svc, jobRepo, folderRepo, workflowDefRepo, _, _, _ := newPhase3WorkflowTestEnv(t, adapter)
+	svc, jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, _ := newPhase3WorkflowTestEnv(t, adapter)
 
 	def := createPhase3WorkflowDef(t, workflowDefRepo, "wf-keyword-priority", repository.WorkflowGraph{
 		Nodes: []repository.WorkflowGraphNode{
@@ -369,10 +252,13 @@ func TestEngineV2_AC_CLASS2_KeywordPriorityOverExtRatio(t *testing.T) {
 				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
 			}},
 			// aggregator receives both signals and picks highest-confidence winner
-			{ID: "agg", Type: subtreeAggregatorExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+			{ID: "agg", Type: "signal-aggregator", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
 				"trees":      {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", OutputPortIndex: 0}},
 				"signal_kw":  {LinkSource: &repository.NodeLinkSource{SourceNodeID: "kw", OutputPortIndex: 0}},
 				"signal_ext": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ext", OutputPortIndex: 0}},
+			}},
+			{ID: "writer", Type: "classification-writer", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"entries": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "agg", SourcePort: "entries"}},
 			}},
 		},
 		Edges: []repository.WorkflowGraphEdge{
@@ -382,6 +268,7 @@ func TestEngineV2_AC_CLASS2_KeywordPriorityOverExtRatio(t *testing.T) {
 			{ID: "e3", Source: "scanner", SourcePort: "tree", Target: "agg", TargetPort: "trees"},
 			{ID: "e4", Source: "kw", SourcePort: "signal", Target: "agg", TargetPort: "signal_kw"},
 			{ID: "e5", Source: "ext", SourcePort: "signal", Target: "agg", TargetPort: "signal_ext"},
+			{ID: "e6", Source: "agg", SourcePort: "entries", Target: "writer", TargetPort: "entries"},
 		},
 	})
 
@@ -392,7 +279,12 @@ func TestEngineV2_AC_CLASS2_KeywordPriorityOverExtRatio(t *testing.T) {
 
 	job := waitJobDone(t, jobRepo, jobID)
 	if job.Status != "succeeded" {
-		t.Fatalf("job status = %q, want succeeded", job.Status)
+		run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+		nodeRuns, _, listErr := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 50})
+		if listErr != nil {
+			t.Fatalf("job status = %q, want succeeded; failed listing node runs: %v", job.Status, listErr)
+		}
+		t.Fatalf("job status = %q, want succeeded (workflow_run_status=%q resume_node_id=%q node_runs=%v)", job.Status, run.Status, run.ResumeNodeID, compactNodeRuns(nodeRuns))
 	}
 
 	folder, err := folderRepo.GetByPath(ctx, "/source/漫画合集")

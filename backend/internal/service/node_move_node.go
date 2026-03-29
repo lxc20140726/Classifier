@@ -35,8 +35,8 @@ func (e *phase4MoveNodeExecutor) Schema() NodeSchema {
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待移动的处理项列表", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "已移动的处理项列表"},
-			{Name: "results", Type: PortTypeMoveResultList, Description: "移动操作结果列表"},
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已移动的处理项列表"},
+			{Name: "results", Type: PortTypeMoveResultList, RequiredOutput: true, Description: "移动操作结果列表"},
 		},
 	}
 }
@@ -129,6 +129,11 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 		item.TargetName = filepath.Base(finalPath)
 		movedItems = append(movedItems, item)
 		results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: normalizeWorkflowPath(finalPath), Status: "moved"})
+
+		if input.ProgressFn != nil {
+			percent := len(results) * 100 / len(items)
+			input.ProgressFn(percent, fmt.Sprintf("已完成 %d/%d 项移动", len(results), len(items)))
+		}
 	}
 
 	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: movedItems}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
