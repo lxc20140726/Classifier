@@ -112,6 +112,108 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: '其他',
 }
 
+interface ClassificationPreviewSummary {
+  total: number
+  by_category: Record<string, number>
+  avg_confidence: number
+  classifier_sources: string[]
+}
+
+interface ProcessingPreviewSummary {
+  total: number
+  succeeded: number
+  failed: number
+  failed_paths: string[]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function parsePreviewSummary(node: NodeRun): ClassificationPreviewSummary | ProcessingPreviewSummary | null {
+  if (!node.output_json) return null
+  try {
+    const parsed = JSON.parse(node.output_json) as Record<string, unknown>
+    if (!isRecord(parsed)) return null
+    const summaryWrapper = parsed.summary
+    if (!isRecord(summaryWrapper)) return null
+    const summary = summaryWrapper.value
+    if (!isRecord(summary)) return null
+    return summary as ClassificationPreviewSummary | ProcessingPreviewSummary
+  } catch {
+    return null
+  }
+}
+
+function BlocksBar({ value, total, activeClass }: { value: number; total: number; activeClass: string }) {
+  const safeTotal = total > 0 ? total : 1
+  const activeBlocks = Math.max(0, Math.min(10, Math.round((value / safeTotal) * 10)))
+  return (
+    <div className="flex items-center gap-1">
+      {Array.from({ length: 10 }).map((_, idx) => (
+        <span
+          key={idx}
+          className={cn(
+            'h-2 w-2 border border-foreground/40',
+            idx < activeBlocks ? activeClass : 'bg-muted',
+          )}
+        />
+      ))}
+      <span className="ml-1 font-mono text-[10px] font-bold text-muted-foreground">{value}</span>
+    </div>
+  )
+}
+
+function NodeResultPreview({ node }: { node: NodeRun }) {
+  if (node.node_type === 'classification-db-result-preview') {
+    const summary = parsePreviewSummary(node) as ClassificationPreviewSummary | null
+    if (!summary) return <span className="text-[10px] font-bold text-muted-foreground">无预览数据</span>
+    const byCategory = summary.by_category ?? {}
+    const entries = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    return (
+      <div className="space-y-1">
+        <p className="text-[10px] font-black text-blue-700 dark:text-blue-300">
+          分类分布（总数 {summary.total}，均值 {Number(summary.avg_confidence || 0).toFixed(2)}）
+        </p>
+        {entries.map(([category, count]) => (
+          <div key={category} className="flex items-center gap-2">
+            <span className="w-12 text-[10px] font-bold text-muted-foreground">{CATEGORY_LABELS[category] ?? category}</span>
+            <BlocksBar value={count} total={summary.total} activeClass="bg-blue-500" />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (node.node_type === 'processing-result-preview') {
+    const summary = parsePreviewSummary(node) as ProcessingPreviewSummary | null
+    if (!summary) return <span className="text-[10px] font-bold text-muted-foreground">无预览数据</span>
+    return (
+      <div className="space-y-1">
+        <p className="text-[10px] font-black text-emerald-700 dark:text-emerald-300">
+          处理统计（总数 {summary.total}）
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="w-12 text-[10px] font-bold text-muted-foreground">成功</span>
+          <BlocksBar value={summary.succeeded} total={summary.total} activeClass="bg-emerald-500" />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-12 text-[10px] font-bold text-muted-foreground">失败</span>
+          <BlocksBar value={summary.failed} total={summary.total} activeClass="bg-rose-500" />
+        </div>
+        {Array.isArray(summary.failed_paths) && summary.failed_paths.length > 0 && (
+          <p className="text-[10px] font-mono text-rose-700 dark:text-rose-300">
+            失败路径：{summary.failed_paths.slice(0, 2).join('，')}
+            {summary.failed_paths.length > 2 ? ' ...' : ''}
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  return <span className="text-[10px] font-bold text-muted-foreground">—</span>
+}
+
 type JobsTab = 'scheduled' | 'history'
 
 interface ScheduledWorkflowFormState {
@@ -232,6 +334,7 @@ function NodeRunsPanel({ runId }: { runId: string }) {
             <th className="py-2 pr-4 text-left font-black tracking-widest">序号</th>
             <th className="py-2 pr-4 text-left font-black tracking-widest">状态</th>
             <th className="py-2 text-left font-black tracking-widest">耗时</th>
+            <th className="py-2 text-left font-black tracking-widest">结果预览</th>
           </tr>
         </thead>
         <tbody ref={listRef}>
@@ -252,6 +355,9 @@ function NodeRunsPanel({ runId }: { runId: string }) {
                 <StatusBadge status={node.status} labels={NODE_STATUS_LABELS} styles={NODE_STATUS_STYLES} />
               </td>
               <td className="py-3 font-mono font-bold">{formatDuration(node.started_at, node.finished_at)}</td>
+              <td className="py-3">
+                <NodeResultPreview node={node} />
+              </td>
             </tr>
           ))}
         </tbody>

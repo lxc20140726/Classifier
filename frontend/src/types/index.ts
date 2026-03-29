@@ -164,6 +164,8 @@ export type NodeType =
   | 'classification-reader'
   | 'db-subtree-reader'
   | 'classification-preview'
+  | 'classification-db-result-preview'
+  | 'processing-result-preview'
   | 'folder-splitter'
   | 'category-router'
   | 'rename-node'

@@ -115,7 +115,15 @@ const NODE_CATEGORIES: NodeCategory[] = [
     iconColor: 'text-blue-600 dark:text-blue-400',
     accentClass: 'from-blue-500/20 to-indigo-500/10 border-blue-200 dark:from-blue-500/25 dark:to-indigo-500/15 dark:border-blue-700',
     borderHoverClass: 'hover:border-blue-300 dark:hover:border-blue-500',
-    types: new Set(['folder-tree-scanner', 'folder-picker', 'classification-reader', 'db-subtree-reader', 'classification-preview']),
+    types: new Set([
+      'folder-tree-scanner',
+      'folder-picker',
+      'classification-reader',
+      'db-subtree-reader',
+      'classification-preview',
+      'classification-db-result-preview',
+      'processing-result-preview',
+    ]),
   },
   {
     label: '分类器',
@@ -216,22 +224,20 @@ function graphToEdges(graph: WorkflowGraph, schemaMap: Map<string, NodeSchema>):
 
     const sourceSchema = schemaMap.get(nodeTypeById.get(edge.source) ?? '')
     const targetSchema = schemaMap.get(nodeTypeById.get(edge.target) ?? '')
+    if (!sourceSchema || !targetSchema) continue
 
-    let sourceHandle: string
-    if (typeof edge.source_port === 'number') {
-      sourceHandle = `out-${edge.source_port}`
-    } else {
-      const portIndex = sourceSchema?.output_ports?.findIndex((p) => p.name === edge.source_port) ?? -1
-      sourceHandle = portIndex >= 0 ? `out-${portIndex}` : `out-0`
-    }
+    const sourcePortIndex = typeof edge.source_port === 'number'
+      ? edge.source_port
+      : sourceSchema.output_ports.findIndex((p) => p.name === edge.source_port)
+    if (sourcePortIndex < 0 || sourcePortIndex >= sourceSchema.output_ports.length) continue
 
-    let targetHandle: string
-    if (typeof edge.target_port === 'number') {
-      targetHandle = `in-${edge.target_port}`
-    } else {
-      const portIndex = targetSchema?.input_ports?.findIndex((p) => p.name === edge.target_port) ?? -1
-      targetHandle = portIndex >= 0 ? `in-${portIndex}` : `in-0`
-    }
+    const targetPortIndex = typeof edge.target_port === 'number'
+      ? edge.target_port
+      : targetSchema.input_ports.findIndex((p) => p.name === edge.target_port)
+    if (targetPortIndex < 0 || targetPortIndex >= targetSchema.input_ports.length) continue
+
+    const sourceHandle = `out-${sourcePortIndex}`
+    const targetHandle = `in-${targetPortIndex}`
 
     result.push({
       id,
@@ -287,6 +293,25 @@ function parseHandleIndex(handle?: string | null) {
   return Number.isNaN(parsed) ? null : parsed
 }
 
+function isValidEditorEdge(
+  edge: Edge,
+  getSchema: (nodeId: string) => NodeSchema | undefined,
+) {
+  const sourcePortIndex = parseHandleIndex(edge.sourceHandle)
+  const targetPortIndex = parseHandleIndex(edge.targetHandle)
+  if (sourcePortIndex == null || targetPortIndex == null) return false
+
+  const sourceSchema = getSchema(edge.source)
+  const targetSchema = getSchema(edge.target)
+  if (!sourceSchema || !targetSchema) return false
+
+  const sourcePort = sourceSchema.output_ports[sourcePortIndex]
+  const targetPort = targetSchema.input_ports[targetPortIndex]
+  if (!sourcePort || !targetPort) return false
+
+  return true
+}
+
 function nodesToGraph(
   rfNodes: EditorNode[],
   rfEdges: Edge[],
@@ -295,6 +320,7 @@ function nodesToGraph(
 ): WorkflowGraph {
   const nodeTypeMap = new Map(rfNodes.map((n) => [n.id, n.data.type]))
   const getSchema = (nodeId: string) => schemaMap.get(nodeTypeMap.get(nodeId) ?? '')
+  const sanitizedEdges = rfEdges.filter((edge) => isValidEditorEdge(edge, getSchema))
 
   const nodes: WorkflowGraphNode[] = rfNodes.map((node) => {
     const previous = workflowNodes[node.id]
@@ -305,23 +331,23 @@ function nodesToGraph(
       type: nextType,
       label: node.data.label,
       config: previous?.config ?? {},
-      inputs: buildInputMap(node.id, rfEdges, schema, previous?.inputs, getSchema),
+      inputs: buildInputMap(node.id, sanitizedEdges, schema, previous?.inputs, getSchema),
       ui_position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
       enabled: node.data.enabled,
     }
   })
 
-  const edges: WorkflowGraphEdge[] = rfEdges.map((edge) => {
+  const edges: WorkflowGraphEdge[] = sanitizedEdges.map((edge) => {
     const sourcePortIndex = parseHandleIndex(edge.sourceHandle) ?? 0
     const targetPortIndex = parseHandleIndex(edge.targetHandle) ?? 0
-    const sourcePortName = getSchema(edge.source)?.output_ports?.[sourcePortIndex]?.name
-    const targetPortName = getSchema(edge.target)?.input_ports?.[targetPortIndex]?.name
+    const sourcePortName = getSchema(edge.source)?.output_ports[sourcePortIndex]?.name
+    const targetPortName = getSchema(edge.target)?.input_ports[targetPortIndex]?.name
     return {
       id: edge.id,
       source: edge.source,
-      source_port: sourcePortName ?? sourcePortIndex,
+      source_port: sourcePortName ?? '',
       target: edge.target,
-      target_port: targetPortName ?? targetPortIndex,
+      target_port: targetPortName ?? '',
     }
   })
 
@@ -528,6 +554,27 @@ interface NodeConfigPanelProps {
   updateNodeConfig: (nodeId: string, key: string, rawValue: string) => void
 }
 
+interface ClassificationPreviewSummary {
+  total: number
+  by_category: Record<string, number>
+  avg_confidence?: number
+  classifier_sources?: string[]
+}
+
+interface ProcessingPreviewSummary {
+  total: number
+  succeeded: number
+  failed: number
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  photo: '照片',
+  video: '视频',
+  manga: '漫画',
+  mixed: '混合',
+  other: '其他',
+}
+
 function cfgStr(config: Record<string, unknown>, key: string): string {
   const v = config[key]
   return typeof v === 'string' ? v : ''
@@ -583,6 +630,75 @@ function NodeUsageHint({ children }: { children: ReactNode }) {
   return (
     <div className="border-2 border-dashed border-foreground bg-muted/30 p-3">
       <p className="text-xs font-bold leading-relaxed text-muted-foreground">{children}</p>
+    </div>
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function unwrapNodeOutputPort(
+  parsed: Record<string, unknown>,
+  portName: string,
+): unknown {
+  const direct = parsed[portName]
+  if (direct !== undefined) {
+    return direct
+  }
+  const outputs = parsed.outputs
+  if (isRecord(outputs)) {
+    return outputs[portName]
+  }
+  return undefined
+}
+
+function unwrapPortValue(port: unknown): unknown {
+  if (!isRecord(port)) return port
+  if ('value' in port) return port.value
+  return port
+}
+
+function parseNodeSummary(nodeRun: NodeRun | null): ClassificationPreviewSummary | ProcessingPreviewSummary | null {
+  if (!nodeRun?.output_json) return null
+  try {
+    const parsed = JSON.parse(nodeRun.output_json) as Record<string, unknown>
+    if (!isRecord(parsed)) return null
+    if (nodeRun.node_type === 'classification-preview') {
+      const entriesPort = unwrapNodeOutputPort(parsed, 'entries')
+      const rawEntries = unwrapPortValue(entriesPort)
+      if (!Array.isArray(rawEntries)) return null
+      const byCategory: Record<string, number> = {}
+      for (const item of rawEntries) {
+        if (!isRecord(item)) continue
+        const categoryRaw = item.category
+        const category = typeof categoryRaw === 'string' && categoryRaw.trim() !== '' ? categoryRaw.trim() : 'other'
+        byCategory[category] = (byCategory[category] ?? 0) + 1
+      }
+      return {
+        total: rawEntries.length,
+        by_category: byCategory,
+      } as ClassificationPreviewSummary
+    }
+
+    const summaryPort = unwrapNodeOutputPort(parsed, 'summary')
+    if (summaryPort === undefined) return null
+    const summaryValue = unwrapPortValue(summaryPort)
+    if (!isRecord(summaryValue)) return null
+    return summaryValue as ClassificationPreviewSummary | ProcessingPreviewSummary
+  } catch {
+    return null
+  }
+}
+
+function MiniBlocks({ value, total, activeClass }: { value: number; total: number; activeClass: string }) {
+  const safeTotal = total > 0 ? total : 1
+  const count = Math.max(0, Math.min(12, Math.round((value / safeTotal) * 12)))
+  return (
+    <div className="flex items-center gap-0.5">
+      {Array.from({ length: 12 }).map((_, idx) => (
+        <span key={idx} className={cn('h-2 w-1 border border-foreground/30', idx < count ? activeClass : 'bg-muted')} />
+      ))}
     </div>
   )
 }
@@ -679,11 +795,13 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
       )
 
     case 'classification-preview':
-      return (
-        <NodeUsageHint>
-          分类结果透视节点。原样透传分类条目，不暂停工作流。运行完成后可在节点运行记录中查看每个文件夹的分类结果（路径、类别、置信度）。无需配置。
-        </NodeUsageHint>
-      )
+      return <></>
+
+    case 'classification-db-result-preview':
+      return <></>
+
+    case 'processing-result-preview':
+      return <></>
 
     case 'folder-splitter':
       return (
@@ -1198,6 +1316,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
   }, [workflowNode, data.type])
 
   const nodeRef = useRef<HTMLDivElement | null>(null)
+  const previewSummary = useMemo(() => parseNodeSummary(nodeRun), [nodeRun])
 
   useEffect(() => {
     if (nodeRef.current) {
@@ -1317,7 +1436,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
 
       {/* Body */}
       <div className="px-3 py-3">
-        {!isTrigger && (
+        {!isTrigger && data.type !== 'classification-preview' && data.type !== 'classification-db-result-preview' && data.type !== 'processing-result-preview' && (
           <p className="mb-2 truncate font-mono text-[10px] font-bold text-muted-foreground">{data.type}</p>
         )}
 
@@ -1341,6 +1460,91 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
             </div>
           )
         })()}
+
+        {data.type === 'classification-preview' && (
+          <div className="mt-2 space-y-1 border-2 border-foreground bg-muted/20 p-2">
+            {Object.entries((previewSummary && 'by_category' in previewSummary ? previewSummary.by_category : {}) as Record<string, number>)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 4).concat(
+                Object.entries((previewSummary && 'by_category' in previewSummary ? previewSummary.by_category : {}) as Record<string, number>).length === 0
+                  ? [['other', 0]]
+                  : [],
+              )
+              .map(([category, value]) => (
+                <div key={category} className="flex items-center justify-between gap-2">
+                  <span className="h-2 w-2 shrink-0 border border-foreground bg-blue-500" title={category} />
+                  <MiniBlocks
+                    value={value}
+                    total={previewSummary && 'by_category' in previewSummary ? previewSummary.total : 0}
+                    activeClass="bg-blue-500"
+                  />
+                </div>
+              ))}
+          </div>
+        )}
+
+        {data.type === 'classification-db-result-preview' && (
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            <div className="border-2 border-foreground bg-card px-2 py-2">
+              <p className="text-[10px] font-bold text-muted-foreground">总条目</p>
+              <p className="mt-1 text-sm font-black tabular-nums">
+                {previewSummary && 'by_category' in previewSummary ? previewSummary.total : 0}
+              </p>
+            </div>
+            <div className="border-2 border-foreground bg-card px-2 py-2">
+              <p className="text-[10px] font-bold text-muted-foreground">均值置信度</p>
+              <p className="mt-1 text-sm font-black tabular-nums">
+                {(
+                  previewSummary
+                  && 'by_category' in previewSummary
+                  && typeof previewSummary.avg_confidence === 'number'
+                    ? previewSummary.avg_confidence
+                    : 0
+                ).toFixed(2)}
+              </p>
+            </div>
+            <div className="border-2 border-foreground bg-card px-2 py-2">
+              <p className="text-[10px] font-bold text-muted-foreground">Top分类</p>
+              {(() => {
+                if (!previewSummary || !('by_category' in previewSummary)) {
+                  return <p className="mt-1 text-xs font-black">其他 0 (0%)</p>
+                }
+                const topEntry = Object.entries(previewSummary.by_category).sort((a, b) => b[1] - a[1])[0]
+                if (!topEntry) {
+                  return <p className="mt-1 text-xs font-black">其他 0 (0%)</p>
+                }
+                const [category, count] = topEntry
+                const pct = previewSummary.total > 0 ? Math.round((count / previewSummary.total) * 100) : 0
+                return (
+                  <p className="mt-1 text-xs font-black tabular-nums">
+                    {CATEGORY_LABELS[category] ?? category} {count} ({pct}%)
+                  </p>
+                )
+              })()}
+            </div>
+          </div>
+        )}
+
+        {data.type === 'processing-result-preview' && (
+          <div className="mt-2 space-y-1 border-2 border-foreground bg-muted/20 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="h-2 w-2 shrink-0 border border-foreground bg-emerald-500" />
+              <MiniBlocks
+                value={previewSummary && 'succeeded' in previewSummary ? previewSummary.succeeded : 0}
+                total={previewSummary && 'succeeded' in previewSummary ? previewSummary.total : 0}
+                activeClass="bg-emerald-500"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="h-2 w-2 shrink-0 border border-foreground bg-rose-500" />
+              <MiniBlocks
+                value={previewSummary && 'succeeded' in previewSummary ? previewSummary.failed : 0}
+                total={previewSummary && 'succeeded' in previewSummary ? previewSummary.total : 0}
+                activeClass="bg-rose-500"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Expanded config form */}
@@ -1444,6 +1648,7 @@ function WorkflowEditorScreen() {
   const nodesByRunId = useWorkflowRunStore((s) => s.nodesByRunId)
   const runsByJobId = useWorkflowRunStore((s) => s.runsByJobId)
   const fetchRunsForJob = useWorkflowRunStore((s) => s.fetchRunsForJob)
+  const fetchRunDetail = useWorkflowRunStore((s) => s.fetchRunDetail)
   const rollbackRun = useWorkflowRunStore((s) => s.rollbackRun)
 
   const nodeRunByNodeId = useMemo<Record<string, NodeRun>>(() => {
@@ -1491,6 +1696,22 @@ function WorkflowEditorScreen() {
     if (!activeJobId) return
     void fetchRunsForJob(activeJobId)
   }, [activeJobId, fetchRunsForJob])
+
+  const activeRunIds = useMemo(() => {
+    if (!activeJobId) return []
+    return (runsByJobId[activeJobId] ?? [])
+      .map((run) => run.id)
+      .sort((a, b) => a.localeCompare(b))
+  }, [activeJobId, runsByJobId])
+
+  const activeRunIdsKey = activeRunIds.join('|')
+
+  useEffect(() => {
+    if (!activeRunIdsKey) return
+    activeRunIdsKey.split('|').forEach((runId) => {
+      void fetchRunDetail(runId)
+    })
+  }, [activeRunIdsKey, fetchRunDetail])
 
   const handleRollbackRun = useCallback(async (runId: string) => {
     if (rollbackingRunId) return
