@@ -78,7 +78,12 @@ func (e *subtreeAggregatorNodeExecutor) Execute(ctx context.Context, input NodeE
 		}
 	}
 	if len(trees) == 0 {
-		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: folder trees are required", e.Type())
+		return NodeExecutionOutput{
+			Outputs: map[string]TypedValue{
+				"entry": {Type: PortTypeClassifiedEntryList, Value: []ClassifiedEntry{}},
+			},
+			Status: ExecutionSuccess,
+		}, nil
 	}
 
 	signalsBySource, err := buildSignalIndex(rawInputs)
@@ -95,7 +100,125 @@ func (e *subtreeAggregatorNodeExecutor) Execute(ctx context.Context, input NodeE
 		entries = append(entries, entry)
 	}
 
+	if err := e.syncSourceDirSummaryClassification(ctx, input, entries); err != nil {
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute sync source dir summary: %w", e.Type(), err)
+	}
+
 	return NodeExecutionOutput{Outputs: map[string]TypedValue{"entry": {Type: PortTypeClassifiedEntryList, Value: entries}}, Status: ExecutionSuccess}, nil
+}
+
+func (e *subtreeAggregatorNodeExecutor) syncSourceDirSummaryClassification(ctx context.Context, input NodeExecutionInput, entries []ClassifiedEntry) error {
+	if e.folders == nil {
+		return nil
+	}
+
+	candidates := sourceDirCandidates(input.SourceDir, entries)
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	var rootFolder *repository.Folder
+	sourceDir := ""
+	for _, candidate := range candidates {
+		folder, err := e.folders.GetByPath(ctx, candidate)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				continue
+			}
+			return err
+		}
+		rootFolder = folder
+		sourceDir = candidate
+		break
+	}
+	if rootFolder == nil {
+		return nil
+	}
+
+	for _, entry := range entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Path), sourceDir) || strings.TrimSpace(entry.FolderID) == strings.TrimSpace(rootFolder.ID) {
+			return nil
+		}
+	}
+
+	summaryCategory := summarizeEntriesCategory(entries)
+	if summaryCategory == "" {
+		return nil
+	}
+
+	snapshotID, err := e.createCategorySnapshot(ctx, input, rootFolder, sourceDir)
+	if err != nil {
+		return fmt.Errorf("create source dir category snapshot for folder %q: %w", rootFolder.ID, err)
+	}
+	if err := e.folders.UpdateCategory(ctx, rootFolder.ID, summaryCategory, "workflow"); err != nil {
+		return fmt.Errorf("update source dir category for folder %q: %w", rootFolder.ID, err)
+	}
+	if err := e.commitCategorySnapshot(ctx, snapshotID, rootFolder, summaryCategory); err != nil {
+		return fmt.Errorf("commit source dir category snapshot for folder %q: %w", rootFolder.ID, err)
+	}
+
+	return nil
+}
+
+func sourceDirCandidates(inputSourceDir string, entries []ClassifiedEntry) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 2)
+
+	if source := strings.TrimSpace(inputSourceDir); source != "" {
+		seen[source] = struct{}{}
+		out = append(out, source)
+	}
+
+	parent := commonParentPath(entries)
+	if parent != "" {
+		if _, ok := seen[parent]; !ok {
+			out = append(out, parent)
+		}
+	}
+
+	return out
+}
+
+func commonParentPath(entries []ClassifiedEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+
+	parent := strings.TrimSpace(filepath.Dir(strings.TrimSpace(entries[0].Path)))
+	if parent == "" || parent == "." {
+		return ""
+	}
+
+	for _, entry := range entries[1:] {
+		currentParent := strings.TrimSpace(filepath.Dir(strings.TrimSpace(entry.Path)))
+		if !strings.EqualFold(parent, currentParent) {
+			return ""
+		}
+	}
+
+	return parent
+}
+
+func summarizeEntriesCategory(entries []ClassifiedEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		category := strings.TrimSpace(entry.Category)
+		if category == "" {
+			category = "other"
+		}
+		seen[category] = struct{}{}
+	}
+	if len(seen) == 1 {
+		for category := range seen {
+			return category
+		}
+	}
+
+	return "mixed"
 }
 
 func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input NodeExecutionInput, tree FolderTree, signalsBySource map[string]map[string]ClassificationSignal) (ClassifiedEntry, error) {
@@ -154,7 +277,7 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 
 	if e.audit != nil {
 		log := &repository.AuditLog{
-			JobID:      workflowRunID(input.WorkflowRun),
+			JobID:      workflowJobIDForSnapshot(input.WorkflowRun),
 			FolderID:   folder.ID,
 			FolderPath: entry.Path,
 			Action:     e.Type(),

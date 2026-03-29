@@ -159,6 +159,39 @@ func TestScan(t *testing.T) {
 			},
 		},
 		{
+			name: "scans nested files recursively",
+			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
+				t.Helper()
+
+				parentPath := filepath.Join(sourceDir, "album")
+				childPath := filepath.Join(parentPath, "set-a")
+				adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "album", IsDir: true}})
+				adapter.AddDir(parentPath, []fs.DirEntry{{Name: "set-a", IsDir: true}})
+				adapter.AddDir(childPath, []fs.DirEntry{
+					{Name: "nested.mp4", IsDir: false},
+					{Name: "nested.jpg", IsDir: false},
+				})
+				adapter.AddFile(filepath.Join(childPath, "nested.mp4"), 1000)
+				adapter.AddFile(filepath.Join(childPath, "nested.jpg"), 500)
+			},
+			wantCount: 1,
+			assert: func(t *testing.T, repo repository.FolderRepository, sourceDir string) {
+				t.Helper()
+
+				path := filepath.Join(sourceDir, "album")
+				folder, err := repo.GetByPath(context.Background(), path)
+				if err != nil {
+					t.Fatalf("GetByPath(%q) error = %v", path, err)
+				}
+				if folder.TotalSize != 1500 {
+					t.Fatalf("folder.TotalSize = %d, want 1500", folder.TotalSize)
+				}
+				if folder.TotalFiles != 2 || folder.ImageCount != 1 || folder.VideoCount != 1 {
+					t.Fatalf("counts = image:%d video:%d total:%d, want 1/1/2", folder.ImageCount, folder.VideoCount, folder.TotalFiles)
+				}
+			},
+		},
+		{
 			name: "skips non-directory entries in source root and returns processed count",
 			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
 				t.Helper()

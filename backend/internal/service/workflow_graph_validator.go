@@ -247,7 +247,7 @@ func (s *WorkflowRunnerService) schemaMap() map[string]NodeSchema {
 }
 
 func (s *WorkflowRunnerService) ValidateWorkflowGraph(graphJSON string) error {
-	graph, err := parseWorkflowGraph(graphJSON)
+	graph, err := parseWorkflowGraphForValidation(graphJSON)
 	if err != nil {
 		return err
 	}

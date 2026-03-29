@@ -42,6 +42,12 @@ type scanTarget struct {
 	relativePath string
 }
 
+type scanMetrics struct {
+	fileNames  []string
+	totalSize  int64
+	totalFiles int
+}
+
 func NewScannerService(
 	fsAdapter fs.FSAdapter,
 	folderRepo repository.FolderRepository,
@@ -195,35 +201,13 @@ func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []strin
 }
 
 func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanTarget) (*repository.Folder, error) {
-	childEntries, err := s.fs.ReadDir(ctx, target.folderPath)
+	metrics, err := s.collectFolderMetrics(ctx, target.folderPath)
 	if err != nil {
 		s.writeScanAudit(ctx, jobID, "", target.folderPath, target.sourceDir, target.relativePath, "failed", "", err)
-		return nil, fmt.Errorf("scanner.scanOne read folder %q: %w", target.folderPath, err)
+		return nil, err
 	}
-
-	fileNames := make([]string, 0, len(childEntries))
-	totalFiles := 0
-	var totalSize int64
-
-	for _, child := range childEntries {
-		childPath := filepath.Join(target.folderPath, child.Name)
-		info, err := s.fs.Stat(ctx, childPath)
-		if err != nil {
-			s.writeScanAudit(ctx, jobID, "", target.folderPath, target.sourceDir, target.relativePath, "failed", "", err)
-			return nil, fmt.Errorf("scanner.scanOne stat %q: %w", childPath, err)
-		}
-
-		totalSize += info.Size
-		if child.IsDir || info.IsDir {
-			continue
-		}
-
-		fileNames = append(fileNames, child.Name)
-		totalFiles++
-	}
-
-	imageCount, videoCount := countMediaFiles(fileNames)
-	category := Classify(target.folderName, fileNames)
+	imageCount, videoCount := countMediaFiles(metrics.fileNames)
+	category := Classify(target.folderName, metrics.fileNames)
 	now := time.Now().UTC()
 
 	folder := &repository.Folder{
@@ -237,8 +221,8 @@ func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanT
 		Status:         "pending",
 		ImageCount:     imageCount,
 		VideoCount:     videoCount,
-		TotalFiles:     totalFiles,
-		TotalSize:      totalSize,
+		TotalFiles:     metrics.totalFiles,
+		TotalSize:      metrics.totalSize,
 		MarkedForMove:  false,
 		ScannedAt:      now,
 		UpdatedAt:      now,
@@ -255,6 +239,41 @@ func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanT
 
 	s.writeScanAudit(ctx, jobID, folder.ID, folder.Path, folder.SourceDir, folder.RelativePath, "success", folder.Category, nil)
 	return folder, nil
+}
+
+func (s *ScannerService) collectFolderMetrics(ctx context.Context, folderPath string) (scanMetrics, error) {
+	entries, err := s.fs.ReadDir(ctx, folderPath)
+	if err != nil {
+		return scanMetrics{}, fmt.Errorf("scanner.collectFolderMetrics read folder %q: %w", folderPath, err)
+	}
+
+	result := scanMetrics{
+		fileNames: make([]string, 0, len(entries)),
+	}
+
+	for _, entry := range entries {
+		childPath := filepath.Join(folderPath, entry.Name)
+		if entry.IsDir {
+			nested, nestedErr := s.collectFolderMetrics(ctx, childPath)
+			if nestedErr != nil {
+				return scanMetrics{}, nestedErr
+			}
+			result.totalFiles += nested.totalFiles
+			result.totalSize += nested.totalSize
+			result.fileNames = append(result.fileNames, nested.fileNames...)
+			continue
+		}
+		info, statErr := s.fs.Stat(ctx, childPath)
+		if statErr != nil {
+			return scanMetrics{}, fmt.Errorf("scanner.collectFolderMetrics stat %q: %w", childPath, statErr)
+		}
+
+		result.totalFiles++
+		result.totalSize += info.Size
+		result.fileNames = append(result.fileNames, entry.Name)
+	}
+
+	return result, nil
 }
 
 func (s *ScannerService) recordClassificationSnapshot(ctx context.Context, jobID string, folder *repository.Folder) error {

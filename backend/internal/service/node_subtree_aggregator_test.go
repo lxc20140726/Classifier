@@ -280,3 +280,34 @@ func TestSubtreeAggregatorExecutorUpdateError(t *testing.T) {
 		t.Fatalf("Execute() error = nil, want update error")
 	}
 }
+
+func TestSubtreeAggregatorExecutorEmptyTreesReturnsSuccess(t *testing.T) {
+	t.Parallel()
+
+	folderRepo := &subtreeAggregatorFakeFolderRepo{}
+	executor := newSubtreeAggregatorExecutor(folderRepo, nil, nil)
+
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		SourceDir: "/src",
+		Inputs: testInputs(map[string]any{
+			"trees": []FolderTree{},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if out.Status != ExecutionSuccess {
+		t.Fatalf("status = %q, want success", out.Status)
+	}
+
+	entries, ok := out.Outputs["entry"].Value.([]ClassifiedEntry)
+	if !ok {
+		t.Fatalf("entry output type = %T, want []ClassifiedEntry", out.Outputs["entry"].Value)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(entries) = %d, want 0", len(entries))
+	}
+	if len(folderRepo.updateCategoryCalls) != 0 {
+		t.Fatalf("UpdateCategory calls = %d, want 0", len(folderRepo.updateCategoryCalls))
+	}
+}

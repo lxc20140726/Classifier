@@ -79,10 +79,12 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 	}
 
 	trees := make([]FolderTree, 0, len(entries))
+	hasTopLevelDir := false
 	for _, entry := range entries {
 		if !entry.IsDir {
 			continue
 		}
+		hasTopLevelDir = true
 		if isExcluded(entry.Name, excludeSet) {
 			continue
 		}
@@ -99,6 +101,17 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 		trees = append(trees, tree)
 	}
 
+	// 当 source_dir 本身就是“待处理文件夹”而非“父目录”时（例如由 folder-picker 输出），
+	// 顶层可能没有子目录，此时回退为扫描 source_dir 本身，避免整个链路空跑。
+	if len(trees) == 0 && !hasTopLevelDir {
+		rootTree, fileCount, err := e.buildTree(ctx, sourceDir, 0, maxDepth, excludeSet)
+		if err != nil {
+			return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute build root tree for %q: %w", sourceDir, err)
+		}
+		if fileCount >= minFileCount {
+			trees = append(trees, rootTree)
+		}
+	}
 	return NodeExecutionOutput{Outputs: map[string]TypedValue{"tree": {Type: PortTypeFolderTreeList, Value: trees}}, Status: ExecutionSuccess}, nil
 }
 

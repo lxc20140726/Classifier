@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -763,6 +764,17 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 	case "move":
 		detail["source_path"] = folderPathForAudit(input.Folder, nil)
 		detail["target_path"] = folderPathForAudit(currentFolder, nil)
+	case subtreeAggregatorExecutorType:
+		entries := classifiedEntriesForAudit(outputs)
+		detail["entry_count"] = len(entries)
+		if len(entries) > 0 {
+			if folderPath == "" {
+				folderPath = strings.TrimSpace(entries[0].Path)
+			}
+			if input.Folder == nil && currentFolder == nil && strings.TrimSpace(entries[0].FolderID) != "" {
+				detail["entry_folder_id"] = strings.TrimSpace(entries[0].FolderID)
+			}
+		}
 	case phase4MoveNodeExecutorType:
 		results := moveResultsForAudit(outputs)
 		detail["results"] = results
@@ -799,7 +811,7 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 		return fmt.Errorf("workflowRunner.writeNodeExecutionAudit marshal detail: %w", err)
 	}
 
-	return s.auditSvc.Write(ctx, &repository.AuditLog{
+	auditLog := &repository.AuditLog{
 		JobID:      workflowJobIDFromInput(input.WorkflowRun),
 		FolderID:   folderIDForAudit(input.Folder, currentFolder),
 		FolderPath: folderPath,
@@ -808,7 +820,19 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 		Detail:     detailJSON,
 		DurationMs: time.Since(startedAt).Milliseconds(),
 		ErrorMsg:   errorString(execErr),
-	})
+	}
+	if input.Node.Type == subtreeAggregatorExecutorType && strings.TrimSpace(auditLog.FolderID) == "" {
+		entries := classifiedEntriesForAudit(outputs)
+		if len(entries) > 0 {
+			auditLog.FolderID = strings.TrimSpace(entries[0].FolderID)
+			if strings.TrimSpace(auditLog.FolderPath) == "" {
+				auditLog.FolderPath = strings.TrimSpace(entries[0].Path)
+			}
+		}
+	}
+	err = s.auditSvc.Write(ctx, auditLog)
+
+	return err
 }
 
 func (s *WorkflowRunnerService) writeNodeRollbackAudit(ctx context.Context, run *repository.WorkflowRun, nodeRun *repository.NodeRun, folder *repository.Folder, snapshots []*repository.NodeSnapshot) error {
@@ -917,6 +941,26 @@ func moveResultsForAudit(outputs map[string]TypedValue) []MoveResult {
 	}
 }
 
+func classifiedEntriesForAudit(outputs map[string]TypedValue) []ClassifiedEntry {
+	if len(outputs) == 0 {
+		return nil
+	}
+
+	entryOutput, ok := outputs["entry"]
+	if !ok {
+		return nil
+	}
+
+	switch typed := entryOutput.Value.(type) {
+	case []ClassifiedEntry:
+		return append([]ClassifiedEntry(nil), typed...)
+	case ClassifiedEntry:
+		return []ClassifiedEntry{typed}
+	default:
+		return nil
+	}
+}
+
 func stringSliceOutput(outputs map[string]TypedValue, key string) []string {
 	output, ok := outputs[key]
 	if !ok {
@@ -996,10 +1040,52 @@ func shouldSkipNode(node repository.WorkflowGraphNode, inputs map[string]*TypedV
 		if _, exists := node.Inputs[port.Name]; !exists {
 			continue
 		}
-		if value, ok := inputs[port.Name]; !ok || value == nil || value.Value == nil {
+		value, ok := inputs[port.Name]
+		if !ok || value == nil || value.Value == nil {
+			return true
+		}
+		if isListPortType(port.Type) && isEmptyListPortValue(value.Value) {
 			return true
 		}
 	}
+	return false
+}
+
+func isListPortType(portType PortType) bool {
+	switch portType {
+	case PortTypeStringList, PortTypeFolderTreeList, PortTypeClassificationSignalList, PortTypeClassifiedEntryList, PortTypeProcessingItemList, PortTypeMoveResultList:
+		return true
+	default:
+		return false
+	}
+}
+
+func isEmptyListPortValue(value any) bool {
+	switch typed := value.(type) {
+	case []string:
+		return len(typed) == 0
+	case []FolderTree:
+		return len(typed) == 0
+	case []ClassificationSignal:
+		return len(typed) == 0
+	case []ClassifiedEntry:
+		return len(typed) == 0
+	case []ProcessingItem:
+		return len(typed) == 0
+	case []MoveResult:
+		return len(typed) == 0
+	case []any:
+		return len(typed) == 0
+	}
+
+	rv := reflect.ValueOf(value)
+	if !rv.IsValid() {
+		return true
+	}
+	if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
+		return rv.Len() == 0
+	}
+
 	return false
 }
 
@@ -1060,6 +1146,14 @@ func (s *WorkflowRunnerService) publish(eventType string, payload any) {
 }
 
 func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {
+	return parseWorkflowGraphWithOptions(graphJSON, true)
+}
+
+func parseWorkflowGraphForValidation(graphJSON string) (*repository.WorkflowGraph, error) {
+	return parseWorkflowGraphWithOptions(graphJSON, false)
+}
+
+func parseWorkflowGraphWithOptions(graphJSON string, requireNonEmptyNodes bool) (*repository.WorkflowGraph, error) {
 	if strings.TrimSpace(graphJSON) == "" {
 		return nil, fmt.Errorf("parseWorkflowGraph: graph_json is empty")
 	}
@@ -1079,7 +1173,7 @@ func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {
 	if err := json.Unmarshal([]byte(graphJSON), &raw); err != nil {
 		return nil, fmt.Errorf("parseWorkflowGraph: %w", err)
 	}
-	if len(raw.Nodes) == 0 {
+	if requireNonEmptyNodes && len(raw.Nodes) == 0 {
 		return nil, fmt.Errorf("parseWorkflowGraph: nodes is empty")
 	}
 
@@ -1102,7 +1196,7 @@ func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {
 			Enabled:    enabled,
 		})
 	}
-	if len(filtered) == 0 {
+	if requireNonEmptyNodes && len(filtered) == 0 {
 		return nil, fmt.Errorf("parseWorkflowGraph: all nodes are disabled")
 	}
 

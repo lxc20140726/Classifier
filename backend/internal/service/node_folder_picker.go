@@ -35,6 +35,29 @@ func (e *folderPickerNodeExecutor) Schema() NodeSchema {
 			{Name: "folders", Type: PortTypeFolderTreeList, Description: "选定的目录树列表（可直接接分类器）"},
 			{Name: "path", Type: PortTypePath, Description: "第一个配置路径（可接目录树扫描器的 source_dir）"},
 		},
+		ConfigSchema: map[string]any{
+			"source_mode": map[string]any{
+				"type":        "string",
+				"enum":        []string{"path", "folders"},
+				"default":     "path",
+				"description": "path=手动路径列表；folders=从数据库已保存文件夹中选择",
+			},
+			"paths": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "路径模式下使用的目录路径列表",
+			},
+			"saved_folder_ids": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "记录模式下使用的数据库 folder.id 列表",
+			},
+			"folder_ids": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "兼容旧配置：记录模式使用的数据库 folder.id 列表",
+			},
+		},
 	}
 }
 
@@ -43,7 +66,7 @@ func (e *folderPickerNodeExecutor) Execute(ctx context.Context, input NodeExecut
 	paths := []string{}
 	switch mode {
 	case "folders":
-		folderIDs := folderPickerParseFolderIDs(input.Node.Config)
+		folderIDs := folderPickerParseSavedFolderIDs(input.Node.Config)
 		paths = e.pathsFromFolderRecords(ctx, folderIDs)
 	default:
 		paths = folderPickerParsePaths(input.Node.Config)
@@ -134,34 +157,19 @@ func folderPickerSourceMode(config map[string]any) string {
 }
 
 func folderPickerParsePaths(config map[string]any) []string {
-	raw, ok := config["paths"]
-	if !ok {
-		return nil
-	}
-
-	switch v := raw.(type) {
-	case []string:
-		return v
-	case []any:
-		result := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	case string:
-		s := strings.TrimSpace(v)
-		if s == "" {
-			return nil
-		}
-		return []string{s}
-	}
-	return nil
+	return folderPickerParseStringSlice(config, "paths")
 }
 
-func folderPickerParseFolderIDs(config map[string]any) []string {
-	raw, ok := config["folder_ids"]
+func folderPickerParseSavedFolderIDs(config map[string]any) []string {
+	// 兼容旧字段 folder_ids，优先使用新字段 saved_folder_ids。
+	if ids := folderPickerParseStringSlice(config, "saved_folder_ids"); len(ids) > 0 {
+		return ids
+	}
+	return folderPickerParseStringSlice(config, "folder_ids")
+}
+
+func folderPickerParseStringSlice(config map[string]any, key string) []string {
+	raw, ok := config[key]
 	if !ok {
 		return nil
 	}
