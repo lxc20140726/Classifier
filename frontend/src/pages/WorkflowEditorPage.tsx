@@ -65,6 +65,7 @@ interface EditorContextValue {
   addNodeConfig: (nodeId: string, key: string, rawValue: string) => void
   deleteNode: (nodeId: string) => void
   nodeRunByNodeId: Record<string, NodeRun>
+  rollbackingRunId: string | null
   onRollbackRun: (runId: string) => Promise<void>
   onViewNodeError: (nodeId: string) => void
 }
@@ -340,6 +341,28 @@ function parseConfigValue(input: string): unknown {
     }
   }
   return input
+}
+
+function sendAgentDebugLog(payload: {
+  runId: string
+  hypothesisId: string
+  location: string
+  message: string
+  data: Record<string, unknown>
+}) {
+  fetch('http://127.0.0.1:7712/ingest/5390b56f-af7c-4d76-be18-5b2daa414d69', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2da064' },
+    body: JSON.stringify({
+      sessionId: '2da064',
+      runId: payload.runId,
+      hypothesisId: payload.hypothesisId,
+      location: payload.location,
+      message: payload.message,
+      data: payload.data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {})
 }
 
 
@@ -956,9 +979,13 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     ? rawPaths.filter((p): p is string => typeof p === 'string')
     : []
   const rawFolderIDs = config['folder_ids']
-  const folderIDs: string[] = Array.isArray(rawFolderIDs)
+  const folderIDsCompat: string[] = Array.isArray(rawFolderIDs)
     ? rawFolderIDs.filter((item): item is string => typeof item === 'string')
     : []
+  const rawSavedFolderIDs = config['saved_folder_ids']
+  const savedFolderIDs: string[] = Array.isArray(rawSavedFolderIDs)
+    ? rawSavedFolderIDs.filter((item): item is string => typeof item === 'string')
+    : folderIDsCompat
 
   useEffect(() => {
     let active = true
@@ -984,6 +1011,7 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     updateNodeConfig(nodeId, 'source_mode', mode)
     if (mode === 'path') {
       updateNodeConfig(nodeId, 'folder_ids', '[]')
+      updateNodeConfig(nodeId, 'saved_folder_ids', '[]')
       return
     }
     updateNodeConfig(nodeId, 'paths', '[]')
@@ -993,7 +1021,9 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     updateNodeConfig(nodeId, 'paths', JSON.stringify(next))
   }
 
-  function setFolderIDs(next: string[]) {
+  function setSavedFolderIDs(next: string[]) {
+    updateNodeConfig(nodeId, 'saved_folder_ids', JSON.stringify(next))
+    // 同步兼容旧字段，确保历史后端版本也可识别。
     updateNodeConfig(nodeId, 'folder_ids', JSON.stringify(next))
   }
 
@@ -1011,11 +1041,11 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
   }
 
   function toggleFolderRecord(id: string) {
-    if (folderIDs.includes(id)) {
-      setFolderIDs(folderIDs.filter((item) => item !== id))
+    if (savedFolderIDs.includes(id)) {
+      setSavedFolderIDs(savedFolderIDs.filter((item) => item !== id))
       return
     }
-    setFolderIDs([...folderIDs, id])
+    setSavedFolderIDs([...savedFolderIDs, id])
   }
 
   return (
@@ -1083,7 +1113,7 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
           </div>
         </ConfigField>
       ) : (
-        <ConfigField label="媒体文件夹记录" hint="从已存在的媒体文件夹记录中选择多个目录">
+        <ConfigField label="数据库已保存文件夹" hint="从数据库中的文件夹记录里选择多个目录">
           <div className="space-y-2">
             <input
               value={query}
@@ -1107,7 +1137,7 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
                   <label key={record.id} className="flex cursor-pointer items-start gap-2 border-2 border-foreground bg-background px-2 py-2">
                     <input
                       type="checkbox"
-                      checked={folderIDs.includes(record.id)}
+                      checked={savedFolderIDs.includes(record.id)}
                       onChange={() => toggleFolderRecord(record.id)}
                       className="mt-0.5 h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
                     />
@@ -1151,7 +1181,7 @@ const PORT_TYPE_COLORS: Record<string, string> = {
 }
 
 function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
-  const { workflowNodes, updateNode, updateNodeConfig, deleteNode, nodeRunByNodeId, onRollbackRun, onViewNodeError } =
+  const { workflowNodes, updateNode, updateNodeConfig, deleteNode, nodeRunByNodeId, rollbackingRunId, onRollbackRun, onViewNodeError } =
     useEditorContext()
   const workflowNode = workflowNodes[id] ?? null
   const nodeRun = nodeRunByNodeId[id] ?? null
@@ -1360,11 +1390,12 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
             {nodeRun && nodeRun.status === 'succeeded' && (
               <button
                 type="button"
+                disabled={rollbackingRunId === nodeRun.workflow_run_id}
                 onClick={() => void onRollbackRun(nodeRun.workflow_run_id)}
-                className="inline-flex w-full items-center justify-center gap-2 border-2 border-amber-900 bg-amber-200 px-3 py-2 text-sm font-bold text-amber-900 transition-all hover:bg-amber-900 hover:text-amber-100 hover:shadow-hard hover:-translate-y-0.5"
+                className="inline-flex w-full items-center justify-center gap-2 border-2 border-amber-900 bg-amber-200 px-3 py-2 text-sm font-bold text-amber-900 transition-all hover:bg-amber-900 hover:text-amber-100 hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-amber-200 disabled:hover:text-amber-900 disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
                 <RotateCcw className="h-4 w-4" />
-                回退此节点的工作流运行
+                {rollbackingRunId === nodeRun.workflow_run_id ? '回退中...' : '回退此节点的工作流运行'}
               </button>
             )}
             <button
@@ -1407,6 +1438,7 @@ function WorkflowEditorScreen() {
   const [configAutoSaveTick, setConfigAutoSaveTick] = useState(0)
   const [selectionModeOn, setSelectionModeOn] = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [rollbackingRunId, setRollbackingRunId] = useState<string | null>(null)
   const [nodeErrorModal, setNodeErrorModal] = useState<{ nodeId: string; nodeLabel: string; error: string } | null>(null)
 
   const nodesByRunId = useWorkflowRunStore((s) => s.nodesByRunId)
@@ -1461,9 +1493,19 @@ function WorkflowEditorScreen() {
   }, [activeJobId, fetchRunsForJob])
 
   const handleRollbackRun = useCallback(async (runId: string) => {
-    await rollbackRun(runId)
-    if (activeJobId) void fetchRunsForJob(activeJobId)
-  }, [rollbackRun, activeJobId, fetchRunsForJob])
+    if (rollbackingRunId) return
+    setRollbackingRunId(runId)
+    setError(null)
+    try {
+      await rollbackRun(runId)
+      if (activeJobId) await fetchRunsForJob(activeJobId)
+      setNotice('工作流回退完成')
+    } catch (rollbackError) {
+      setError(rollbackError instanceof Error ? rollbackError.message : '回退失败')
+    } finally {
+      setRollbackingRunId(null)
+    }
+  }, [rollbackRun, activeJobId, fetchRunsForJob, rollbackingRunId])
 
   const schemaMap = useMemo(() => new Map(schemas.map((schema) => [schema.type, schema])), [schemas])
   const schemaMapRef = useRef(schemaMap)
@@ -1522,6 +1564,20 @@ function WorkflowEditorScreen() {
 
   const onConnect = useMemo<OnConnect>(
     () => (connection: Connection) => {
+      // #region agent log
+      sendAgentDebugLog({
+        runId: 'pre-fix',
+        hypothesisId: 'H2',
+        location: 'WorkflowEditorPage.tsx:onConnect',
+        message: 'edge connected in editor',
+        data: {
+          source: connection.source ?? '',
+          target: connection.target ?? '',
+          sourceHandle: connection.sourceHandle ?? '',
+          targetHandle: connection.targetHandle ?? '',
+        },
+      })
+      // #endregion
       setEdges((currentEdges) => {
         const withoutExisting = currentEdges.filter(
           (edge) => !(edge.target === connection.target && edge.targetHandle === connection.targetHandle),
@@ -1546,9 +1602,38 @@ function WorkflowEditorScreen() {
     try {
       const graph = nodesToGraph(nodesRef.current, edgesRef.current, workflowNodesRef.current, schemaMapRef.current)
       const graphJson = JSON.stringify(graph, null, 2)
+      const savedGraph = safeParseGraph(currentWorkflowDef.graph_json)
+      // #region agent log
+      sendAgentDebugLog({
+        runId: 'pre-fix',
+        hypothesisId: 'H3',
+        location: 'WorkflowEditorPage.tsx:persistGraph:beforeUpdate',
+        message: 'persist graph start',
+        data: {
+          showNotice,
+          liveNodes: graph.nodes.length,
+          liveEdges: graph.edges.length,
+          savedNodesBefore: savedGraph.nodes.length,
+          savedEdgesBefore: savedGraph.edges.length,
+        },
+      })
+      // #endregion
       await updateWorkflowDef(currentWorkflowDef.id, { graph_json: graphJson })
       setWorkflowDef((prev) => (prev ? { ...prev, graph_json: graphJson } : prev))
       setWorkflowNodes(Object.fromEntries(graph.nodes.map((node) => [node.id, node])))
+      // #region agent log
+      sendAgentDebugLog({
+        runId: 'pre-fix',
+        hypothesisId: 'H3',
+        location: 'WorkflowEditorPage.tsx:persistGraph:afterUpdate',
+        message: 'persist graph success',
+        data: {
+          workflowDefId: currentWorkflowDef.id,
+          savedNodesAfter: graph.nodes.length,
+          savedEdgesAfter: graph.edges.length,
+        },
+      })
+      // #endregion
       if (showNotice) setNotice('工作流已保存')
     } catch (saveError) {
       if (saveError instanceof ApiRequestError) {
@@ -1681,10 +1766,11 @@ function WorkflowEditorScreen() {
       addNodeConfig,
       deleteNode,
       nodeRunByNodeId,
+      rollbackingRunId,
       onRollbackRun: handleRollbackRun,
       onViewNodeError: openNodeErrorModal,
     }),
-    [workflowNodes, schemas, updateNode, updateNodeConfig, removeNodeConfig, addNodeConfig, deleteNode, nodeRunByNodeId, handleRollbackRun, openNodeErrorModal],
+    [workflowNodes, schemas, updateNode, updateNodeConfig, removeNodeConfig, addNodeConfig, deleteNode, nodeRunByNodeId, rollbackingRunId, handleRollbackRun, openNodeErrorModal],
   )
 
   // ─── Add node ────────────────────────────────────────────────────────────────
@@ -1713,6 +1799,19 @@ function WorkflowEditorScreen() {
           enabled: true,
         },
       }))
+      // #region agent log
+      sendAgentDebugLog({
+        runId: 'pre-fix',
+        hypothesisId: 'H2',
+        location: 'WorkflowEditorPage.tsx:addNode',
+        message: 'node added in editor',
+        data: {
+          nodeId,
+          nodeType: schema.type,
+          nodesCountAfterAdd: currentNodes.length + 1,
+        },
+      })
+      // #endregion
       return [...currentNodes, nextNode]
     })
   }
@@ -1733,7 +1832,37 @@ function WorkflowEditorScreen() {
     setError(null)
     setNotice(null)
     try {
+      const liveGraph = nodesToGraph(nodesRef.current, edgesRef.current, workflowNodesRef.current, schemaMapRef.current)
+      const savedGraph = safeParseGraph(workflowDefRef.current?.graph_json ?? '')
+      // #region agent log
+      sendAgentDebugLog({
+        runId: 'pre-fix',
+        hypothesisId: 'H1',
+        location: 'WorkflowEditorPage.tsx:handleRunWorkflow:beforeStart',
+        message: 'run requested',
+        data: {
+          workflowDefId,
+          isSaving,
+          liveNodes: liveGraph.nodes.length,
+          liveEdges: liveGraph.edges.length,
+          savedNodes: savedGraph.nodes.length,
+          savedEdges: savedGraph.edges.length,
+        },
+      })
+      // #endregion
       const res = await startWorkflowJob({ workflow_def_id: workflowDefId })
+      // #region agent log
+      sendAgentDebugLog({
+        runId: 'pre-fix',
+        hypothesisId: 'H4',
+        location: 'WorkflowEditorPage.tsx:handleRunWorkflow:afterStart',
+        message: 'run started',
+        data: {
+          workflowDefId,
+          jobId: res.job_id,
+        },
+      })
+      // #endregion
       setActiveJobId(res.job_id)
       setNotice('工作流已启动')
     } catch (runError) {

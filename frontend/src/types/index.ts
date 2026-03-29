@@ -147,7 +147,7 @@ export interface AuditLog {
   created_at: string
 }
 
-export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partial' | 'waiting_input'
+export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partial' | 'waiting_input' | 'rolled_back'
 export type NodeRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting_input'
 export type NodeType =
   | 'trigger'

@@ -50,14 +50,43 @@ function renderDetail(detail: Record<string, unknown> | null): Array<[string, st
   const sourceDir = typeof detail.source_dir === 'string' ? detail.source_dir : null
   const relativePath = typeof detail.relative_path === 'string' ? detail.relative_path : null
   const category = typeof detail.category === 'string' ? detail.category : null
+  const categorySource = typeof detail.category_source === 'string' ? detail.category_source : null
+  const beforeCategory = typeof detail.before_category === 'string' ? detail.before_category : null
+  const beforeCategorySource =
+    typeof detail.before_category_source === 'string' ? detail.before_category_source : null
+  const afterCategory = typeof detail.after_category === 'string' ? detail.after_category : null
+  const afterCategorySource =
+    typeof detail.after_category_source === 'string' ? detail.after_category_source : null
   const targetDir = typeof detail.target_dir === 'string' ? detail.target_dir : null
   const sourcePath = typeof detail.source_path === 'string' ? detail.source_path : null
+  const folderPath = typeof detail.folder_path === 'string' ? detail.folder_path : null
+  const workflowRunId = typeof detail.workflow_run_id === 'string' ? detail.workflow_run_id : null
+  const nodeRunId = typeof detail.node_run_id === 'string' ? detail.node_run_id : null
+  const nodeType = typeof detail.node_type === 'string' ? detail.node_type : null
 
   if (sourceDir) entries.push(['扫描目录', sourceDir])
   if (relativePath) entries.push(['相对路径', relativePath])
   if (category) entries.push(['分类结果', category])
+  if (categorySource) entries.push(['分类来源', categorySource])
+  if (beforeCategory) {
+    entries.push([
+      '变更前分类',
+      beforeCategorySource ? `${beforeCategory}（${beforeCategorySource}）` : beforeCategory,
+    ])
+  }
+  if (afterCategory) {
+    entries.push([
+      '变更后分类',
+      afterCategorySource ? `${afterCategory}（${afterCategorySource}）` : afterCategory,
+    ])
+  }
   if (targetDir) entries.push(['输出目录', targetDir])
   if (sourcePath) entries.push(['原始路径', sourcePath])
+  if (folderPath) entries.push(['目录路径', folderPath])
+  if (workflowRunId) entries.push(['来源', '工作流'])
+  if (workflowRunId) entries.push(['工作流运行ID', workflowRunId])
+  if (nodeType) entries.push(['节点类型', nodeType])
+  if (nodeRunId) entries.push(['节点运行ID', nodeRunId])
 
   return entries
 }

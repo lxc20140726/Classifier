@@ -17,6 +17,7 @@ import { DirPicker } from '@/components/DirPicker'
 import { cn } from '@/lib/utils'
 import { useConfigStore } from '@/store/configStore'
 import { useJobStore } from '@/store/jobStore'
+import { useNotificationStore } from '@/store/notificationStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import type {
   Job,
@@ -39,7 +40,9 @@ function formatDuration(startedAt: string | null, finishedAt: string | null) {
   if (!startedAt) return '—'
   const end = finishedAt ? new Date(finishedAt) : new Date()
   const start = new Date(startedAt)
-  const secs = Math.floor((end.getTime() - start.getTime()) / 1000)
+  const diffMs = Math.max(0, end.getTime() - start.getTime())
+  if (diffMs < 1000) return '<1 秒'
+  const secs = Math.floor(diffMs / 1000)
   if (secs < 60) return `${secs} 秒`
   if (secs < 3600) return `${Math.floor(secs / 60)} 分 ${secs % 60} 秒`
   return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
@@ -70,6 +73,7 @@ const WF_STATUS_LABELS: Record<WorkflowRunStatus, string> = {
   failed: '失败',
   partial: '部分完成',
   waiting_input: '待确认',
+  rolled_back: '已回退',
 }
 
 const WF_STATUS_STYLES: Record<WorkflowRunStatus, string> = {
@@ -79,6 +83,7 @@ const WF_STATUS_STYLES: Record<WorkflowRunStatus, string> = {
   failed: 'bg-red-300 text-red-900 border-2 border-foreground',
   partial: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
   waiting_input: 'bg-purple-300 text-purple-900 border-2 border-foreground',
+  rolled_back: 'bg-orange-300 text-orange-900 border-2 border-foreground',
 }
 
 const NODE_STATUS_LABELS: Record<NodeRunStatus, string> = {
@@ -260,7 +265,8 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
   const [selectedCategory, setSelectedCategory] = useState<string>('photo')
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [isActing, setIsActing] = useState(false)
-  const { rollbackRun, provideInput, provideRawInput, nodesByRunId, fetchRunDetail } = useWorkflowRunStore()
+  const { rollbackRun, provideInput, provideRawInput, nodesByRunId, fetchRunDetail, fetchRunsForJob } = useWorkflowRunStore()
+  const pushNotification = useNotificationStore((s) => s.pushNotification)
 
   const nodeRuns = nodesByRunId[run.id] ?? []
   const waitingNode = nodeRuns.find((n) => n.status === 'waiting_input') ?? null
@@ -297,6 +303,21 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
     setIsActing(true)
     try {
       await rollbackRun(run.id)
+      await fetchRunsForJob(run.job_id)
+      pushNotification({
+        level: 'success',
+        title: '回滚完成',
+        message: `工作流运行 ${run.id.slice(0, 8)} 已回退。`,
+        jobId: run.job_id,
+      })
+    } catch (rollbackError) {
+      const message = rollbackError instanceof Error ? rollbackError.message : '回滚失败'
+      pushNotification({
+        level: 'error',
+        title: '回滚失败',
+        message,
+        jobId: run.job_id,
+      })
     } finally {
       setIsActing(false)
     }
@@ -362,7 +383,7 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
                 onClick={() => void handleRollback()}
                 className="border-2 border-red-900 bg-red-200 px-3 py-1 text-xs font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50"
               >
-                回滚
+                {isActing ? '回滚中...' : '回滚'}
               </button>
             )}
             {run.status === 'waiting_input' && waitingNodeType !== 'folder-selector' && (

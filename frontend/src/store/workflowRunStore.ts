@@ -73,6 +73,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
 
   async rollbackRun(runId) {
     await rollbackWorkflowRun(runId)
+    await get().fetchRunDetail(runId)
   },
 
   async provideInput(runId, category) {

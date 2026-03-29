@@ -39,15 +39,63 @@ function parseRecord(raw: RawSnapshotRecord) {
   }
 }
 
+function parseRecordArray(raw: unknown): Array<{ original_path: string; current_path: string }> {
+  if (!Array.isArray(raw)) {
+    return []
+  }
+
+  const records: Array<{ original_path: string; current_path: string }> = []
+  for (const item of raw) {
+    if (item == null || typeof item !== 'object') {
+      continue
+    }
+    records.push(parseRecord(item as RawSnapshotRecord))
+  }
+
+  return records
+}
+
+function objectField(raw: unknown, key: string): string {
+  if (raw == null || typeof raw !== 'object') {
+    return ''
+  }
+  const value = (raw as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : ''
+}
+
 function parseSnapshot(raw: RawSnapshot): Snapshot {
+  const rawBefore = raw.before ?? raw.Before
+  const rawAfter = raw.after ?? raw.After
+  const parsedBefore = parseRecordArray(rawBefore)
+  const parsedAfter = parseRecordArray(rawAfter)
+  const detailRecord =
+    raw.detail != null && typeof raw.detail === 'object'
+      ? { ...(raw.detail as Record<string, unknown>) }
+      : raw.Detail != null && typeof raw.Detail === 'object'
+        ? { ...(raw.Detail as Record<string, unknown>) }
+        : null
+  if (detailRecord != null) {
+    if (!Array.isArray(rawBefore) && rawBefore != null && typeof rawBefore === 'object') {
+      const category = objectField(rawBefore, 'category')
+      const source = objectField(rawBefore, 'category_source')
+      if (category !== '') detailRecord.before_category = category
+      if (source !== '') detailRecord.before_category_source = source
+    }
+    if (!Array.isArray(rawAfter) && rawAfter != null && typeof rawAfter === 'object') {
+      const category = objectField(rawAfter, 'category')
+      const source = objectField(rawAfter, 'category_source')
+      if (category !== '') detailRecord.after_category = category
+      if (source !== '') detailRecord.after_category_source = source
+    }
+  }
   return {
     id: raw.id ?? raw.ID ?? '',
     job_id: raw.job_id ?? raw.JobID ?? '',
     folder_id: raw.folder_id ?? raw.FolderID ?? '',
     operation_type: raw.operation_type ?? raw.OperationType ?? 'move',
-    before: (raw.before ?? raw.Before ?? []).map(parseRecord),
-    after: raw.after != null || raw.After != null ? (raw.after ?? raw.After ?? []).map(parseRecord) : null,
-    detail: raw.detail ?? raw.Detail ?? null,
+    before: parsedBefore,
+    after: rawAfter != null ? parsedAfter : null,
+    detail: detailRecord,
     status: raw.status ?? raw.Status ?? 'pending',
     created_at: raw.created_at ?? raw.CreatedAt ?? '',
   }

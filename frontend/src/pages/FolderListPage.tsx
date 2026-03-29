@@ -515,6 +515,7 @@ export default function FolderListPage() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null)
+  const previousListKeyRef = useRef<string>('')
 
   useEffect(() => {
     void fetchFolders()
@@ -522,7 +523,10 @@ export default function FolderListPage() {
 
   // GSAP Stagger Animation for items
   useEffect(() => {
-    if (!isLoading && folders.length > 0) {
+    const listKey = folders.map((folder) => folder.id).join('|')
+    const listShapeChanged = previousListKeyRef.current !== listKey
+    previousListKeyRef.current = listKey
+    if (!isLoading && folders.length > 0 && listShapeChanged) {
       const selector = viewMode === 'grid' ? '.folder-card' : '.folder-row'
       gsap.fromTo(
         selector,
