@@ -394,7 +394,6 @@ function sendAgentDebugLog(payload: {
   }).catch(() => {})
 }
 
-
 // ─── Rename preview logic ─────────────────────────────────────────────────────
 
 type RenameConditionalRule = { condition: string; template: string }
@@ -1016,12 +1015,13 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     : folderIDsCompat
 
   useEffect(() => {
+    const requestTopLevelOnly = true
     let active = true
     void listFolders({
       q: query.trim() || undefined,
       limit: 100,
       page: 1,
-      top_level_only: false,
+      top_level_only: requestTopLevelOnly,
     }).then((res) => {
       if (!active) return
       setRecords(res.data)
