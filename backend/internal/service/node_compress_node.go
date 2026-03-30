@@ -36,10 +36,11 @@ func (e *compressNodeExecutor) Schema() NodeSchema {
 		Description: "将处理项打包为 cbz/zip 压缩文件",
 		Inputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待压缩的处理项列表", Required: true},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已处理的处理项列表"},
-			{Name: "archives", Type: PortTypeStringList, RequiredOutput: true, Description: "生成的压缩包路径列表"},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, RequiredOutput: true, Description: "累计处理步骤结果"},
 		},
 	}
 }
@@ -96,6 +97,9 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	includePatterns := stringSliceConfig(input.Node.Config, "include_patterns", defaultCompressNodeIncludePatterns)
 	excludePatterns := stringSliceConfig(input.Node.Config, "exclude_patterns", nil)
 
+	rawAccumulated, _ := firstPresentTyped(input.Inputs, "step_results")
+	accumulated := processingStepResultsFromAny(rawAccumulated)
+	stepResults := make([]ProcessingStepResult, 0, len(items))
 	archives := make([]string, 0, len(items))
 	for _, item := range items {
 		sourcePath := strings.TrimSpace(item.SourcePath)
@@ -125,13 +129,26 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: create archive for %q: %w", e.Type(), sourcePath, err)
 		}
 		archives = append(archives, archivePath)
+		stepResults = append(stepResults, ProcessingStepResult{
+			SourcePath: sourcePath,
+			TargetPath: normalizeWorkflowPath(archivePath),
+			NodeType:   input.Node.Type,
+			NodeLabel:  strings.TrimSpace(input.Node.Label),
+			Status:     "succeeded",
+		})
 		if input.ProgressFn != nil {
 			percent := len(archives) * 100 / len(items)
 			input.ProgressFn(percent, fmt.Sprintf("已完成 %d/%d 项压缩", len(archives), len(items)))
 		}
 	}
 
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "archives": {Type: PortTypeStringList, Value: archives}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{
+			"items":        {Type: PortTypeProcessingItemList, Value: items},
+			"step_results": {Type: PortTypeProcessingStepResultList, Value: append(accumulated, stepResults...)},
+		},
+		Status: ExecutionSuccess,
+	}, nil
 }
 
 func (e *compressNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -195,7 +212,7 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 		}
 		var paths []string
 		if typed {
-			paths = compactStringSlice(anyToStringSlice(typedOutputs["archives"].Value))
+			paths = compressNodeArchivePathsFromStepResults(typedOutputs["step_results"].Value)
 		} else {
 			return nil, fmt.Errorf("parse node output json for node run %q: typed outputs required", input.NodeRun.ID)
 		}
@@ -214,7 +231,7 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 		}
 		var paths []string
 		if typed {
-			paths = compactStringSlice(anyToStringSlice(typedOutputs["archives"].Value))
+			paths = compressNodeArchivePathsFromStepResults(typedOutputs["step_results"].Value)
 		} else {
 			return nil, fmt.Errorf("parse node snapshot output json for snapshot %q: typed outputs required", snapshot.ID)
 		}
@@ -229,6 +246,24 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 	}
 
 	return paths, nil
+}
+
+func compressNodeArchivePathsFromStepResults(raw any) []string {
+	stepResults := processingStepResultsFromAny(raw)
+	if len(stepResults) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(stepResults))
+	for _, step := range stepResults {
+		if strings.TrimSpace(step.NodeType) != compressNodeExecutorType {
+			continue
+		}
+		if strings.TrimSpace(step.TargetPath) == "" {
+			continue
+		}
+		paths = append(paths, strings.TrimSpace(step.TargetPath))
+	}
+	return uniqueCompactStringSlice(paths)
 }
 
 func anyToStringSlice(raw any) []string {

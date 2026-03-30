@@ -21,7 +21,7 @@ func TestTypeRegistryRoundTrip(t *testing.T) {
 		{name: "classification signals", value: TypedValue{Type: PortTypeClassificationSignalList, Value: []ClassificationSignal{{SourcePath: "/data/a", Category: "manga", Confidence: 1, Reason: "kw"}}}},
 		{name: "classified entries", value: TypedValue{Type: PortTypeClassifiedEntryList, Value: []ClassifiedEntry{{Path: "/data/a", Name: "a", Category: "manga"}}}},
 		{name: "processing items", value: TypedValue{Type: PortTypeProcessingItemList, Value: []ProcessingItem{{SourcePath: "/data/a", FolderID: "folder-a", Category: "manga"}}}},
-		{name: "move results", value: TypedValue{Type: PortTypeMoveResultList, Value: []MoveResult{{SourcePath: "/data/a", TargetPath: "/target/a", Status: "success"}}}},
+		{name: "processing step results", value: TypedValue{Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/data/a", TargetPath: "/target/a", NodeType: "move-node", NodeLabel: "移动", Status: "succeeded"}}}},
 	}
 
 	for _, tt := range tests {

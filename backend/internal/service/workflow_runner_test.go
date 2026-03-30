@@ -693,7 +693,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 		{
 			name:       "move-node",
 			nodeType:   "move-node",
-			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/target/folder-audit", FolderName: folder.Name}}}, "results": {Type: PortTypeMoveResultList, Value: []MoveResult{{SourcePath: folder.Path, TargetPath: "/target/folder-audit", Status: "moved"}}}},
+			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/target/folder-audit", FolderName: folder.Name}}}, "step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: folder.Path, TargetPath: "/target/folder-audit", NodeType: "move-node", Status: "moved"}}}},
 			action:     "workflow.move-node",
 			result:     "moved",
 			folderPath: "/target/folder-audit",
@@ -701,7 +701,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 		{
 			name:       "compress-node",
 			nodeType:   "compress-node",
-			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}}, "archives": {Type: PortTypeStringList, Value: []string{"/archives/folder-audit.cbz"}}},
+			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}}, "step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: folder.Path, TargetPath: "/archives/folder-audit.cbz", NodeType: "compress-node", Status: "succeeded"}}}},
 			action:     "workflow.compress-node",
 			result:     "success",
 			folderPath: "/archives/folder-audit.cbz",
@@ -709,7 +709,7 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 		{
 			name:       "thumbnail-node",
 			nodeType:   "thumbnail-node",
-			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}}, "thumbnail_paths": {Type: PortTypeStringList, Value: []string{"/thumbs/folder-audit.jpg"}}},
+			outputs:    map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: folder.Path, FolderName: folder.Name}}}, "step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: folder.Path, TargetPath: "/thumbs/folder-audit.jpg", NodeType: "thumbnail-node", Status: "succeeded"}}}},
 			action:     "workflow.thumbnail-node",
 			result:     "success",
 			folderPath: "/thumbs/folder-audit.jpg",

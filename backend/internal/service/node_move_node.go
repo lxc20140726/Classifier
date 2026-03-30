@@ -33,10 +33,11 @@ func (e *phase4MoveNodeExecutor) Schema() NodeSchema {
 		Description: "将处理项移动到目标目录，支持冲突策略和操作回滚",
 		Inputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待移动的处理项列表", Required: true},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已移动的处理项列表"},
-			{Name: "results", Type: PortTypeMoveResultList, RequiredOutput: true, Description: "移动操作结果列表"},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, RequiredOutput: true, Description: "累计处理步骤结果"},
 		},
 	}
 }
@@ -91,7 +92,10 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 	}
 
 	movedItems := make([]ProcessingItem, 0, len(items))
-	results := make([]MoveResult, 0, len(items))
+	rawAccumulated, _ := firstPresentTyped(input.Inputs, "step_results")
+	accumulated := processingStepResultsFromAny(rawAccumulated)
+	stepResults := make([]ProcessingStepResult, 0, len(items))
+	processedCount := 0
 	for _, item := range items {
 		itemName := phase4MoveItemName(item)
 		if itemName == "" {
@@ -109,8 +113,15 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 		}
 
 		if skipped {
-			results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: normalizeWorkflowPath(destinationPath), Status: "skipped"})
+			stepResults = append(stepResults, ProcessingStepResult{
+				SourcePath: sourcePath,
+				TargetPath: normalizeWorkflowPath(destinationPath),
+				NodeType:   input.Node.Type,
+				NodeLabel:  strings.TrimSpace(input.Node.Label),
+				Status:     "skipped",
+			})
 			movedItems = append(movedItems, item)
+			processedCount++
 			continue
 		}
 
@@ -128,15 +139,28 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 		item.ParentPath = normalizeWorkflowPath(filepath.Dir(finalPath))
 		item.TargetName = filepath.Base(finalPath)
 		movedItems = append(movedItems, item)
-		results = append(results, MoveResult{SourcePath: sourcePath, TargetPath: normalizeWorkflowPath(finalPath), Status: "moved"})
+		stepResults = append(stepResults, ProcessingStepResult{
+			SourcePath: sourcePath,
+			TargetPath: normalizeWorkflowPath(finalPath),
+			NodeType:   input.Node.Type,
+			NodeLabel:  strings.TrimSpace(input.Node.Label),
+			Status:     "moved",
+		})
+		processedCount++
 
 		if input.ProgressFn != nil {
-			percent := len(results) * 100 / len(items)
-			input.ProgressFn(percent, fmt.Sprintf("已完成 %d/%d 项移动", len(results), len(items)))
+			percent := processedCount * 100 / len(items)
+			input.ProgressFn(percent, fmt.Sprintf("已完成 %d/%d 项移动", processedCount, len(items)))
 		}
 	}
 
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: movedItems}, "results": {Type: PortTypeMoveResultList, Value: results}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{
+			"items":        {Type: PortTypeProcessingItemList, Value: movedItems},
+			"step_results": {Type: PortTypeProcessingStepResultList, Value: append(accumulated, stepResults...)},
+		},
+		Status: ExecutionSuccess,
+	}, nil
 }
 
 func (e *phase4MoveNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -232,22 +256,25 @@ func phase4MoveRollbackEntriesFromOutput(raw string) ([]phase4MoveRollbackEntry,
 		if err != nil {
 			return nil, err
 		}
-		return phase4MoveRollbackEntriesFromValues(decoded["items"].Value, decoded["results"].Value), nil
+		return phase4MoveRollbackEntriesFromValues(decoded["items"].Value, decoded["step_results"].Value), nil
 	}
 
 	if typedOutputs, typed, err := parseTypedNodeOutputs(raw); err != nil {
 		return nil, err
 	} else if typed {
-		return phase4MoveRollbackEntriesFromValues(typedOutputs["items"].Value, typedOutputs["results"].Value), nil
+		return phase4MoveRollbackEntriesFromValues(typedOutputs["items"].Value, typedOutputs["step_results"].Value), nil
 	}
 	return nil, fmt.Errorf("invalid typed output json")
 }
 
-func phase4MoveRollbackEntriesFromValues(itemsValue any, resultsValue any) []phase4MoveRollbackEntry {
+func phase4MoveRollbackEntriesFromValues(itemsValue any, stepResultsValue any) []phase4MoveRollbackEntry {
 	items, _ := categoryRouterToItems(itemsValue)
-	results := phase4MoveResultsFromAny(resultsValue)
-	entries := make([]phase4MoveRollbackEntry, 0, len(results))
-	for index, result := range results {
+	stepResults := processingStepResultsFromAny(stepResultsValue)
+	entries := make([]phase4MoveRollbackEntry, 0, len(stepResults))
+	for index, result := range stepResults {
+		if strings.TrimSpace(result.NodeType) != phase4MoveNodeExecutorType {
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(result.Status), "moved") {
 			continue
 		}
@@ -261,64 +288,6 @@ func phase4MoveRollbackEntriesFromValues(itemsValue any, resultsValue any) []pha
 		entries = append(entries, entry)
 	}
 	return entries
-}
-
-func phase4MoveResultsFromAny(raw any) []MoveResult {
-	switch typed := raw.(type) {
-	case nil:
-		return nil
-	case MoveResult:
-		return []MoveResult{typed}
-	case *MoveResult:
-		if typed == nil {
-			return nil
-		}
-		return []MoveResult{*typed}
-	case []MoveResult:
-		return append([]MoveResult(nil), typed...)
-	case []*MoveResult:
-		out := make([]MoveResult, 0, len(typed))
-		for _, item := range typed {
-			if item != nil {
-				out = append(out, *item)
-			}
-		}
-		return out
-	case []map[string]any:
-		out := make([]MoveResult, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, phase4MoveResultFromMap(item))
-		}
-		return out
-	case []any:
-		out := make([]MoveResult, 0, len(typed))
-		for _, item := range typed {
-			switch converted := item.(type) {
-			case MoveResult:
-				out = append(out, converted)
-			case *MoveResult:
-				if converted != nil {
-					out = append(out, *converted)
-				}
-			case map[string]any:
-				out = append(out, phase4MoveResultFromMap(converted))
-			}
-		}
-		return out
-	case map[string]any:
-		return []MoveResult{phase4MoveResultFromMap(typed)}
-	default:
-		return nil
-	}
-}
-
-func phase4MoveResultFromMap(raw map[string]any) MoveResult {
-	return MoveResult{
-		SourcePath: stringConfig(raw, "source_path"),
-		TargetPath: stringConfig(raw, "target_path"),
-		Status:     stringConfig(raw, "status"),
-		Error:      stringConfig(raw, "error"),
-	}
 }
 
 func (e *phase4MoveNodeExecutor) resolveDestinationPath(ctx context.Context, destinationPath, conflictPolicy string) (string, bool, error) {

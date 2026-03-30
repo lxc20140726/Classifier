@@ -50,3 +50,12 @@ type MoveResult struct {
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 }
+
+type ProcessingStepResult struct {
+	SourcePath string `json:"source_path"`
+	TargetPath string `json:"target_path,omitempty"`
+	NodeType   string `json:"node_type"`
+	NodeLabel  string `json:"node_label"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
+}

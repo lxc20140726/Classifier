@@ -17,7 +17,7 @@ const (
 	PortTypeClassificationSignalList PortType = "CLASSIFICATION_SIGNAL_LIST"
 	PortTypeClassifiedEntryList      PortType = "CLASSIFIED_ENTRY_LIST"
 	PortTypeProcessingItemList       PortType = "PROCESSING_ITEM_LIST"
-	PortTypeMoveResultList           PortType = "MOVE_RESULT_LIST"
+	PortTypeProcessingStepResultList PortType = "PROCESSING_STEP_RESULT_LIST"
 )
 
 type TypedValue struct {
@@ -104,10 +104,10 @@ func NewTypeRegistry() *TypeRegistry {
 			return out, json.Unmarshal(raw, &out)
 		},
 	)
-	r.Register(PortTypeMoveResultList,
-		func(v any) (json.RawMessage, error) { return json.Marshal(v.([]MoveResult)) },
+	r.Register(PortTypeProcessingStepResultList,
+		func(v any) (json.RawMessage, error) { return json.Marshal(v.([]ProcessingStepResult)) },
 		func(raw json.RawMessage) (any, error) {
-			var out []MoveResult
+			var out []ProcessingStepResult
 			return out, json.Unmarshal(raw, &out)
 		},
 	)

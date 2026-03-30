@@ -10,10 +10,25 @@ import (
 const processingResultPreviewExecutorType = "processing-result-preview"
 
 type processingResultPreviewSummary struct {
-	Total       int      `json:"total"`
-	Succeeded   int      `json:"succeeded"`
-	Failed      int      `json:"failed"`
-	FailedPaths []string `json:"failed_paths"`
+	TotalDirs   int                    `json:"total_dirs"`
+	TotalSteps  int                    `json:"total_steps"`
+	Succeeded   int                    `json:"succeeded"`
+	Failed      int                    `json:"failed"`
+	ByDirectory []dirProcessingSummary `json:"by_directory"`
+}
+
+type dirProcessingSummary struct {
+	SourcePath string           `json:"source_path"`
+	Steps      []dirStepSummary `json:"steps"`
+	Succeeded  int              `json:"succeeded"`
+	Failed     int              `json:"failed"`
+}
+
+type dirStepSummary struct {
+	NodeType  string `json:"node_type"`
+	NodeLabel string `json:"node_label"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
 }
 
 type processingResultPreviewNodeExecutor struct{}
@@ -30,61 +45,94 @@ func (e *processingResultPreviewNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
 		Label:       "处理结果预览",
-		Description: "预览处理节点结果并输出成功失败汇总",
+		Description: "仅在节点内预览处理节点结果（不提供下游输出端口）",
 		Inputs: []PortDef{
-			{Name: "results", Type: PortTypeMoveResultList, Required: true, Description: "处理结果列表"},
-		},
-		Outputs: []PortDef{
-			{Name: "summary", Type: PortTypeJSON, RequiredOutput: true, Description: "处理结果汇总信息"},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, Required: true, Description: "处理步骤结果列表"},
 		},
 	}
 }
 
 func (e *processingResultPreviewNodeExecutor) Execute(_ context.Context, input NodeExecutionInput) (NodeExecutionOutput, error) {
-	rawResults, ok := firstPresentTyped(input.Inputs, "results")
+	rawResults, ok := firstPresentTyped(input.Inputs, "step_results")
 	if !ok {
 		return NodeExecutionOutput{
 			Status:        ExecutionFailure,
 			ErrorCode:     "NODE_INPUT_MISSING",
-			PendingReason: "results input is required",
+			PendingReason: "step_results input is required",
 		}, nil
 	}
-	if !isSupportedMoveResultInput(rawResults) {
+	if !isSupportedStepResultInput(rawResults) {
 		return NodeExecutionOutput{
 			Status:        ExecutionFailure,
 			ErrorCode:     "NODE_INPUT_TYPE",
-			PendingReason: fmt.Sprintf("results input has unsupported type %T", rawResults),
+			PendingReason: fmt.Sprintf("step_results input has unsupported type %T", rawResults),
 		}, nil
 	}
 
-	results := phase4MoveResultsFromAny(rawResults)
-	if len(results) == 0 {
+	stepResults := processingStepResultsFromAny(rawResults)
+	if len(stepResults) == 0 {
 		return NodeExecutionOutput{
 			Status:        ExecutionFailure,
 			ErrorCode:     "NODE_INPUT_EMPTY",
-			PendingReason: "results input is empty",
+			PendingReason: "step_results input is empty",
 		}, nil
 	}
 
-	summary := processingResultPreviewSummary{
-		Total:       len(results),
-		FailedPaths: make([]string, 0),
+	dirMap := make(map[string]*dirProcessingSummary)
+	dirOrder := make([]string, 0, len(stepResults))
+	for _, result := range stepResults {
+		sourcePath := strings.TrimSpace(result.SourcePath)
+		if sourcePath == "" {
+			sourcePath = "unknown"
+		}
+		dirSummary, exists := dirMap[sourcePath]
+		if !exists {
+			dirSummary = &dirProcessingSummary{
+				SourcePath: sourcePath,
+				Steps:      make([]dirStepSummary, 0, 2),
+			}
+			dirMap[sourcePath] = dirSummary
+			dirOrder = append(dirOrder, sourcePath)
+		}
+		step := dirStepSummary{
+			NodeType:  strings.TrimSpace(result.NodeType),
+			NodeLabel: strings.TrimSpace(result.NodeLabel),
+			Status:    strings.TrimSpace(result.Status),
+			Error:     strings.TrimSpace(result.Error),
+		}
+		dirSummary.Steps = append(dirSummary.Steps, step)
+		if isStepSucceeded(step.Status) {
+			dirSummary.Succeeded++
+			continue
+		}
+		dirSummary.Failed++
 	}
-	for _, result := range results {
-		if strings.EqualFold(strings.TrimSpace(result.Status), "moved") || strings.EqualFold(strings.TrimSpace(result.Status), "succeeded") {
+
+	byDirectory := make([]dirProcessingSummary, 0, len(dirOrder))
+	for _, path := range dirOrder {
+		if item, ok := dirMap[path]; ok {
+			byDirectory = append(byDirectory, *item)
+		}
+	}
+	sort.SliceStable(byDirectory, func(i, j int) bool {
+		if byDirectory[i].Failed == byDirectory[j].Failed {
+			return byDirectory[i].SourcePath < byDirectory[j].SourcePath
+		}
+		return byDirectory[i].Failed > byDirectory[j].Failed
+	})
+
+	summary := processingResultPreviewSummary{
+		TotalDirs:   len(byDirectory),
+		TotalSteps:  len(stepResults),
+		ByDirectory: byDirectory,
+	}
+	for _, item := range byDirectory {
+		if item.Failed == 0 {
 			summary.Succeeded++
 			continue
 		}
 		summary.Failed++
-		failedPath := strings.TrimSpace(result.SourcePath)
-		if failedPath == "" {
-			failedPath = strings.TrimSpace(result.TargetPath)
-		}
-		if failedPath != "" {
-			summary.FailedPaths = append(summary.FailedPaths, failedPath)
-		}
 	}
-	sort.Strings(summary.FailedPaths)
 
 	return NodeExecutionOutput{
 		Outputs: map[string]TypedValue{
@@ -102,11 +150,16 @@ func (e *processingResultPreviewNodeExecutor) Rollback(_ context.Context, _ Node
 	return nil
 }
 
-func isSupportedMoveResultInput(raw any) bool {
+func isSupportedStepResultInput(raw any) bool {
 	switch raw.(type) {
-	case MoveResult, *MoveResult, []MoveResult, []*MoveResult, []map[string]any, []any, map[string]any:
+	case ProcessingStepResult, *ProcessingStepResult, []ProcessingStepResult, []*ProcessingStepResult, []map[string]any, []any:
 		return true
 	default:
 		return false
 	}
+}
+
+func isStepSucceeded(status string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	return normalized == "moved" || normalized == "succeeded" || normalized == "success"
 }

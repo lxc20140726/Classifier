@@ -26,7 +26,7 @@ func TestProcessingResultPreviewExecutorEmptyInput(t *testing.T) {
 
 	executor := newProcessingResultPreviewExecutor()
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
-		Inputs: testInputs(map[string]any{"results": []MoveResult{}}),
+		Inputs: testInputs(map[string]any{"step_results": []ProcessingStepResult{}}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -44,7 +44,7 @@ func TestProcessingResultPreviewExecutorTypeError(t *testing.T) {
 
 	executor := newProcessingResultPreviewExecutor()
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
-		Inputs: testInputs(map[string]any{"results": "invalid"}),
+		Inputs: testInputs(map[string]any{"step_results": "invalid"}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -61,13 +61,13 @@ func TestProcessingResultPreviewExecutorSuccess(t *testing.T) {
 	t.Parallel()
 
 	executor := newProcessingResultPreviewExecutor()
-	results := []MoveResult{
-		{SourcePath: "/src/a", TargetPath: "/dst/a", Status: "moved"},
-		{SourcePath: "/src/b", TargetPath: "/dst/b", Status: "skipped"},
-		{SourcePath: "/src/c", TargetPath: "/dst/c", Status: "succeeded"},
+	results := []ProcessingStepResult{
+		{SourcePath: "/src/a", TargetPath: "/dst/a", NodeType: "move-node", NodeLabel: "移动", Status: "moved"},
+		{SourcePath: "/src/b", TargetPath: "/dst/b", NodeType: "move-node", NodeLabel: "移动", Status: "failed"},
+		{SourcePath: "/src/c", TargetPath: "/dst/c", NodeType: "move-node", NodeLabel: "移动", Status: "succeeded"},
 	}
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
-		Inputs: testInputs(map[string]any{"results": results}),
+		Inputs: testInputs(map[string]any{"step_results": results}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -75,8 +75,8 @@ func TestProcessingResultPreviewExecutorSuccess(t *testing.T) {
 	if out.Status != ExecutionSuccess {
 		t.Fatalf("status = %q, want success", out.Status)
 	}
-	if _, exists := out.Outputs["results"]; exists {
-		t.Fatalf("results output should not exist for preview node")
+	if _, exists := out.Outputs["step_results"]; exists {
+		t.Fatalf("step_results output should not exist for preview node")
 	}
 	if _, exists := out.Outputs["summary"]; !exists {
 		t.Fatalf("summary output should exist")
@@ -87,14 +87,15 @@ func TestProcessingResultPreviewExecutorSummarySemantics(t *testing.T) {
 	t.Parallel()
 
 	executor := newProcessingResultPreviewExecutor()
-	results := []MoveResult{
-		{SourcePath: "/src/z", TargetPath: "/dst/z", Status: "failed"},
-		{SourcePath: "/src/a", TargetPath: "/dst/a", Status: "skipped"},
-		{SourcePath: "", TargetPath: "/dst/b", Status: "error"},
-		{SourcePath: "/src/c", TargetPath: "/dst/c", Status: "moved"},
+	results := []ProcessingStepResult{
+		{SourcePath: "/src/dir1", NodeType: "compress-node", NodeLabel: "压缩", Status: "succeeded"},
+		{SourcePath: "/src/dir1", NodeType: "move-node", NodeLabel: "移动", Status: "moved"},
+		{SourcePath: "/src/dir2", NodeType: "compress-node", NodeLabel: "压缩", Status: "failed", Error: "zip failed"},
+		{SourcePath: "/src/dir2", NodeType: "move-node", NodeLabel: "移动", Status: "skipped"},
+		{SourcePath: "/src/dir3", NodeType: "thumbnail-node", NodeLabel: "缩略图", Status: "error"},
 	}
 	out, err := executor.Execute(context.Background(), NodeExecutionInput{
-		Inputs: testInputs(map[string]any{"results": results}),
+		Inputs: testInputs(map[string]any{"step_results": results}),
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -104,13 +105,25 @@ func TestProcessingResultPreviewExecutorSummarySemantics(t *testing.T) {
 	if !ok {
 		t.Fatalf("summary output type = %T, want processingResultPreviewSummary", out.Outputs["summary"].Value)
 	}
-	if summary.Total != 4 {
-		t.Fatalf("summary.Total = %d, want 4", summary.Total)
+	if summary.TotalDirs != 3 {
+		t.Fatalf("summary.TotalDirs = %d, want 3", summary.TotalDirs)
 	}
-	if summary.Succeeded != 1 || summary.Failed != 3 {
-		t.Fatalf("summary succeeded/failed = %d/%d, want 1/3", summary.Succeeded, summary.Failed)
+	if summary.TotalSteps != 5 {
+		t.Fatalf("summary.TotalSteps = %d, want 5", summary.TotalSteps)
 	}
-	if len(summary.FailedPaths) != 3 || summary.FailedPaths[0] != "/dst/b" || summary.FailedPaths[1] != "/src/a" || summary.FailedPaths[2] != "/src/z" {
-		t.Fatalf("summary.FailedPaths = %#v, want sorted [/dst/b /src/a /src/z]", summary.FailedPaths)
+	if summary.Succeeded != 1 || summary.Failed != 2 {
+		t.Fatalf("summary succeeded/failed = %d/%d, want 1/2", summary.Succeeded, summary.Failed)
+	}
+	if len(summary.ByDirectory) != 3 {
+		t.Fatalf("summary.ByDirectory len = %d, want 3", len(summary.ByDirectory))
+	}
+	if summary.ByDirectory[0].SourcePath != "/src/dir2" || summary.ByDirectory[0].Failed != 2 {
+		t.Fatalf("summary.ByDirectory[0] = %#v, want /src/dir2 with failed=2", summary.ByDirectory[0])
+	}
+	if len(summary.ByDirectory[0].Steps) != 2 {
+		t.Fatalf("summary.ByDirectory[0].Steps len = %d, want 2", len(summary.ByDirectory[0].Steps))
+	}
+	if summary.ByDirectory[2].SourcePath != "/src/dir1" || summary.ByDirectory[2].Failed != 0 {
+		t.Fatalf("summary.ByDirectory[2] = %#v, want /src/dir1 with failed=0", summary.ByDirectory[2])
 	}
 }

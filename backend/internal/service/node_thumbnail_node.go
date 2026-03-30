@@ -56,10 +56,11 @@ func (e *thumbnailNodeExecutor) Schema() NodeSchema {
 		Description: "为视频文件夹提取代表帧生成缩略图（依赖运行环境中的 ffmpeg）",
 		Inputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待生成缩略图的处理项列表", Required: true},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "已处理的处理项列表"},
-			{Name: "thumbnail_paths", Type: PortTypeStringList, Description: "生成的缩略图路径列表"},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, RequiredOutput: true, Description: "累计处理步骤结果"},
 		},
 	}
 }
@@ -75,28 +76,11 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: ffmpeg binary not found: %w", e.Type(), err)
 	}
 
-	outputDir := stringConfig(input.Node.Config, "output_dir")
-	if outputDir == "" {
-		outputDir = stringConfig(input.Node.Config, "target_dir")
+	configuredOutputDir := normalizeWorkflowPath(stringConfig(input.Node.Config, "output_dir"))
+	if configuredOutputDir == "" {
+		configuredOutputDir = normalizeWorkflowPath(stringConfig(input.Node.Config, "target_dir"))
 	}
-	if outputDir == "" {
-		outputDir = ".thumbnails"
-	}
-	outputDir = normalizeWorkflowPath(outputDir)
-
 	createTarget := folderSplitterBoolConfig(input.Node.Config, "create_target_if_missing", true)
-	outExists, err := e.fs.Exists(ctx, outputDir)
-	if err != nil {
-		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: check output dir %q: %w", e.Type(), outputDir, err)
-	}
-	if !outExists {
-		if !createTarget {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: output dir %q does not exist and create_target_if_missing is false", e.Type(), outputDir)
-		}
-		if err := e.fs.MkdirAll(ctx, outputDir, 0o755); err != nil {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: create output dir %q: %w", e.Type(), outputDir, err)
-		}
-	}
 
 	offsetSeconds := intConfig(input.Node.Config, "offset_seconds", 8)
 	if offsetSeconds < 0 {
@@ -104,11 +88,43 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 	}
 	width := intConfig(input.Node.Config, "width", 640)
 
+	rawAccumulated, _ := firstPresentTyped(input.Inputs, "step_results")
+	accumulated := processingStepResultsFromAny(rawAccumulated)
+	stepResults := make([]ProcessingStepResult, 0, len(items))
 	thumbnailPaths := make([]string, 0, len(items))
+	ensuredDirs := map[string]struct{}{}
 	for _, item := range items {
+		sourcePath := normalizeWorkflowPath(item.SourcePath)
+		if sourcePath == "" {
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item source_path is required", e.Type())
+		}
+
 		videoPath, err := e.representativeVideoPath(ctx, item)
 		if err != nil {
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: %w", e.Type(), err)
+		}
+
+		outputDir := configuredOutputDir
+		if outputDir == "" {
+			outputDir = normalizeWorkflowPath(filepath.Dir(sourcePath))
+		}
+		if outputDir == "" {
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: cannot resolve output dir for %q", e.Type(), sourcePath)
+		}
+		if _, ok := ensuredDirs[outputDir]; !ok {
+			outExists, err := e.fs.Exists(ctx, outputDir)
+			if err != nil {
+				return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: check output dir %q: %w", e.Type(), outputDir, err)
+			}
+			if !outExists {
+				if !createTarget {
+					return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: output dir %q does not exist and create_target_if_missing is false", e.Type(), outputDir)
+				}
+				if err := e.fs.MkdirAll(ctx, outputDir, 0o755); err != nil {
+					return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: create output dir %q: %w", e.Type(), outputDir, err)
+				}
+			}
+			ensuredDirs[outputDir] = struct{}{}
 		}
 
 		outputName := phase4MoveItemName(item)
@@ -130,9 +146,22 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 		}
 
 		thumbnailPaths = append(thumbnailPaths, thumbnailPath)
+		stepResults = append(stepResults, ProcessingStepResult{
+			SourcePath: sourcePath,
+			TargetPath: normalizeWorkflowPath(thumbnailPath),
+			NodeType:   input.Node.Type,
+			NodeLabel:  strings.TrimSpace(input.Node.Label),
+			Status:     "succeeded",
+		})
 	}
 
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: items}, "thumbnail_paths": {Type: PortTypeStringList, Value: thumbnailPaths}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{
+			"items":        {Type: PortTypeProcessingItemList, Value: items},
+			"step_results": {Type: PortTypeProcessingStepResultList, Value: append(accumulated, stepResults...)},
+		},
+		Status: ExecutionSuccess,
+	}, nil
 }
 
 func (e *thumbnailNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
@@ -177,7 +206,7 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 		var paths []string
 		var folderIDs []string
 		if typed {
-			paths = compactStringSlice(anyToStringSlice(typedOutputs["thumbnail_paths"].Value))
+			paths = thumbnailNodePathsFromStepResults(typedOutputs["step_results"].Value)
 			folderIDs = thumbnailNodeExtractFolderIDs(typedOutputs["items"].Value)
 		} else {
 			return nil, nil, fmt.Errorf("parse node output json for node run %q: typed outputs required", input.NodeRun.ID)
@@ -201,7 +230,7 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 		var paths []string
 		var folderIDs []string
 		if typed {
-			paths = compactStringSlice(anyToStringSlice(typedOutputs["thumbnail_paths"].Value))
+			paths = thumbnailNodePathsFromStepResults(typedOutputs["step_results"].Value)
 			folderIDs = thumbnailNodeExtractFolderIDs(typedOutputs["items"].Value)
 		} else {
 			return nil, nil, fmt.Errorf("parse node snapshot output json for snapshot %q: typed outputs required", snapshot.ID)
@@ -225,6 +254,25 @@ func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []stri
 	}
 
 	return thumbnailPaths, folderIDs, nil
+}
+
+func thumbnailNodePathsFromStepResults(raw any) []string {
+	stepResults := processingStepResultsFromAny(raw)
+	if len(stepResults) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(stepResults))
+	for _, step := range stepResults {
+		if strings.TrimSpace(step.NodeType) != thumbnailNodeExecutorType {
+			continue
+		}
+		path := strings.TrimSpace(step.TargetPath)
+		if path == "" {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return uniqueCompactStringSlice(paths)
 }
 
 func thumbnailNodeExtractFolderIDs(raw any) []string {

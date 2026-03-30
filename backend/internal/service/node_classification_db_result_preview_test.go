@@ -106,6 +106,9 @@ func TestClassificationDBResultPreviewExecutorSummarySemantics(t *testing.T) {
 	if summary.Total != 3 {
 		t.Fatalf("summary.Total = %d, want 3", summary.Total)
 	}
+	if summary.TopLevelCount != 3 {
+		t.Fatalf("summary.TopLevelCount = %d, want 3", summary.TopLevelCount)
+	}
 	if summary.ByCategory["video"] != 2 || summary.ByCategory["other"] != 1 {
 		t.Fatalf("summary.ByCategory = %#v, want video=2 and other=1", summary.ByCategory)
 	}
@@ -114,5 +117,57 @@ func TestClassificationDBResultPreviewExecutorSummarySemantics(t *testing.T) {
 	}
 	if len(summary.ClassifierSources) != 2 || summary.ClassifierSources[0] != "ft" || summary.ClassifierSources[1] != "kw" {
 		t.Fatalf("summary.ClassifierSources = %#v, want [ft kw]", summary.ClassifierSources)
+	}
+	if len(summary.Entries) != 3 {
+		t.Fatalf("summary.Entries len = %d, want 3", len(summary.Entries))
+	}
+}
+
+func TestClassificationDBResultPreviewExecutorSummaryIncludesSubtree(t *testing.T) {
+	t.Parallel()
+
+	executor := newClassificationDBResultPreviewExecutor()
+	entries := []ClassifiedEntry{
+		{
+			Path:       "/library/dir1",
+			Name:       "dir1",
+			Category:   "video",
+			Confidence: 0.9,
+			Classifier: "kw",
+			Subtree: []ClassifiedEntry{
+				{Path: "/library/dir1/child1", Name: "child1", Category: "photo", Confidence: 0.5, Classifier: "ft"},
+				{Path: "/library/dir1/child2", Name: "child2", Category: "", Confidence: 0.7, Classifier: "kw"},
+			},
+		},
+		{Path: "/library/dir2", Name: "dir2", Category: "manga", Confidence: 0.8, Classifier: "ft"},
+	}
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{"entries": entries}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	summary, ok := out.Outputs["summary"].Value.(classificationDBResultPreviewSummary)
+	if !ok {
+		t.Fatalf("summary output type = %T, want classificationDBResultPreviewSummary", out.Outputs["summary"].Value)
+	}
+	if summary.Total != 4 {
+		t.Fatalf("summary.Total = %d, want 4", summary.Total)
+	}
+	if summary.TopLevelCount != 2 {
+		t.Fatalf("summary.TopLevelCount = %d, want 2", summary.TopLevelCount)
+	}
+	if summary.ByCategory["video"] != 1 || summary.ByCategory["photo"] != 1 || summary.ByCategory["manga"] != 1 || summary.ByCategory["other"] != 1 {
+		t.Fatalf("summary.ByCategory = %#v, want video/photo/manga/other all equals 1", summary.ByCategory)
+	}
+	if len(summary.Entries) != 2 {
+		t.Fatalf("summary.Entries len = %d, want 2", len(summary.Entries))
+	}
+	if summary.Entries[0].Path != "/library/dir1" {
+		t.Fatalf("summary.Entries[0].Path = %q, want /library/dir1", summary.Entries[0].Path)
+	}
+	if len(summary.Entries[0].Subdirs) != 2 {
+		t.Fatalf("summary.Entries[0].Subdirs len = %d, want 2", len(summary.Entries[0].Subdirs))
 	}
 }

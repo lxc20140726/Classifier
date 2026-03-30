@@ -10,10 +10,20 @@ import (
 const classificationDBResultPreviewExecutorType = "classification-db-result-preview"
 
 type classificationDBResultPreviewSummary struct {
-	Total             int            `json:"total"`
-	ByCategory        map[string]int `json:"by_category"`
-	AvgConfidence     float64        `json:"avg_confidence"`
-	ClassifierSources []string       `json:"classifier_sources"`
+	Total             int                `json:"total"`
+	TopLevelCount     int                `json:"top_level_count"`
+	ByCategory        map[string]int     `json:"by_category"`
+	AvgConfidence     float64            `json:"avg_confidence"`
+	ClassifierSources []string           `json:"classifier_sources"`
+	Entries           []entryPreviewItem `json:"entries"`
+}
+
+type entryPreviewItem struct {
+	Path       string             `json:"path"`
+	Name       string             `json:"name"`
+	Category   string             `json:"category"`
+	Confidence float64            `json:"confidence"`
+	Subdirs    []entryPreviewItem `json:"subdirs,omitempty"`
 }
 
 type classificationDBResultPreviewNodeExecutor struct{}
@@ -30,7 +40,7 @@ func (e *classificationDBResultPreviewNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
 		Label:       "分类落库结果预览",
-		Description: "预览分类落库结果并输出分类统计摘要",
+		Description: "仅在节点内预览分类落库结果（不提供下游输出端口）",
 		Inputs: []PortDef{
 			{Name: "entries", Type: PortTypeClassifiedEntryList, Required: true, Description: "已写入的分类条目列表"},
 		},
@@ -63,10 +73,19 @@ func (e *classificationDBResultPreviewNodeExecutor) Execute(_ context.Context, i
 		}, nil
 	}
 
+	allEntries := collectAllClassifiedEntries(entries)
+	if len(allEntries) == 0 {
+		return NodeExecutionOutput{
+			Status:        ExecutionFailure,
+			ErrorCode:     "NODE_INPUT_EMPTY",
+			PendingReason: "entries input is empty",
+		}, nil
+	}
+
 	byCategory := make(map[string]int)
 	classifierSet := make(map[string]struct{})
 	confidenceSum := 0.0
-	for _, entry := range entries {
+	for _, entry := range allEntries {
 		category := strings.TrimSpace(entry.Category)
 		if category == "" {
 			category = "other"
@@ -87,10 +106,12 @@ func (e *classificationDBResultPreviewNodeExecutor) Execute(_ context.Context, i
 	sort.Strings(classifierSources)
 
 	summary := classificationDBResultPreviewSummary{
-		Total:             len(entries),
+		Total:             len(allEntries),
+		TopLevelCount:     len(entries),
 		ByCategory:        byCategory,
-		AvgConfidence:     confidenceSum / float64(len(entries)),
+		AvgConfidence:     confidenceSum / float64(len(allEntries)),
 		ClassifierSources: classifierSources,
+		Entries:           toEntryPreviewTree(entries),
 	}
 
 	return NodeExecutionOutput{
@@ -107,4 +128,34 @@ func (e *classificationDBResultPreviewNodeExecutor) Resume(_ context.Context, _ 
 
 func (e *classificationDBResultPreviewNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
+}
+
+func toEntryPreviewTree(entries []ClassifiedEntry) []entryPreviewItem {
+	result := make([]entryPreviewItem, 0, len(entries))
+	for _, entry := range entries {
+		category := strings.TrimSpace(entry.Category)
+		if category == "" {
+			category = "other"
+		}
+		result = append(result, entryPreviewItem{
+			Path:       entry.Path,
+			Name:       entry.Name,
+			Category:   category,
+			Confidence: entry.Confidence,
+			Subdirs:    toEntryPreviewTree(entry.Subtree),
+		})
+	}
+	return result
+}
+
+func collectAllClassifiedEntries(entries []ClassifiedEntry) []ClassifiedEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	all := make([]ClassifiedEntry, 0, len(entries))
+	for _, entry := range entries {
+		all = append(all, entry)
+		all = append(all, collectAllClassifiedEntries(entry.Subtree)...)
+	}
+	return all
 }

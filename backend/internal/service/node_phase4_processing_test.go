@@ -270,9 +270,9 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		results, ok := out.Outputs["results"].Value.([]MoveResult)
+		results, ok := out.Outputs["step_results"].Value.([]ProcessingStepResult)
 		if !ok || len(results) != 1 {
-			t.Fatalf("results output = %T/%d, want []MoveResult/1", out.Outputs["results"].Value, len(results))
+			t.Fatalf("step_results output = %T/%d, want []ProcessingStepResult/1", out.Outputs["step_results"].Value, len(results))
 		}
 		if results[0].Status != "skipped" {
 			t.Fatalf("result status = %q, want skipped", results[0].Status)
@@ -307,9 +307,9 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
-		results, ok := out.Outputs["results"].Value.([]MoveResult)
+		results, ok := out.Outputs["step_results"].Value.([]ProcessingStepResult)
 		if !ok || len(results) != 1 {
-			t.Fatalf("results output = %T/%d, want []MoveResult/1", out.Outputs["results"].Value, len(results))
+			t.Fatalf("step_results output = %T/%d, want []ProcessingStepResult/1", out.Outputs["step_results"].Value, len(results))
 		}
 		if results[0].TargetPath != dstRenamed {
 			t.Fatalf("target path = %q, want %q", results[0].TargetPath, dstRenamed)
@@ -349,8 +349,8 @@ func TestPhase4MoveNodeExecutorRollbackMovesFolderBackAndRestoresFolderPath(t *t
 	}
 
 	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
-		"items":   {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: targetPath, FolderName: "album", TargetName: "album"}}},
-		"results": {Type: PortTypeMoveResultList, Value: []MoveResult{{SourcePath: sourcePath, TargetPath: targetPath, Status: "moved"}}},
+		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: targetPath, FolderName: "album", TargetName: "album"}}},
+		"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: sourcePath, TargetPath: targetPath, NodeType: "move-node", Status: "moved"}}},
 	}, NewTypeRegistry())
 	if err != nil {
 		t.Fatalf("typedValueMapToJSON() error = %v", err)
@@ -437,12 +437,12 @@ func TestCompressNodeExecutorRollbackRemovesGeneratedArchives(t *testing.T) {
 			InputJSON: `{"node":{"config":{"delete_source":false}}}`,
 		},
 		Snapshots: []*repository.NodeSnapshot{{
-			ID:         "snapshot-compress-rb-1",
-			Kind:       "post",
-		OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, map[string]TypedValue{
-			"items":    {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{SourcePath: "/source/album"}}},
-			"archives": {Type: PortTypeStringList, Value: []string{archivePath}},
-		})),
+			ID:   "snapshot-compress-rb-1",
+			Kind: "post",
+			OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, map[string]TypedValue{
+				"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{SourcePath: "/source/album"}}},
+				"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: archivePath, NodeType: "compress-node", Status: "succeeded"}}},
+			})),
 		}},
 	})
 	if err != nil {
@@ -625,8 +625,8 @@ func TestThumbnailNodeExecutorRollbackRemovesFilesAndClearsCover(t *testing.T) {
 			ID:   "snapshot-thumbnail-rb-1",
 			Kind: "post",
 			OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, map[string]TypedValue{
-				"items":           {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
-				"thumbnail_paths": {Type: PortTypeStringList, Value: []string{thumbPath}},
+				"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
+				"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: thumbPath, NodeType: "thumbnail-node", Status: "succeeded"}}},
 			})),
 		}},
 	})
@@ -673,8 +673,8 @@ func TestEngineV2_AC_ROLL2_ThumbnailNodeRollbackTypedFormat(t *testing.T) {
 	}
 
 	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
-		"items":           {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
-		"thumbnail_paths": {Type: PortTypeStringList, Value: []string{thumbPath}},
+		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
+		"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: thumbPath, NodeType: "thumbnail-node", Status: "succeeded"}}},
 	}, NewTypeRegistry())
 	if err != nil {
 		t.Fatalf("typedValueMapToJSON() error = %v", err)
@@ -717,8 +717,8 @@ func TestEngineV2_AC_ROLL3_CompressNodeRollbackTypedFormat(t *testing.T) {
 	}
 
 	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
-		"items":    {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{SourcePath: "/source/album"}}},
-		"archives": {Type: PortTypeStringList, Value: []string{archivePath}},
+		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{SourcePath: "/source/album"}}},
+		"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: archivePath, NodeType: "compress-node", Status: "succeeded"}}},
 	}, NewTypeRegistry())
 	if err != nil {
 		t.Fatalf("typedValueMapToJSON() error = %v", err)

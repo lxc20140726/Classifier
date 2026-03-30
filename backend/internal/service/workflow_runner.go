@@ -189,7 +189,6 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newThumbnailNodeExecutor(fsAdapter, folderRepo))
 	svc.RegisterExecutor(newCompressNodeExecutor(fsAdapter))
 	svc.RegisterExecutor(newAuditLogNodeExecutor(auditSvc))
-	svc.RegisterExecutor(newClassificationPreviewNodeExecutor())
 	svc.RegisterExecutor(newClassificationDBResultPreviewExecutor())
 	svc.RegisterExecutor(newProcessingResultPreviewExecutor())
 	svc.RegisterExecutor(newFolderSelectorNodeExecutor())
@@ -884,13 +883,13 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 			}
 		}
 	case compressNodeExecutorType:
-		archives := stringSliceOutput(outputs, "archives")
+		archives := stepResultTargetsForNode(outputs, compressNodeExecutorType)
 		detail["archive_paths"] = archives
 		if len(archives) > 0 {
 			folderPath = archives[0]
 		}
 	case thumbnailNodeExecutorType:
-		thumbnails := stringSliceOutput(outputs, "thumbnail_paths")
+		thumbnails := stepResultTargetsForNode(outputs, thumbnailNodeExecutorType)
 		detail["thumbnail_paths"] = thumbnails
 		if len(thumbnails) > 0 {
 			folderPath = thumbnails[0]
@@ -1022,19 +1021,32 @@ func moveResultsForAudit(outputs map[string]TypedValue) []MoveResult {
 		return nil
 	}
 
-	resultOutput, ok := outputs["results"]
+	resultOutput, ok := outputs["step_results"]
 	if !ok {
 		return nil
 	}
 
-	switch typed := resultOutput.Value.(type) {
-	case []MoveResult:
-		return append([]MoveResult(nil), typed...)
-	case MoveResult:
-		return []MoveResult{typed}
-	default:
+	stepResults := processingStepResultsFromAny(resultOutput.Value)
+	if len(stepResults) == 0 {
 		return nil
 	}
+
+	results := make([]MoveResult, 0, len(stepResults))
+	for _, step := range stepResults {
+		if strings.TrimSpace(step.NodeType) != "move-node" {
+			continue
+		}
+		results = append(results, MoveResult{
+			SourcePath: strings.TrimSpace(step.SourcePath),
+			TargetPath: strings.TrimSpace(step.TargetPath),
+			Status:     strings.TrimSpace(step.Status),
+			Error:      strings.TrimSpace(step.Error),
+		})
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
 }
 
 func classifiedEntriesForAudit(outputs map[string]TypedValue) []ClassifiedEntry {
@@ -1064,6 +1076,29 @@ func stringSliceOutput(outputs map[string]TypedValue, key string) []string {
 	}
 
 	return uniqueCompactStringSlice(anyToStringSlice(output.Value))
+}
+
+func stepResultTargetsForNode(outputs map[string]TypedValue, nodeType string) []string {
+	output, ok := outputs["step_results"]
+	if !ok {
+		return nil
+	}
+	stepResults := processingStepResultsFromAny(output.Value)
+	if len(stepResults) == 0 {
+		return nil
+	}
+	targets := make([]string, 0, len(stepResults))
+	for _, step := range stepResults {
+		if strings.TrimSpace(step.NodeType) != nodeType {
+			continue
+		}
+		target := strings.TrimSpace(step.TargetPath)
+		if target == "" {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	return uniqueCompactStringSlice(targets)
 }
 
 func errorString(err error) string {
@@ -1199,7 +1234,7 @@ func validateNodeOutputs(outputs map[string]TypedValue, schema NodeSchema) (errC
 
 func isListPortType(portType PortType) bool {
 	switch portType {
-	case PortTypeStringList, PortTypeFolderTreeList, PortTypeClassificationSignalList, PortTypeClassifiedEntryList, PortTypeProcessingItemList, PortTypeMoveResultList:
+	case PortTypeStringList, PortTypeFolderTreeList, PortTypeClassificationSignalList, PortTypeClassifiedEntryList, PortTypeProcessingItemList, PortTypeProcessingStepResultList:
 		return true
 	default:
 		return false
@@ -1218,7 +1253,7 @@ func isEmptyListPortValue(value any) bool {
 		return len(typed) == 0
 	case []ProcessingItem:
 		return len(typed) == 0
-	case []MoveResult:
+	case []ProcessingStepResult:
 		return len(typed) == 0
 	case []any:
 		return len(typed) == 0
@@ -1283,9 +1318,9 @@ func isPortValueTypeCompatible(portType PortType, value any) bool {
 		default:
 			return false
 		}
-	case PortTypeMoveResultList:
+	case PortTypeProcessingStepResultList:
 		switch value.(type) {
-		case []MoveResult, []any:
+		case []ProcessingStepResult, []any:
 			return true
 		default:
 			return false
