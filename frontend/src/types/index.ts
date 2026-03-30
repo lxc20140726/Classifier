@@ -163,7 +163,6 @@ export type NodeType =
   | 'subtree-aggregator'
   | 'classification-reader'
   | 'db-subtree-reader'
-  | 'classification-preview'
   | 'classification-db-result-preview'
   | 'processing-result-preview'
   | 'folder-splitter'

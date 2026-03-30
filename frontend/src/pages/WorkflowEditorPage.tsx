@@ -12,6 +12,7 @@ import {
   Position,
   SelectionMode,
   useEdgesState,
+  useUpdateNodeInternals,
   useNodesState,
   type Connection,
   type Edge,
@@ -36,6 +37,9 @@ import { cn } from '@/lib/utils'
 import { useConfigStore } from '@/store/configStore'
 import { useThemeStore } from '@/store/themeStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
+import { ClassificationPreviewInline } from '@/components/workflow-preview/ClassificationPreviewInline'
+import { ProcessingPreviewInline } from '@/components/workflow-preview/ProcessingPreviewInline'
+import { isClassificationSummary, isProcessingSummary, parseNodePreviewSummary } from '@/components/workflow-preview/previewUtils'
 import type {
   NodeInputSpec,
   NodeSchema,
@@ -120,7 +124,6 @@ const NODE_CATEGORIES: NodeCategory[] = [
       'folder-picker',
       'classification-reader',
       'db-subtree-reader',
-      'classification-preview',
       'classification-db-result-preview',
       'processing-result-preview',
     ]),
@@ -554,27 +557,6 @@ interface NodeConfigPanelProps {
   updateNodeConfig: (nodeId: string, key: string, rawValue: string) => void
 }
 
-interface ClassificationPreviewSummary {
-  total: number
-  by_category: Record<string, number>
-  avg_confidence?: number
-  classifier_sources?: string[]
-}
-
-interface ProcessingPreviewSummary {
-  total: number
-  succeeded: number
-  failed: number
-}
-
-const CATEGORY_LABELS: Record<string, string> = {
-  photo: '照片',
-  video: '视频',
-  manga: '漫画',
-  mixed: '混合',
-  other: '其他',
-}
-
 function cfgStr(config: Record<string, unknown>, key: string): string {
   const v = config[key]
   return typeof v === 'string' ? v : ''
@@ -630,75 +612,6 @@ function NodeUsageHint({ children }: { children: ReactNode }) {
   return (
     <div className="border-2 border-dashed border-foreground bg-muted/30 p-3">
       <p className="text-xs font-bold leading-relaxed text-muted-foreground">{children}</p>
-    </div>
-  )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function unwrapNodeOutputPort(
-  parsed: Record<string, unknown>,
-  portName: string,
-): unknown {
-  const direct = parsed[portName]
-  if (direct !== undefined) {
-    return direct
-  }
-  const outputs = parsed.outputs
-  if (isRecord(outputs)) {
-    return outputs[portName]
-  }
-  return undefined
-}
-
-function unwrapPortValue(port: unknown): unknown {
-  if (!isRecord(port)) return port
-  if ('value' in port) return port.value
-  return port
-}
-
-function parseNodeSummary(nodeRun: NodeRun | null): ClassificationPreviewSummary | ProcessingPreviewSummary | null {
-  if (!nodeRun?.output_json) return null
-  try {
-    const parsed = JSON.parse(nodeRun.output_json) as Record<string, unknown>
-    if (!isRecord(parsed)) return null
-    if (nodeRun.node_type === 'classification-preview') {
-      const entriesPort = unwrapNodeOutputPort(parsed, 'entries')
-      const rawEntries = unwrapPortValue(entriesPort)
-      if (!Array.isArray(rawEntries)) return null
-      const byCategory: Record<string, number> = {}
-      for (const item of rawEntries) {
-        if (!isRecord(item)) continue
-        const categoryRaw = item.category
-        const category = typeof categoryRaw === 'string' && categoryRaw.trim() !== '' ? categoryRaw.trim() : 'other'
-        byCategory[category] = (byCategory[category] ?? 0) + 1
-      }
-      return {
-        total: rawEntries.length,
-        by_category: byCategory,
-      } as ClassificationPreviewSummary
-    }
-
-    const summaryPort = unwrapNodeOutputPort(parsed, 'summary')
-    if (summaryPort === undefined) return null
-    const summaryValue = unwrapPortValue(summaryPort)
-    if (!isRecord(summaryValue)) return null
-    return summaryValue as ClassificationPreviewSummary | ProcessingPreviewSummary
-  } catch {
-    return null
-  }
-}
-
-function MiniBlocks({ value, total, activeClass }: { value: number; total: number; activeClass: string }) {
-  const safeTotal = total > 0 ? total : 1
-  const count = Math.max(0, Math.min(12, Math.round((value / safeTotal) * 12)))
-  return (
-    <div className="flex items-center gap-0.5">
-      {Array.from({ length: 12 }).map((_, idx) => (
-        <span key={idx} className={cn('h-2 w-1 border border-foreground/30', idx < count ? activeClass : 'bg-muted')} />
-      ))}
     </div>
   )
 }
@@ -793,9 +706,6 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
           从数据库读取指定目录及其子目录的分类结果，重建完整子树供处理流使用。通常接在 folder-picker（记录模式）之后，再接 folder-splitter。
         </NodeUsageHint>
       )
-
-    case 'classification-preview':
-      return <></>
 
     case 'classification-db-result-preview':
       return <></>
@@ -1316,13 +1226,42 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
   }, [workflowNode, data.type])
 
   const nodeRef = useRef<HTMLDivElement | null>(null)
-  const previewSummary = useMemo(() => parseNodeSummary(nodeRun), [nodeRun])
+  const previewRef = useRef<HTMLDivElement | null>(null)
+  const updateNodeInternals = useUpdateNodeInternals()
+  const previewSummary = useMemo(() => parseNodePreviewSummary(nodeRun), [nodeRun])
+  const classificationSummary = useMemo(
+    () => (isClassificationSummary(previewSummary) ? previewSummary : null),
+    [previewSummary],
+  )
+  const processingSummary = useMemo(
+    () => (isProcessingSummary(previewSummary) ? previewSummary : null),
+    [previewSummary],
+  )
+  const isPreviewNode = data.type === 'classification-db-result-preview' || data.type === 'processing-result-preview'
 
   useEffect(() => {
     if (nodeRef.current) {
       gsap.fromTo(nodeRef.current, { scale: 0.8, opacity: 0, y: 20 }, { scale: 1, opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.5)" })
     }
   }, [])
+
+  useEffect(() => {
+    if (!isPreviewNode || !expanded) return
+    const element = previewRef.current
+    if (!element) return
+    let rafId = 0
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(() => {
+        updateNodeInternals(id)
+      })
+    })
+    observer.observe(element)
+    return () => {
+      cancelAnimationFrame(rafId)
+      observer.disconnect()
+    }
+  }, [id, expanded, isPreviewNode, updateNodeInternals, classificationSummary, processingSummary, nodeRun?.status, nodeRun?.error])
 
   // 差异化节点样式逻辑
   const isTrigger = category.types.has('trigger')
@@ -1346,7 +1285,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
         'relative shadow-hard transition-all duration-200 cursor-grab active:cursor-grabbing',
         nodeStyleClass,
         data.enabled ? 'opacity-100' : 'opacity-60 grayscale-[0.5]',
-        expanded ? 'w-[300px]' : 'min-w-[200px]',
+        expanded ? 'min-w-[300px] max-w-[680px] w-fit' : 'min-w-[220px] max-w-[260px]',
         selected ? 'shadow-hard-hover -translate-y-1 ring-2 ring-foreground ring-offset-2 ring-offset-background' : 'hover:-translate-y-0.5 hover:shadow-hard-hover',
       )}
     >
@@ -1435,8 +1374,8 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
       )}
 
       {/* Body */}
-      <div className="px-3 py-3">
-        {!isTrigger && data.type !== 'classification-preview' && data.type !== 'classification-db-result-preview' && data.type !== 'processing-result-preview' && (
+      <div ref={previewRef} className="px-3 py-3">
+        {!isTrigger && data.type !== 'classification-db-result-preview' && data.type !== 'processing-result-preview' && (
           <p className="mb-2 truncate font-mono text-[10px] font-bold text-muted-foreground">{data.type}</p>
         )}
 
@@ -1461,88 +1400,15 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
           )
         })()}
 
-        {data.type === 'classification-preview' && (
-          <div className="mt-2 space-y-1 border-2 border-foreground bg-muted/20 p-2">
-            {Object.entries((previewSummary && 'by_category' in previewSummary ? previewSummary.by_category : {}) as Record<string, number>)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 4).concat(
-                Object.entries((previewSummary && 'by_category' in previewSummary ? previewSummary.by_category : {}) as Record<string, number>).length === 0
-                  ? [['other', 0]]
-                  : [],
-              )
-              .map(([category, value]) => (
-                <div key={category} className="flex items-center justify-between gap-2">
-                  <span className="h-2 w-2 shrink-0 border border-foreground bg-blue-500" title={category} />
-                  <MiniBlocks
-                    value={value}
-                    total={previewSummary && 'by_category' in previewSummary ? previewSummary.total : 0}
-                    activeClass="bg-blue-500"
-                  />
-                </div>
-              ))}
-          </div>
-        )}
-
         {data.type === 'classification-db-result-preview' && (
-          <div className="mt-2 grid grid-cols-3 gap-2">
-            <div className="border-2 border-foreground bg-card px-2 py-2">
-              <p className="text-[10px] font-bold text-muted-foreground">总条目</p>
-              <p className="mt-1 text-sm font-black tabular-nums">
-                {previewSummary && 'by_category' in previewSummary ? previewSummary.total : 0}
-              </p>
-            </div>
-            <div className="border-2 border-foreground bg-card px-2 py-2">
-              <p className="text-[10px] font-bold text-muted-foreground">均值置信度</p>
-              <p className="mt-1 text-sm font-black tabular-nums">
-                {(
-                  previewSummary
-                  && 'by_category' in previewSummary
-                  && typeof previewSummary.avg_confidence === 'number'
-                    ? previewSummary.avg_confidence
-                    : 0
-                ).toFixed(2)}
-              </p>
-            </div>
-            <div className="border-2 border-foreground bg-card px-2 py-2">
-              <p className="text-[10px] font-bold text-muted-foreground">Top分类</p>
-              {(() => {
-                if (!previewSummary || !('by_category' in previewSummary)) {
-                  return <p className="mt-1 text-xs font-black">其他 0 (0%)</p>
-                }
-                const topEntry = Object.entries(previewSummary.by_category).sort((a, b) => b[1] - a[1])[0]
-                if (!topEntry) {
-                  return <p className="mt-1 text-xs font-black">其他 0 (0%)</p>
-                }
-                const [category, count] = topEntry
-                const pct = previewSummary.total > 0 ? Math.round((count / previewSummary.total) * 100) : 0
-                return (
-                  <p className="mt-1 text-xs font-black tabular-nums">
-                    {CATEGORY_LABELS[category] ?? category} {count} ({pct}%)
-                  </p>
-                )
-              })()}
-            </div>
+          <div className="mt-2 max-h-[42vh] overflow-y-auto">
+            <ClassificationPreviewInline summary={classificationSummary} />
           </div>
         )}
 
         {data.type === 'processing-result-preview' && (
-          <div className="mt-2 space-y-1 border-2 border-foreground bg-muted/20 p-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="h-2 w-2 shrink-0 border border-foreground bg-emerald-500" />
-              <MiniBlocks
-                value={previewSummary && 'succeeded' in previewSummary ? previewSummary.succeeded : 0}
-                total={previewSummary && 'succeeded' in previewSummary ? previewSummary.total : 0}
-                activeClass="bg-emerald-500"
-              />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="h-2 w-2 shrink-0 border border-foreground bg-rose-500" />
-              <MiniBlocks
-                value={previewSummary && 'succeeded' in previewSummary ? previewSummary.failed : 0}
-                total={previewSummary && 'succeeded' in previewSummary ? previewSummary.total : 0}
-                activeClass="bg-rose-500"
-              />
-            </div>
+          <div className="mt-2 max-h-[42vh] overflow-y-auto">
+            <ProcessingPreviewInline summary={processingSummary} />
           </div>
         )}
       </div>
