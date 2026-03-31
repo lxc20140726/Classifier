@@ -133,14 +133,14 @@ const NODE_CATEGORIES: NodeCategory[] = [
     iconColor: 'text-cyan-600 dark:text-cyan-400',
     accentClass: 'from-cyan-500/20 to-teal-500/10 border-cyan-200 dark:from-cyan-500/25 dark:to-teal-500/15 dark:border-cyan-700',
     borderHoverClass: 'hover:border-cyan-300 dark:hover:border-cyan-500',
-    types: new Set(['ext-ratio-classifier', 'name-keyword-classifier', 'file-tree-classifier', 'manual-classifier']),
+    types: new Set(['ext-ratio-classifier', 'name-keyword-classifier', 'file-tree-classifier']),
   },
   {
     label: '逻辑控制',
     iconColor: 'text-amber-600 dark:text-amber-400',
     accentClass: 'from-amber-500/20 to-orange-500/10 border-amber-200 dark:from-amber-500/25 dark:to-orange-500/15 dark:border-amber-700',
     borderHoverClass: 'hover:border-amber-300 dark:hover:border-amber-500',
-    types: new Set(['confidence-check', 'folder-splitter', 'folder-selector', 'category-router', 'subtree-aggregator']),
+    types: new Set(['confidence-check', 'folder-splitter', 'category-router', 'subtree-aggregator']),
   },
   {
     label: '执行操作',
@@ -566,17 +566,6 @@ function cfgNum(config: Record<string, unknown>, key: string, fallback: number):
   return typeof v === 'number' ? v : fallback
 }
 
-function cfgBool(config: Record<string, unknown>, key: string, fallback: boolean): boolean {
-  const value = config[key]
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase()
-    if (normalized === 'true') return true
-    if (normalized === 'false') return false
-  }
-  return fallback
-}
-
 function cfgJson(config: Record<string, unknown>, key: string): string {
   const v = config[key]
   if (v === undefined || v === null) return ''
@@ -685,13 +674,6 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
         </NodeUsageHint>
       )
 
-    case 'manual-classifier':
-      return (
-        <NodeUsageHint>
-          人工介入分类节点。工作流到达此节点时暂停（pending），需通过 API Resume 接口提交分类结果后继续执行。无需配置。
-        </NodeUsageHint>
-      )
-
     case 'classification-reader':
       return (
         <NodeUsageHint>
@@ -731,24 +713,6 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
         <NodeUsageHint>
           聚合所有分类器的信号，取最高置信度结果，将最终分类写入数据库。需将各分类器的信号端口（signal_kw / signal_ft / signal_ext）分别连入对应输入端口。无需配置。
         </NodeUsageHint>
-      )
-
-    case 'folder-selector':
-      return (
-        <div className="space-y-3">
-          <NodeUsageHint>
-            放在扫描器之后，工作流运行到此处会暂停并展示扫描到的文件夹列表，等待手动勾选哪些参与后续处理。勾选完成后继续执行。开启"全部自动选中"则不暂停直接透传。
-          </NodeUsageHint>
-          <label className="flex cursor-pointer items-center justify-between border-2 border-foreground bg-muted/30 px-3 py-2 transition-colors hover:bg-muted/50">
-            <span className="text-sm font-bold">全部自动选中（不暂停）</span>
-            <input
-              type="checkbox"
-              checked={cfgBool(config, 'auto_select_all', false)}
-              onChange={(e) => set('auto_select_all', e.target.checked ? 'true' : 'false')}
-              className="h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
-            />
-          </label>
-        </div>
       )
 
     case 'audit-log':

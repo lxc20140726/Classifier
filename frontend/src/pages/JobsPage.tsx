@@ -298,41 +298,15 @@ function NodeRunsPanel({ runId }: { runId: string }) {
 function WorkflowRunRow({ run }: { run: WorkflowRun }) {
   const [expanded, setExpanded] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState<string>('photo')
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [isActing, setIsActing] = useState(false)
-  const { rollbackRun, provideInput, provideRawInput, nodesByRunId, fetchRunDetail, fetchRunsForJob } = useWorkflowRunStore()
+  const { rollbackRun, provideInput, fetchRunDetail, fetchRunsForJob } = useWorkflowRunStore()
   const pushNotification = useNotificationStore((s) => s.pushNotification)
-
-  const nodeRuns = nodesByRunId[run.id] ?? []
-  const waitingNode = nodeRuns.find((n) => n.status === 'waiting_input') ?? null
-  const waitingNodeType = waitingNode?.node_type ?? null
 
   useEffect(() => {
     if (run.status === 'waiting_input') {
       void fetchRunDetail(run.id)
     }
   }, [run.id, run.status, fetchRunDetail])
-
-  useEffect(() => {
-    if (waitingNodeType === 'folder-selector' && waitingNode) {
-      try {
-        const output = JSON.parse(waitingNode.output_json || '{}') as Record<string, unknown>
-        const raw = output['candidate_paths'] ?? output['state']
-        if (Array.isArray(raw)) {
-          const paths = raw.filter((p): p is string => typeof p === 'string')
-          setSelectedPaths(paths)
-        } else if (raw && typeof raw === 'object') {
-          const nested = (raw as Record<string, unknown>)['candidate_paths']
-          if (Array.isArray(nested)) {
-            const paths = nested.filter((p): p is string => typeof p === 'string')
-            setSelectedPaths(paths)
-          }
-        }
-      } catch {
-        // ignore parse errors
-      }
-    }
-  }, [waitingNodeType, waitingNode])
 
   async function handleRollback() {
     setIsActing(true)
@@ -367,34 +341,9 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
     }
   }
 
-  async function handleFolderSelectorConfirm() {
-    setIsActing(true)
-    try {
-      await provideRawInput(run.id, { selected_paths: selectedPaths })
-    } finally {
-      setIsActing(false)
-    }
-  }
-
-  function togglePath(path: string) {
-    setSelectedPaths((prev) =>
-      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path],
-    )
-  }
-
   function toggleExpand() {
     setExpanded((v) => !v)
   }
-
-  const candidatePaths: string[] = (() => {
-    if (!waitingNode) return []
-    try {
-      const output = JSON.parse(waitingNode.output_json || '{}') as Record<string, unknown>
-      const raw = output['candidate_paths'] ?? (output['state'] as Record<string, unknown> | undefined)?.['candidate_paths']
-      if (Array.isArray(raw)) return raw.filter((p): p is string => typeof p === 'string')
-    } catch { /* ignore */ }
-    return []
-  })()
 
   return (
     <>
@@ -421,7 +370,7 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
                 {isActing ? '回滚中...' : '回滚'}
               </button>
             )}
-            {run.status === 'waiting_input' && waitingNodeType !== 'folder-selector' && (
+            {run.status === 'waiting_input' && (
               <div className="flex items-center gap-2">
                 <select
                   value={selectedCategory}
@@ -442,63 +391,12 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
                 </button>
               </div>
             )}
-            {run.status === 'waiting_input' && waitingNodeType === 'folder-selector' && (
-              <span className="text-xs font-bold text-purple-700 dark:text-purple-300">
-                展开选择文件夹 ↓
-              </span>
-            )}
           </div>
         </td>
       </tr>
       {expanded && (
         <tr className="border-b-2 border-foreground bg-muted/10">
           <td colSpan={5} className="px-6 py-4 space-y-4">
-            {run.status === 'waiting_input' && waitingNodeType === 'folder-selector' && candidatePaths.length > 0 && (
-              <div className="border-2 border-purple-400 bg-purple-50 dark:bg-purple-950/30 p-4 space-y-3">
-                <p className="text-xs font-black uppercase tracking-widest text-purple-800 dark:text-purple-300">
-                  选择参与处理的文件夹（{selectedPaths.length} / {candidatePaths.length}）
-                </p>
-                <div className="space-y-1 max-h-64 overflow-y-auto">
-                  {candidatePaths.map((path) => (
-                    <label key={path} className="flex items-center gap-2 cursor-pointer group">
-                      <input
-                        type="checkbox"
-                        checked={selectedPaths.includes(path)}
-                        onChange={() => togglePath(path)}
-                        className="h-4 w-4 border-2 border-foreground"
-                      />
-                      <span className="font-mono text-xs font-bold group-hover:text-purple-700 dark:group-hover:text-purple-300 transition-colors">
-                        {path}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPaths(candidatePaths)}
-                    className="border-2 border-foreground bg-background px-3 py-1 text-xs font-bold transition-all hover:bg-foreground hover:text-background"
-                  >
-                    全选
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPaths([])}
-                    className="border-2 border-foreground bg-background px-3 py-1 text-xs font-bold transition-all hover:bg-foreground hover:text-background"
-                  >
-                    清空
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isActing || selectedPaths.length === 0}
-                    onClick={() => void handleFolderSelectorConfirm()}
-                    className="border-2 border-purple-900 bg-purple-200 px-4 py-1 text-xs font-bold text-purple-900 transition-all hover:bg-purple-900 hover:text-purple-100 hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50"
-                  >
-                    确认选择 ({selectedPaths.length})
-                  </button>
-                </div>
-              </div>
-            )}
             <NodeRunsPanel runId={run.id} />
           </td>
         </tr>

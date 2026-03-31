@@ -62,6 +62,38 @@ const TEMPLATE_CLASSIFY_AND_MOVE = JSON.stringify({
   ],
 })
 
+const TEMPLATE_GENERIC_PROCESSING = JSON.stringify({
+  nodes: [
+    { id: 'g-reader', type: 'classification-reader', label: '分类读取器', config: {}, inputs: {}, enabled: true, ui_position: { x: 80, y: 280 } },
+    { id: 'g-split', type: 'folder-splitter', label: '文件夹拆分器', config: { split_mixed: true, split_depth: 1 }, inputs: { entry: { link_source: { source_node_id: 'g-reader', source_port: 'entry' } } }, enabled: true, ui_position: { x: 320, y: 280 } },
+    { id: 'g-router', type: 'category-router', label: '类别路由器', config: {}, inputs: { items: { link_source: { source_node_id: 'g-split', source_port: 'items' } } }, enabled: true, ui_position: { x: 560, y: 280 } },
+    { id: 'g-rename-video', type: 'rename-node', label: '重命名（视频）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'video' } } }, enabled: true, ui_position: { x: 860, y: 60 } },
+    { id: 'g-rename-manga', type: 'rename-node', label: '重命名（漫画）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'manga' } } }, enabled: true, ui_position: { x: 860, y: 180 } },
+    { id: 'g-rename-photo', type: 'rename-node', label: '重命名（图片）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'photo' } } }, enabled: true, ui_position: { x: 860, y: 300 } },
+    { id: 'g-rename-other', type: 'rename-node', label: '重命名（其他）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'other' } } }, enabled: true, ui_position: { x: 860, y: 420 } },
+    { id: 'g-rename-mixed', type: 'rename-node', label: '重命名（混合叶子）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'mixed_leaf' } } }, enabled: true, ui_position: { x: 860, y: 540 } },
+    { id: 'g-collect', type: 'collect-node', label: '收集节点', config: {}, inputs: { items_1: { link_source: { source_node_id: 'g-rename-video', source_port: 'items' } }, items_2: { link_source: { source_node_id: 'g-rename-manga', source_port: 'items' } }, items_3: { link_source: { source_node_id: 'g-rename-photo', source_port: 'items' } }, items_4: { link_source: { source_node_id: 'g-rename-other', source_port: 'items' } }, items_5: { link_source: { source_node_id: 'g-rename-mixed', source_port: 'items' } } }, enabled: true, ui_position: { x: 1160, y: 280 } },
+    { id: 'g-move', type: 'move-node', label: '移动节点', config: { target_dir: '.processed', move_unit: 'folder', conflict_policy: 'auto_rename' }, inputs: { items: { link_source: { source_node_id: 'g-collect', source_port: 'items' } } }, enabled: true, ui_position: { x: 1420, y: 280 } },
+    { id: 'g-audit', type: 'audit-log', label: '审计日志', config: { action: 'phase4.processing.generic', level: 'info' }, inputs: { items: { link_source: { source_node_id: 'g-move', source_port: 'items' } } }, enabled: true, ui_position: { x: 1660, y: 280 } },
+  ],
+  edges: [
+    { id: 'g-e1', source: 'g-reader', source_port: 'entry', target: 'g-split', target_port: 'entry' },
+    { id: 'g-e2', source: 'g-split', source_port: 'items', target: 'g-router', target_port: 'items' },
+    { id: 'g-e3', source: 'g-router', source_port: 'video', target: 'g-rename-video', target_port: 'items' },
+    { id: 'g-e4', source: 'g-router', source_port: 'manga', target: 'g-rename-manga', target_port: 'items' },
+    { id: 'g-e5', source: 'g-router', source_port: 'photo', target: 'g-rename-photo', target_port: 'items' },
+    { id: 'g-e6', source: 'g-router', source_port: 'other', target: 'g-rename-other', target_port: 'items' },
+    { id: 'g-e7', source: 'g-router', source_port: 'mixed_leaf', target: 'g-rename-mixed', target_port: 'items' },
+    { id: 'g-e8', source: 'g-rename-video', source_port: 'items', target: 'g-collect', target_port: 'items_1' },
+    { id: 'g-e9', source: 'g-rename-manga', source_port: 'items', target: 'g-collect', target_port: 'items_2' },
+    { id: 'g-e10', source: 'g-rename-photo', source_port: 'items', target: 'g-collect', target_port: 'items_3' },
+    { id: 'g-e11', source: 'g-rename-other', source_port: 'items', target: 'g-collect', target_port: 'items_4' },
+    { id: 'g-e12', source: 'g-rename-mixed', source_port: 'items', target: 'g-collect', target_port: 'items_5' },
+    { id: 'g-e13', source: 'g-collect', source_port: 'items', target: 'g-move', target_port: 'items' },
+    { id: 'g-e14', source: 'g-move', source_port: 'items', target: 'g-audit', target_port: 'items' },
+  ],
+})
+
 interface WorkflowTemplate {
   id: string
   name: string
@@ -87,6 +119,12 @@ const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     name: '分类 + 路由移动',
     description: '扫描 → 分类 → 预览结果 → 按类别移动到不同目标目录。完整管道，开箱即用',
     graphJson: TEMPLATE_CLASSIFY_AND_MOVE,
+  },
+  {
+    id: 'generic-processing',
+    name: '通用处理流程',
+    description: '分类结果读取 → 拆分 → 按类别重命名 → 合并收集 → 统一移动与审计。适合处理阶段的通用落地流程',
+    graphJson: TEMPLATE_GENERIC_PROCESSING,
   },
 ]
 
