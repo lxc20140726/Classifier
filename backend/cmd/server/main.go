@@ -76,6 +76,9 @@ func main() {
 	if err := service.SeedDefaultProcessingWorkflow(context.Background(), workflowDefRepo); err != nil {
 		log.Fatalf("seed default processing workflow: %v", err)
 	}
+	if err := service.SeedGenericProcessingWorkflow(context.Background(), workflowDefRepo); err != nil {
+		log.Fatalf("seed generic processing workflow: %v", err)
+	}
 
 	if err := scheduledWorkflowSvc.BootstrapLegacyScanCron(context.Background(), configRepo); err != nil {
 		log.Fatalf("bootstrap legacy scan cron: %v", err)

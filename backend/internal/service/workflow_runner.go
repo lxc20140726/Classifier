@@ -191,7 +191,6 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newAuditLogNodeExecutor(auditSvc))
 	svc.RegisterExecutor(newClassificationDBResultPreviewExecutor())
 	svc.RegisterExecutor(newProcessingResultPreviewExecutor())
-	svc.RegisterExecutor(newFolderSelectorNodeExecutor())
 	svc.RegisterExecutor(newFolderPickerNodeExecutor(fsAdapter, folderRepo))
 
 	return svc

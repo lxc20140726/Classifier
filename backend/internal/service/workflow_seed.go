@@ -265,21 +265,200 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 	return nil
 }
 
+func SeedGenericProcessingWorkflow(ctx context.Context, repo repository.WorkflowDefinitionRepository) error {
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{
+				ID:      "g-reader",
+				Type:    "classification-reader",
+				Config:  map[string]any{},
+				Inputs:  map[string]repository.NodeInputSpec{},
+				Enabled: true,
+			},
+			{
+				ID:   "g-split",
+				Type: "folder-splitter",
+				Config: map[string]any{
+					"split_mixed": true,
+					"split_depth": 1,
+				},
+				Inputs: map[string]repository.NodeInputSpec{
+					"entry": {
+						LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-reader", SourcePort: "entry"},
+					},
+				},
+				Enabled: true,
+			},
+			{
+				ID:      "g-router",
+				Type:    "category-router",
+				Config:  map[string]any{},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-split", SourcePort: "items"}}},
+				Enabled: true,
+			},
+			{
+				ID:   "g-rename-video",
+				Type: "rename-node",
+				Config: map[string]any{
+					"strategy": "template",
+					"template": "{name}",
+				},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-router", SourcePort: "video"}}},
+				Enabled: true,
+			},
+			{
+				ID:   "g-rename-manga",
+				Type: "rename-node",
+				Config: map[string]any{
+					"strategy": "template",
+					"template": "{name}",
+				},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-router", SourcePort: "manga"}}},
+				Enabled: true,
+			},
+			{
+				ID:   "g-rename-photo",
+				Type: "rename-node",
+				Config: map[string]any{
+					"strategy": "template",
+					"template": "{name}",
+				},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-router", SourcePort: "photo"}}},
+				Enabled: true,
+			},
+			{
+				ID:   "g-rename-other",
+				Type: "rename-node",
+				Config: map[string]any{
+					"strategy": "template",
+					"template": "{name}",
+				},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-router", SourcePort: "other"}}},
+				Enabled: true,
+			},
+			{
+				ID:   "g-rename-mixed",
+				Type: "rename-node",
+				Config: map[string]any{
+					"strategy": "template",
+					"template": "{name}",
+				},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-router", SourcePort: "mixed_leaf"}}},
+				Enabled: true,
+			},
+			{
+				ID:     "g-collect",
+				Type:   "collect-node",
+				Config: map[string]any{},
+				Inputs: map[string]repository.NodeInputSpec{
+					"items_1": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-rename-video", SourcePort: "items"}},
+					"items_2": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-rename-manga", SourcePort: "items"}},
+					"items_3": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-rename-photo", SourcePort: "items"}},
+					"items_4": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-rename-other", SourcePort: "items"}},
+					"items_5": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-rename-mixed", SourcePort: "items"}},
+				},
+				Enabled: true,
+			},
+			{
+				ID:   "g-move",
+				Type: "move-node",
+				Config: map[string]any{
+					"target_dir":      ".processed",
+					"move_unit":       "folder",
+					"conflict_policy": "auto_rename",
+				},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-collect", SourcePort: "items"}}},
+				Enabled: true,
+			},
+			{
+				ID:   "g-audit",
+				Type: "audit-log",
+				Config: map[string]any{
+					"action": "phase4.processing.generic",
+					"level":  "info",
+				},
+				Inputs: map[string]repository.NodeInputSpec{
+					"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-move", SourcePort: "items"}},
+				},
+				Enabled: true,
+			},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e-reader-split", Source: "g-reader", SourcePort: "entry", Target: "g-split", TargetPort: "entry"},
+			{ID: "e-split-router", Source: "g-split", SourcePort: "items", Target: "g-router", TargetPort: "items"},
+			{ID: "e-router-rename-video", Source: "g-router", SourcePort: "video", Target: "g-rename-video", TargetPort: "items"},
+			{ID: "e-router-rename-manga", Source: "g-router", SourcePort: "manga", Target: "g-rename-manga", TargetPort: "items"},
+			{ID: "e-router-rename-photo", Source: "g-router", SourcePort: "photo", Target: "g-rename-photo", TargetPort: "items"},
+			{ID: "e-router-rename-other", Source: "g-router", SourcePort: "other", Target: "g-rename-other", TargetPort: "items"},
+			{ID: "e-router-rename-mixed", Source: "g-router", SourcePort: "mixed_leaf", Target: "g-rename-mixed", TargetPort: "items"},
+			{ID: "e-rename-video-collect", Source: "g-rename-video", SourcePort: "items", Target: "g-collect", TargetPort: "items_1"},
+			{ID: "e-rename-manga-collect", Source: "g-rename-manga", SourcePort: "items", Target: "g-collect", TargetPort: "items_2"},
+			{ID: "e-rename-photo-collect", Source: "g-rename-photo", SourcePort: "items", Target: "g-collect", TargetPort: "items_3"},
+			{ID: "e-rename-other-collect", Source: "g-rename-other", SourcePort: "items", Target: "g-collect", TargetPort: "items_4"},
+			{ID: "e-rename-mixed-collect", Source: "g-rename-mixed", SourcePort: "items", Target: "g-collect", TargetPort: "items_5"},
+			{ID: "e-collect-move", Source: "g-collect", SourcePort: "items", Target: "g-move", TargetPort: "items"},
+			{ID: "e-move-audit-items", Source: "g-move", SourcePort: "items", Target: "g-audit", TargetPort: "items"},
+		},
+	}
+
+	graphBytes, err := json.Marshal(graph)
+	if err != nil {
+		return fmt.Errorf("seedGenericProcessingWorkflow marshal graph: %w", err)
+	}
+
+	existing, err := workflowDefinitionByName(ctx, repo, "通用处理流程")
+	if err != nil {
+		return fmt.Errorf("seedGenericProcessingWorkflow get existing workflow: %w", err)
+	}
+	if existing != nil {
+		existing.Description = "按类别路由并统一收集合并后执行重命名、移动与审计"
+		existing.GraphJSON = string(graphBytes)
+		if existing.Version <= 0 {
+			existing.Version = 1
+		}
+		if err := repo.Update(ctx, existing); err != nil {
+			return fmt.Errorf("seedGenericProcessingWorkflow update workflow: %w", err)
+		}
+		return nil
+	}
+
+	if err := repo.Create(ctx, &repository.WorkflowDefinition{
+		ID:          uuid.NewString(),
+		Name:        "通用处理流程",
+		Description: "按类别路由并统一收集合并后执行重命名、移动与审计",
+		GraphJSON:   string(graphBytes),
+		IsActive:    false,
+		Version:     1,
+	}); err != nil {
+		return fmt.Errorf("seedGenericProcessingWorkflow create workflow: %w", err)
+	}
+
+	return nil
+}
+
 func workflowDefinitionExistsByName(ctx context.Context, repo repository.WorkflowDefinitionRepository, name string) (bool, error) {
+	item, err := workflowDefinitionByName(ctx, repo, name)
+	if err != nil {
+		return false, err
+	}
+	return item != nil, nil
+}
+
+func workflowDefinitionByName(ctx context.Context, repo repository.WorkflowDefinitionRepository, name string) (*repository.WorkflowDefinition, error) {
 	page := 1
 	for {
 		items, total, err := repo.List(ctx, repository.WorkflowDefListFilter{Page: page, Limit: 100})
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		for _, item := range items {
 			if strings.EqualFold(strings.TrimSpace(item.Name), strings.TrimSpace(name)) {
-				return true, nil
+				return item, nil
 			}
 		}
 
 		if len(items) == 0 || page*100 >= total {
-			return false, nil
+			return nil, nil
 		}
 		page++
 	}
