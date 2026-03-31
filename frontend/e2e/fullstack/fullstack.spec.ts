@@ -96,7 +96,7 @@ test('scan flow creates folders and snapshot drawer can revert a real snapshot',
   await expect(page.getByText('已回退')).toBeVisible()
 })
 
-test('jobs page provides manual input to a real waiting workflow run', async ({ page, request }) => {
+test('legacy removed node type fails at runtime', async ({ request }) => {
   await scanUntilFoldersExist(request)
   const folders = await getFolders(request)
   const manualFolder = folders.data.find((folder) => folder.name === 'manual-only')
@@ -108,21 +108,8 @@ test('jobs page provides manual input to a real waiting workflow run', async ({ 
       graph_json: JSON.stringify({
         nodes: [
           { id: 'manual', type: 'manual-classifier', config: {}, enabled: true },
-          {
-            id: 'agg',
-            type: 'subtree-aggregator',
-            config: {},
-            enabled: true,
-            inputs: {
-              signal_manual: {
-                link_source: { source_node_id: 'manual', output_port_index: 0 },
-              },
-            },
-          },
         ],
-        edges: [
-          { id: 'e1', source: 'manual', source_port: 0, target: 'agg', target_port: 5 },
-        ],
+        edges: [],
       }),
     },
   })
@@ -137,9 +124,6 @@ test('jobs page provides manual input to a real waiting workflow run', async ({ 
   })
   expect(startJobResponse.ok()).toBeTruthy()
   const startJobBody = (await startJobResponse.json()) as { job_id: string }
-  const jobPrefix = startJobBody.job_id.slice(0, 8)
-  const folderPrefix = manualFolder!.id.slice(0, 8)
-
   let workflowRunId = ''
   await expect
     .poll(async () => {
@@ -151,31 +135,20 @@ test('jobs page provides manual input to a real waiting workflow run', async ({ 
       workflowRunId = body.data[0]?.id ?? ''
       return body.data[0]?.status ?? ''
     }, { timeout: 15000 })
-    .toBe('waiting_input')
+    .toBe('failed')
 
-  await page.goto('/')
-  await page.getByRole('link', { name: '任务' }).click()
-  await expect(page.getByRole('heading', { name: '任务历史' })).toBeVisible()
-
-  await page.locator('tr').filter({ hasText: jobPrefix }).first().click()
-  await expect(page.getByText('工作流运行（1）')).toBeVisible()
-
-  await page.locator('tr').filter({ hasText: folderPrefix }).last().click()
-  await expect(page.getByRole('cell', { name: 'manual-classifier', exact: true })).toBeVisible()
-
-  await page.getByRole('combobox').selectOption('video')
-  await page.getByRole('button', { name: '确认' }).click()
-
-  await expect
-    .poll(async () => {
-      const response = await request.get(`/api/workflow-runs/${workflowRunId}`)
-      if (!response.ok()) return ''
-      const body = (await response.json()) as { data: { status: string } }
-      return body.data.status
-    }, { timeout: 15000 })
-    .toBe('succeeded')
+  const detailResponse = await request.get(`/api/workflow-runs/${workflowRunId}`)
+  expect(detailResponse.ok()).toBeTruthy()
+  const detail = (await detailResponse.json()) as {
+    data: { status: string }
+    node_runs: Array<{ node_type: string; error: string }>
+  }
+  expect(detail.data.status).toBe('failed')
+  expect(detail.node_runs.length).toBeGreaterThan(0)
+  expect(detail.node_runs[0].node_type).toBe('manual-classifier')
+  expect(detail.node_runs[0].error).toContain('executor not found')
 
   const refreshedFolders = await getFolders(request)
   const refreshedManualFolder = refreshedFolders.data.find((folder) => folder.id === manualFolder!.id)
-  expect(refreshedManualFolder?.category).toBe('video')
+  expect(refreshedManualFolder?.category).toBe('pending')
 })

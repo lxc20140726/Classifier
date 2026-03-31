@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import { json, method, mockEventStream, pathname } from '../support/api'
 
-test('jobs page expands workflow runs and submits manual input', async ({ page }) => {
+test('jobs page expands workflow runs and submits waiting input', async ({ page }) => {
   await mockEventStream(page)
 
   const jobs = [
@@ -39,8 +39,8 @@ test('jobs page expands workflow runs and submits manual input', async ({ page }
     {
       id: 'node-run-1',
       workflow_run_id: 'run-1',
-      node_id: 'manual',
-      node_type: 'manual-classifier',
+      node_id: 'pending-node',
+      node_type: 'audit-log',
       sequence: 4,
       status: 'waiting_input',
       input_json: '[]',
@@ -84,7 +84,7 @@ test('jobs page expands workflow runs and submits manual input', async ({ page }
   await expect(page.getByText('工作流运行（1）')).toBeVisible()
   await expect(page.getByText('待确认')).toBeVisible()
   await page.getByRole('row', { name: 'folder-1 待确认 2026/3/24 08:00:00 照片 确认', exact: true }).click()
-  await expect(page.getByRole('cell', { name: 'manual-classifier', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'audit-log', exact: true })).toBeVisible()
   await page.getByRole('combobox').selectOption('manga')
   await page.getByRole('button', { name: '确认' }).click()
   await expect(page.getByRole('row', { name: 'folder-1 已完成 2026/3/24 08:00:00', exact: true })).toBeVisible()
