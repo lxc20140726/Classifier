@@ -55,7 +55,7 @@ func (e *thumbnailNodeExecutor) Schema() NodeSchema {
 		Label:       "缩略图节点",
 		Description: "为视频文件夹提取代表帧生成缩略图（依赖运行环境中的 ffmpeg）",
 		Inputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "待生成缩略图的处理项列表", Required: true},
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待生成缩略图的处理项列表", Required: true, SkipOnEmpty: true, AcceptDefault: true},
 			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{

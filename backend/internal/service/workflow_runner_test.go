@@ -94,6 +94,11 @@ type processingItemSourceExecutor struct {
 	items []ProcessingItem
 }
 
+type processingItemListProducerExecutor struct {
+	nodeType string
+	items    []ProcessingItem
+}
+
 type emptyRequiredOutputExecutor struct{}
 
 type branchSlowItemsExecutor struct {
@@ -324,6 +329,41 @@ func (e *processingItemSourceExecutor) Resume(_ context.Context, _ NodeExecution
 }
 
 func (e *processingItemSourceExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *processingItemListProducerExecutor) Type() string {
+	if e.nodeType != "" {
+		return e.nodeType
+	}
+	return "processing-item-list-producer"
+}
+
+func (e *processingItemListProducerExecutor) Schema() NodeSchema {
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "Processing Item List Producer",
+		Description: "Emit processing items for branch skip tests",
+		Outputs: []PortDef{
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true},
+		},
+	}
+}
+
+func (e *processingItemListProducerExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{
+			"items": {Type: PortTypeProcessingItemList, Value: append([]ProcessingItem(nil), e.items...)},
+		},
+		Status: ExecutionSuccess,
+	}, nil
+}
+
+func (e *processingItemListProducerExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *processingItemListProducerExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
 }
 
@@ -1379,6 +1419,140 @@ func TestEngineV2_AC_ROLL4_MultiNodeReverseRollback(t *testing.T) {
 	}
 	if !srcExists {
 		t.Fatalf("/source/album should exist after rollback")
+	}
+}
+
+func TestWorkflowRunnerServiceSingleCategoryBranchesAutoSkip(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+
+	adapter := fs.NewMockAdapter()
+	adapter.AddDir("/source", []fs.DirEntry{{Name: "video-a", IsDir: true}})
+	adapter.AddDir("/source/video-a", []fs.DirEntry{{Name: "episode-01.mkv", IsDir: false, Size: 123}})
+
+	source := &processingItemListProducerExecutor{
+		nodeType: "single-category-source",
+		items: []ProcessingItem{
+			{SourcePath: "/source/video-a", FolderName: "video-a", TargetName: "video-a", Category: "video"},
+		},
+	}
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "src", Type: source.Type(), Enabled: true},
+			{ID: "router", Type: categoryRouterExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "src", SourcePort: "items"}},
+			}},
+			{ID: "rename-video", Type: renameNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "video"}},
+			}},
+			{ID: "rename-manga", Type: renameNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "manga"}},
+			}},
+			{ID: "rename-photo", Type: renameNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "photo"}},
+			}},
+			{ID: "rename-other", Type: renameNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "other"}},
+			}},
+			{ID: "rename-mixed", Type: renameNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "mixed_leaf"}},
+			}},
+			{ID: "collect", Type: collectNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items_1": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename-video", SourcePort: "items"}},
+				"items_2": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename-manga", SourcePort: "items"}},
+				"items_3": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename-photo", SourcePort: "items"}},
+				"items_4": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename-other", SourcePort: "items"}},
+				"items_5": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename-mixed", SourcePort: "items"}},
+			}},
+			{ID: "move", Type: phase4MoveNodeExecutorType, Enabled: true, Config: map[string]any{
+				"target_dir":      "/target",
+				"move_unit":       "folder",
+				"conflict_policy": "auto_rename",
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "collect", SourcePort: "items"}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e-src-router", Source: "src", SourcePort: "items", Target: "router", TargetPort: "items"},
+			{ID: "e-router-video", Source: "router", SourcePort: "video", Target: "rename-video", TargetPort: "items"},
+			{ID: "e-router-manga", Source: "router", SourcePort: "manga", Target: "rename-manga", TargetPort: "items"},
+			{ID: "e-router-photo", Source: "router", SourcePort: "photo", Target: "rename-photo", TargetPort: "items"},
+			{ID: "e-router-other", Source: "router", SourcePort: "other", Target: "rename-other", TargetPort: "items"},
+			{ID: "e-router-mixed", Source: "router", SourcePort: "mixed_leaf", Target: "rename-mixed", TargetPort: "items"},
+			{ID: "e-rv-collect", Source: "rename-video", SourcePort: "items", Target: "collect", TargetPort: "items_1"},
+			{ID: "e-rm-collect", Source: "rename-manga", SourcePort: "items", Target: "collect", TargetPort: "items_2"},
+			{ID: "e-rp-collect", Source: "rename-photo", SourcePort: "items", Target: "collect", TargetPort: "items_3"},
+			{ID: "e-ro-collect", Source: "rename-other", SourcePort: "items", Target: "collect", TargetPort: "items_4"},
+			{ID: "e-rx-collect", Source: "rename-mixed", SourcePort: "items", Target: "collect", TargetPort: "items_5"},
+			{ID: "e-collect-move", Source: "collect", SourcePort: "items", Target: "move", TargetPort: "items"},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-single-category-skip", Name: "wf-single-category-skip", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
+	svc.RegisterExecutor(source)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	nodeRuns, _, err := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 50})
+	if err != nil {
+		t.Fatalf("nodeRunRepo.List() error = %v", err)
+	}
+
+	if got := nodeRunStatusByID(nodeRuns, "rename-video"); got != "succeeded" {
+		t.Fatalf("rename-video status = %q, want succeeded", got)
+	}
+	if got := nodeRunStatusByID(nodeRuns, "rename-manga"); got != "skipped" {
+		t.Fatalf("rename-manga status = %q, want skipped", got)
+	}
+	if got := nodeRunStatusByID(nodeRuns, "rename-photo"); got != "skipped" {
+		t.Fatalf("rename-photo status = %q, want skipped", got)
+	}
+	if got := nodeRunStatusByID(nodeRuns, "rename-other"); got != "skipped" {
+		t.Fatalf("rename-other status = %q, want skipped", got)
+	}
+	if got := nodeRunStatusByID(nodeRuns, "rename-mixed"); got != "skipped" {
+		t.Fatalf("rename-mixed status = %q, want skipped", got)
+	}
+	if got := nodeRunStatusByID(nodeRuns, "collect"); got != "succeeded" {
+		t.Fatalf("collect status = %q, want succeeded", got)
+	}
+	if got := nodeRunStatusByID(nodeRuns, "move"); got != "succeeded" {
+		t.Fatalf("move status = %q, want succeeded", got)
+	}
+
+	for _, nodeRun := range nodeRuns {
+		switch nodeRun.NodeID {
+		case "rename-manga", "rename-photo", "rename-other", "rename-mixed":
+			if nodeRun.Error != "skip_reason=empty_input" {
+				t.Fatalf("%s error = %q, want skip_reason=empty_input", nodeRun.NodeID, nodeRun.Error)
+			}
+		}
 	}
 }
 

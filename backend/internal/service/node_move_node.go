@@ -32,7 +32,7 @@ func (e *phase4MoveNodeExecutor) Schema() NodeSchema {
 		Label:       "移动节点",
 		Description: "将处理项移动到目标目录，支持冲突策略和操作回滚",
 		Inputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "待移动的处理项列表", Required: true},
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待移动的处理项列表", Required: true, SkipOnEmpty: true, AcceptDefault: true},
 			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{

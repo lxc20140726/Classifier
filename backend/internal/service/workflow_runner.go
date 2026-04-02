@@ -57,10 +57,21 @@ type PortDef struct {
 	Type           PortType `json:"type"`
 	Required       bool     `json:"required"`
 	Lazy           bool     `json:"lazy"`
+	SkipOnEmpty    bool     `json:"skip_on_empty,omitempty"`
+	AcceptDefault  bool     `json:"accept_default,omitempty"`
 	RequiredOutput bool     `json:"required_output,omitempty"`
 	AllowEmpty     bool     `json:"allow_empty,omitempty"`
 	Description    string   `json:"description"`
 }
+
+type InputValueSource string
+
+const (
+	InputValueSourceMissing                    InputValueSource = "missing"
+	InputValueSourceResolved                   InputValueSource = "resolved"
+	InputValueSourceEmptyOutput                InputValueSource = "empty_output"
+	InputValueSourceDefaultFromSkippedUpstream InputValueSource = "default_from_skipped_upstream"
+)
 
 type NodeSchema struct {
 	Type         string         `json:"type,omitempty"`
@@ -448,8 +459,12 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		return fmt.Errorf("workflowRunner.executeWorkflowRun list node runs for workflow run %q: %w", run.ID, err)
 	}
 	outputCache := make(map[string]map[string]TypedValue)
+	nodeStatusCache := make(map[string]string)
 	var outputMu sync.RWMutex
 	for _, existingRun := range existingRuns {
+		if existingRun.NodeID != "" {
+			nodeStatusCache[existingRun.NodeID] = strings.TrimSpace(existingRun.Status)
+		}
 		if existingRun.NodeID == "" || strings.TrimSpace(existingRun.OutputJSON) == "" {
 			continue
 		}
@@ -504,7 +519,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				resultCh <- s.executeWorkflowNode(levelCtx, run, folder, node, resume && node.ID == resumeNodeID, resumeData, &seq, &seqMu, outputCache, &outputMu)
+				resultCh <- s.executeWorkflowNode(levelCtx, run, folder, node, resume && node.ID == resumeNodeID, resumeData, &seq, &seqMu, outputCache, nodeStatusCache, &outputMu)
 			}()
 		}
 
@@ -549,14 +564,15 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	seq *int,
 	seqMu *sync.Mutex,
 	outputCache map[string]map[string]TypedValue,
+	nodeStatusCache map[string]string,
 	outputMu *sync.RWMutex,
 ) nodeExecutionResult {
 	outputMu.RLock()
-	inputs := s.resolveNodeInputs(node, outputCache, run.SourceDir)
+	inputs, inputSources := s.resolveNodeInputs(node, outputCache, nodeStatusCache, run.SourceDir)
 	outputMu.RUnlock()
 
 	schema := s.schemaForNode(node.Type)
-	skipNode, failNode, errCode, errMsg := classifyNodeInputs(node, inputs, schema)
+	skipNode, failNode, errCode, errMsg, skipReason := classifyNodeInputs(node, inputs, inputSources, schema)
 
 	seqMu.Lock()
 	*seq++
@@ -577,12 +593,16 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	}
 
 	if skipNode {
-		if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "skipped", "{}", ""); err != nil {
+		skipMessage := ""
+		if strings.TrimSpace(skipReason) != "" {
+			skipMessage = "skip_reason=" + strings.TrimSpace(skipReason)
+		}
+		if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "skipped", "{}", skipMessage); err != nil {
 			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
 			return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun finish skipped node run %q: %w", node.ID, err)}
 		}
 		outputMu.Lock()
-		outputCache[node.ID] = map[string]TypedValue{}
+		nodeStatusCache[node.ID] = "skipped"
 		outputMu.Unlock()
 		return nodeExecutionResult{}
 	}
@@ -808,6 +828,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 
 	outputMu.Lock()
 	outputCache[node.ID] = cloneTypedValueMap(execOutput.Outputs)
+	nodeStatusCache[node.ID] = "succeeded"
 	outputMu.Unlock()
 
 	if err := s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, execOutput.Outputs); err != nil {
@@ -1116,17 +1137,31 @@ func (s *WorkflowRunnerService) schemaForNode(nodeType string) NodeSchema {
 	return executor.Schema()
 }
 
-func (s *WorkflowRunnerService) resolveNodeInputs(node repository.WorkflowGraphNode, outputCache map[string]map[string]TypedValue, sourceDir string) map[string]*TypedValue {
+func (s *WorkflowRunnerService) resolveNodeInputs(
+	node repository.WorkflowGraphNode,
+	outputCache map[string]map[string]TypedValue,
+	nodeStatusCache map[string]string,
+	sourceDir string,
+) (map[string]*TypedValue, map[string]InputValueSource) {
 	schema := s.schemaForNode(node.Type)
 	inputs := make(map[string]*TypedValue, len(schema.InputDefs()))
+	inputSources := make(map[string]InputValueSource, len(schema.InputDefs()))
+	inputDefMap := make(map[string]PortDef, len(schema.InputDefs()))
 	for _, port := range schema.InputDefs() {
 		inputs[port.Name] = nil
+		inputSources[port.Name] = InputValueSourceMissing
+		inputDefMap[port.Name] = port
 	}
 
 	for portName, spec := range node.Inputs {
 		if spec.ConstValue != nil {
 			portType := inferPortTypeForInput(schema, portName)
 			inputs[portName] = &TypedValue{Type: portType, Value: *spec.ConstValue}
+			if isListPortType(portType) && isEmptyListPortValue((*spec.ConstValue)) {
+				inputSources[portName] = InputValueSourceEmptyOutput
+			} else {
+				inputSources[portName] = InputValueSourceResolved
+			}
 			continue
 		}
 		if spec.LinkSource == nil {
@@ -1134,6 +1169,7 @@ func (s *WorkflowRunnerService) resolveNodeInputs(node repository.WorkflowGraphN
 		}
 
 		sourceOutputs := outputCache[spec.LinkSource.SourceNodeID]
+		upstreamStatus := strings.TrimSpace(nodeStatusCache[spec.LinkSource.SourceNodeID])
 		sourcePort := strings.TrimSpace(spec.LinkSource.SourcePort)
 		if sourcePort == "" {
 			inputs[portName] = nil
@@ -1141,11 +1177,23 @@ func (s *WorkflowRunnerService) resolveNodeInputs(node repository.WorkflowGraphN
 		}
 		value, ok := sourceOutputs[sourcePort]
 		if !ok {
+			if portDef, exists := inputDefMap[portName]; exists && portDef.AcceptDefault && upstreamStatus == "skipped" {
+				if defaultValue, supported := defaultInputValueForPortType(portDef.Type); supported {
+					inputs[portName] = &TypedValue{Type: portDef.Type, Value: defaultValue}
+					inputSources[portName] = InputValueSourceDefaultFromSkippedUpstream
+					continue
+				}
+			}
 			inputs[portName] = nil
 			continue
 		}
 		copied := value
 		inputs[portName] = &copied
+		if portDef, exists := inputDefMap[portName]; exists && isListPortType(portDef.Type) && isEmptyListPortValue(copied.Value) {
+			inputSources[portName] = InputValueSourceEmptyOutput
+		} else {
+			inputSources[portName] = InputValueSourceResolved
+		}
 	}
 
 	if strings.TrimSpace(sourceDir) != "" {
@@ -1156,13 +1204,19 @@ func (s *WorkflowRunnerService) resolveNodeInputs(node repository.WorkflowGraphN
 		}
 		if _, exists := inputs["source_dir"]; exists && inputs["source_dir"] == nil {
 			inputs["source_dir"] = &TypedValue{Type: PortTypePath, Value: sourceDir}
+			inputSources["source_dir"] = InputValueSourceResolved
 		}
 	}
 
-	return inputs
+	return inputs, inputSources
 }
 
-func classifyNodeInputs(node repository.WorkflowGraphNode, inputs map[string]*TypedValue, schema NodeSchema) (skip bool, fail bool, errCode string, errMsg string) {
+func classifyNodeInputs(
+	node repository.WorkflowGraphNode,
+	inputs map[string]*TypedValue,
+	inputSources map[string]InputValueSource,
+	schema NodeSchema,
+) (skip bool, fail bool, errCode string, errMsg string, skipReason string) {
 	for _, port := range schema.InputDefs() {
 		if !port.Required || port.Lazy {
 			continue
@@ -1171,15 +1225,25 @@ func classifyNodeInputs(node repository.WorkflowGraphNode, inputs map[string]*Ty
 		if !exists || (spec.ConstValue == nil && spec.LinkSource == nil) {
 			continue
 		}
+		source := InputValueSourceMissing
+		if candidate, ok := inputSources[port.Name]; ok {
+			source = candidate
+		}
 		value, ok := inputs[port.Name]
 		if !ok || value == nil || value.Value == nil {
-			return false, true, "NODE_INPUT_MISSING", fmt.Sprintf("required input %q is empty", port.Name)
+			return false, true, "NODE_INPUT_MISSING", fmt.Sprintf("required input %q is empty", port.Name), ""
 		}
 		if isListPortType(port.Type) && isEmptyListPortValue(value.Value) {
-			return false, true, "NODE_INPUT_EMPTY", fmt.Sprintf("required input %q cannot be empty list", port.Name)
+			if source == InputValueSourceDefaultFromSkippedUpstream && port.AcceptDefault {
+				return true, false, "", "", "default_from_skipped_upstream"
+			}
+			if port.SkipOnEmpty {
+				return true, false, "", "", "empty_input"
+			}
+			return false, true, "NODE_INPUT_EMPTY", fmt.Sprintf("required input %q cannot be empty list", port.Name), ""
 		}
 		if !isPortValueTypeCompatible(port.Type, value.Value) {
-			return false, true, "NODE_INPUT_TYPE", fmt.Sprintf("input %q type mismatch, expect %s", port.Name, port.Type)
+			return false, true, "NODE_INPUT_TYPE", fmt.Sprintf("input %q type mismatch, expect %s", port.Name, port.Type), ""
 		}
 	}
 	for _, port := range schema.InputDefs() {
@@ -1187,29 +1251,34 @@ func classifyNodeInputs(node repository.WorkflowGraphNode, inputs map[string]*Ty
 			continue
 		}
 		if _, exists := node.Inputs[port.Name]; !exists {
-			return true, false, "", ""
+			return true, false, "", "", "missing_required_binding"
 		}
 	}
-	return false, false, "", ""
+	return false, false, "", "", ""
 }
 
-func shouldSkipNode(node repository.WorkflowGraphNode, inputs map[string]*TypedValue, schema NodeSchema) bool {
-	for _, port := range schema.InputDefs() {
-		if !port.Required || port.Lazy {
-			continue
-		}
-		if _, exists := node.Inputs[port.Name]; !exists {
-			continue
-		}
-		value, ok := inputs[port.Name]
-		if !ok || value == nil || value.Value == nil {
-			return true
-		}
-		if isListPortType(port.Type) && isEmptyListPortValue(value.Value) {
-			return true
-		}
+func shouldSkipNode(node repository.WorkflowGraphNode, inputs map[string]*TypedValue, inputSources map[string]InputValueSource, schema NodeSchema) bool {
+	skip, _, _, _, _ := classifyNodeInputs(node, inputs, inputSources, schema)
+	return skip
+}
+
+func defaultInputValueForPortType(portType PortType) (any, bool) {
+	switch portType {
+	case PortTypeStringList:
+		return []string{}, true
+	case PortTypeFolderTreeList:
+		return []FolderTree{}, true
+	case PortTypeClassificationSignalList:
+		return []ClassificationSignal{}, true
+	case PortTypeClassifiedEntryList:
+		return []ClassifiedEntry{}, true
+	case PortTypeProcessingItemList:
+		return []ProcessingItem{}, true
+	case PortTypeProcessingStepResultList:
+		return []ProcessingStepResult{}, true
+	default:
+		return nil, false
 	}
-	return false
 }
 
 func validateNodeOutputs(outputs map[string]TypedValue, schema NodeSchema) (errCode string, errMsg string) {

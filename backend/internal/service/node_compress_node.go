@@ -35,7 +35,7 @@ func (e *compressNodeExecutor) Schema() NodeSchema {
 		Label:       "压缩节点",
 		Description: "将处理项打包为 cbz/zip 压缩文件",
 		Inputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "待压缩的处理项列表", Required: true},
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待压缩的处理项列表", Required: true, SkipOnEmpty: true, AcceptDefault: true},
 			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{

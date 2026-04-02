@@ -36,7 +36,7 @@ func (e *renameNodeExecutor) Schema() NodeSchema {
 		Label:       "重命名节点",
 		Description: "通过模板、正则或条件规则重命名处理项的目标文件夹名",
 		Inputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "待重命名的处理项列表", Required: true},
+			{Name: "items", Type: PortTypeProcessingItemList, Description: "待重命名的处理项列表", Required: true, SkipOnEmpty: true, AcceptDefault: true},
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已重命名的处理项列表"},
