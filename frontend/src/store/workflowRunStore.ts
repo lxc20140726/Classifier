@@ -1,15 +1,39 @@
 import { create } from 'zustand'
 
-import { getWorkflowRunDetail, listWorkflowRunsByJob, provideWorkflowRunInput, provideWorkflowRunRawInput, resumeWorkflowRun, rollbackWorkflowRun } from '@/api/workflowRuns'
-import type { NodeRun, NodeRunStatus, NodeType, ProvideInputBody, WorkflowNodeEvent, WorkflowRun } from '@/types'
+import {
+  approveWorkflowRunReview,
+  getWorkflowRunDetail,
+  listWorkflowRunReviews,
+  listWorkflowRunsByJob,
+  provideWorkflowRunInput,
+  provideWorkflowRunRawInput,
+  resumeWorkflowRun,
+  rollbackWorkflowRun,
+  rollbackWorkflowRunReview,
+} from '@/api/workflowRuns'
+import type {
+  NodeRun,
+  NodeRunStatus,
+  NodeType,
+  ProcessingReviewItem,
+  ProcessingReviewSummary,
+  ProvideInputBody,
+  WorkflowNodeEvent,
+  WorkflowRun,
+} from '@/types'
 
 interface WorkflowRunStore {
   runsByJobId: Record<string, WorkflowRun[]>
   nodesByRunId: Record<string, NodeRun[]>
+  reviewsByRunId: Record<string, ProcessingReviewItem[]>
+  reviewSummaryByRunId: Record<string, ProcessingReviewSummary>
   fetchingJobIds: Set<string>
   fetchingRunIds: Set<string>
   fetchRunsForJob: (jobId: string) => Promise<void>
   fetchRunDetail: (runId: string) => Promise<void>
+  fetchRunReviews: (runId: string) => Promise<void>
+  approveReview: (runId: string, reviewId: string) => Promise<void>
+  rollbackReview: (runId: string, reviewId: string) => Promise<void>
   resumeRun: (runId: string) => Promise<void>
   rollbackRun: (runId: string) => Promise<void>
   provideInput: (runId: string, category: ProvideInputBody['category']) => Promise<void>
@@ -20,6 +44,8 @@ interface WorkflowRunStore {
 export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
   runsByJobId: {},
   nodesByRunId: {},
+  reviewsByRunId: {},
+  reviewSummaryByRunId: {},
   fetchingJobIds: new Set(),
   fetchingRunIds: new Set(),
 
@@ -56,6 +82,10 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
         return {
           runsByJobId: { ...state.runsByJobId, [jobId]: updatedRuns },
           nodesByRunId: { ...state.nodesByRunId, [runId]: response.node_runs },
+          reviewSummaryByRunId: {
+            ...state.reviewSummaryByRunId,
+            ...(response.review_summary ? { [runId]: response.review_summary } : {}),
+          },
           fetchingRunIds: new Set([...state.fetchingRunIds].filter((id) => id !== runId)),
         }
       })
@@ -65,6 +95,24 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
         fetchingRunIds: new Set([...state.fetchingRunIds].filter((id) => id !== runId)),
       }))
     }
+  },
+
+  async fetchRunReviews(runId) {
+    const response = await listWorkflowRunReviews(runId)
+    set((state) => ({
+      reviewsByRunId: { ...state.reviewsByRunId, [runId]: response.data },
+      reviewSummaryByRunId: { ...state.reviewSummaryByRunId, [runId]: response.summary },
+    }))
+  },
+
+  async approveReview(runId, reviewId) {
+    await approveWorkflowRunReview(runId, reviewId)
+    await Promise.all([get().fetchRunDetail(runId), get().fetchRunReviews(runId)])
+  },
+
+  async rollbackReview(runId, reviewId) {
+    await rollbackWorkflowRunReview(runId, reviewId)
+    await Promise.all([get().fetchRunDetail(runId), get().fetchRunReviews(runId)])
   },
 
   async resumeRun(runId) {

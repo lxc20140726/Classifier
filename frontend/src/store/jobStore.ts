@@ -78,7 +78,7 @@ export const useJobStore = create<JobStore>((set, get) => ({
     }))
 
     const job = get().jobs.find((j) => j.id === jobId)
-    if (job && ['succeeded', 'failed', 'partial', 'cancelled'].includes(job.status)) {
+    if (job && ['succeeded', 'failed', 'partial', 'cancelled', 'rolled_back'].includes(job.status)) {
       get().stopPolling(jobId)
     }
   },
@@ -162,7 +162,7 @@ export const useJobStore = create<JobStore>((set, get) => ({
         const progress = await getJobProgress(jobId)
         get().handleJobProgress(progress)
 
-        if (['succeeded', 'failed', 'partial', 'cancelled'].includes(progress.status)) {
+        if (['succeeded', 'failed', 'partial', 'cancelled', 'rolled_back'].includes(progress.status)) {
           get().stopPolling(jobId)
         } else {
           const timer = window.setTimeout(poll, 2000)
@@ -188,7 +188,7 @@ export const useJobStore = create<JobStore>((set, get) => ({
         const progress = await getJobProgress(jobId)
         get().handleJobProgress(progress)
 
-        if (['succeeded', 'failed', 'partial', 'cancelled'].includes(progress.status)) {
+        if (['succeeded', 'failed', 'partial', 'cancelled', 'rolled_back'].includes(progress.status)) {
           get().stopPolling(jobId)
           // SSE fallback: notify folderStore that the scan job is done.
           // Lazy import avoids a circular dependency at module evaluation time.

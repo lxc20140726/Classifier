@@ -45,7 +45,7 @@ export function parseNodePreviewSummary(nodeRun: NodeRun | null): NodePreviewSum
     if (summaryPort === undefined) return null
     const summaryValue = unwrapPortValue(summaryPort)
     if (!isRecord(summaryValue)) return null
-    return summaryValue as NodePreviewSummary
+    return summaryValue as unknown as NodePreviewSummary
   } catch {
     return null
   }
@@ -77,4 +77,3 @@ export function inferCategoryFromPath(path: string): string {
   if (normalized.includes('/mixed') || normalized.includes('混合')) return 'mixed'
   return 'other'
 }
-

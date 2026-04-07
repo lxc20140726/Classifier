@@ -1,10 +1,18 @@
 import { useEffect, useState } from 'react'
-import { Check, Pencil, Plus, Trash2 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Check, Loader2, Pencil, Play, Plus, Trash2 } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
 
+import { listFolders } from '@/api/folders'
+import { updateWorkflowDef } from '@/api/workflowDefs'
+import { startWorkflowJob } from '@/api/workflowRuns'
+import {
+  applyFolderSelectionToEnabledPickers,
+  checkLaunchableFolderPickers,
+} from '@/lib/workflowGraphFolderPicker'
 import { cn } from '@/lib/utils'
+import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import { useWorkflowDefStore } from '@/store/workflowDefStore'
-import type { WorkflowDefinition } from '@/types'
+import type { Folder, WorkflowRunStatus, WorkflowDefinition } from '@/types'
 
 export type WorkflowDefsPageProps = Record<string, never>
 
@@ -74,7 +82,6 @@ const TEMPLATE_GENERIC_PROCESSING = JSON.stringify({
     { id: 'g-rename-mixed', type: 'rename-node', label: '重命名（混合叶子）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'mixed_leaf' } } }, enabled: true, ui_position: { x: 860, y: 540 } },
     { id: 'g-collect', type: 'collect-node', label: '收集节点', config: {}, inputs: { items_1: { link_source: { source_node_id: 'g-rename-video', source_port: 'items' } }, items_2: { link_source: { source_node_id: 'g-rename-manga', source_port: 'items' } }, items_3: { link_source: { source_node_id: 'g-rename-photo', source_port: 'items' } }, items_4: { link_source: { source_node_id: 'g-rename-other', source_port: 'items' } }, items_5: { link_source: { source_node_id: 'g-rename-mixed', source_port: 'items' } } }, enabled: true, ui_position: { x: 1160, y: 280 } },
     { id: 'g-move', type: 'move-node', label: '移动节点', config: { target_dir: '.processed', move_unit: 'folder', conflict_policy: 'auto_rename' }, inputs: { items: { link_source: { source_node_id: 'g-collect', source_port: 'items' } } }, enabled: true, ui_position: { x: 1420, y: 280 } },
-    { id: 'g-audit', type: 'audit-log', label: '审计日志', config: { action: 'phase4.processing.generic', level: 'info' }, inputs: { items: { link_source: { source_node_id: 'g-move', source_port: 'items' } } }, enabled: true, ui_position: { x: 1660, y: 280 } },
   ],
   edges: [
     { id: 'g-e1', source: 'g-reader', source_port: 'entry', target: 'g-split', target_port: 'entry' },
@@ -90,7 +97,6 @@ const TEMPLATE_GENERIC_PROCESSING = JSON.stringify({
     { id: 'g-e11', source: 'g-rename-other', source_port: 'items', target: 'g-collect', target_port: 'items_4' },
     { id: 'g-e12', source: 'g-rename-mixed', source_port: 'items', target: 'g-collect', target_port: 'items_5' },
     { id: 'g-e13', source: 'g-collect', source_port: 'items', target: 'g-move', target_port: 'items' },
-    { id: 'g-e14', source: 'g-move', source_port: 'items', target: 'g-audit', target_port: 'items' },
   ],
 })
 
@@ -123,7 +129,7 @@ const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: 'generic-processing',
     name: '通用处理流程',
-    description: '分类结果读取 → 拆分 → 按类别重命名 → 合并收集 → 统一移动与审计。适合处理阶段的通用落地流程',
+    description: '分类结果读取 → 拆分 → 按类别重命名 → 合并收集 → 统一移动。适合处理阶段的通用落地流程',
     graphJson: TEMPLATE_GENERIC_PROCESSING,
   },
 ]
@@ -139,20 +145,80 @@ const EMPTY_FORM: FormState = { name: '', graphJson: '{"nodes":[],"edges":[]}' }
 
 type ModalMode = { kind: 'create' } | { kind: 'edit'; def: WorkflowDefinition }
 type CreateStep = 'pick-template' | 'fill-details'
+interface LaunchDialogState {
+  open: boolean
+  def: WorkflowDefinition | null
+}
 
 export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
+  const navigate = useNavigate()
   const { defs, isLoading, error, fetchDefs, createDef, updateDef, deleteDef, setActive } =
     useWorkflowDefStore()
+  const { runsByJobId, reviewSummaryByRunId, fetchRunsForJob, fetchRunReviews } = useWorkflowRunStore()
 
   const [modal, setModal] = useState<ModalMode | null>(null)
   const [createStep, setCreateStep] = useState<CreateStep>('pick-template')
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [formError, setFormError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [launchDialog, setLaunchDialog] = useState<LaunchDialogState>({ open: false, def: null })
+  const [launchFolderRecords, setLaunchFolderRecords] = useState<Folder[]>([])
+  const [launchSearchQuery, setLaunchSearchQuery] = useState('')
+  const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([])
+  const [launchRecordsLoading, setLaunchRecordsLoading] = useState(false)
+  const [launchRecordsError, setLaunchRecordsError] = useState<string | null>(null)
+  const [launchError, setLaunchError] = useState<string | null>(null)
+  const [launchSuccessJobId, setLaunchSuccessJobId] = useState<string | null>(null)
+  const [isLaunching, setIsLaunching] = useState(false)
+  const [launchReloadKey, setLaunchReloadKey] = useState(0)
 
   useEffect(() => {
     void fetchDefs()
   }, [fetchDefs])
+
+  const currentLaunchDef = launchDialog.def
+  let enabledPickerCount = 0
+  let launchCheckError: string | null = null
+  let canDirectLaunch = false
+
+  if (currentLaunchDef) {
+    try {
+      const checkResult = checkLaunchableFolderPickers(currentLaunchDef.graph_json)
+      enabledPickerCount = checkResult.enabledPickerCount
+      canDirectLaunch = enabledPickerCount > 0
+    } catch (err) {
+      launchCheckError = err instanceof Error ? err.message : '工作流图解析失败'
+    }
+  }
+
+  useEffect(() => {
+    if (!launchDialog.open || !currentLaunchDef) return
+
+    let cancelled = false
+    setLaunchRecordsLoading(true)
+    setLaunchRecordsError(null)
+
+    void listFolders({
+      q: launchSearchQuery.trim() || undefined,
+      limit: 100,
+      page: 1,
+      top_level_only: true,
+    }).then((res) => {
+      if (cancelled) return
+      setLaunchFolderRecords(res.data)
+    }).catch((err: unknown) => {
+      if (cancelled) return
+      setLaunchFolderRecords([])
+      setLaunchRecordsError(err instanceof Error ? err.message : '文件夹记录加载失败')
+    }).finally(() => {
+      if (cancelled) return
+      setLaunchRecordsLoading(false)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentLaunchDef, launchDialog.open, launchReloadKey, launchSearchQuery])
 
   function openCreate() {
     setForm(EMPTY_FORM)
@@ -175,6 +241,33 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   function closeModal() {
     setModal(null)
     setFormError(null)
+  }
+
+  function openLaunchDialog(def: WorkflowDefinition) {
+    setLaunchDialog({ open: true, def })
+    setLaunchSearchQuery('')
+    setLaunchError(null)
+    setLaunchSuccessJobId(null)
+    setLaunchReloadKey((prev) => prev + 1)
+
+    try {
+      const checkResult = checkLaunchableFolderPickers(def.graph_json)
+      setSelectedFolderIds(checkResult.initialSelectedFolderIds)
+    } catch {
+      setSelectedFolderIds([])
+    }
+  }
+
+  function closeLaunchDialog() {
+    setLaunchDialog({ open: false, def: null })
+    setLaunchFolderRecords([])
+    setLaunchSearchQuery('')
+    setSelectedFolderIds([])
+    setLaunchRecordsLoading(false)
+    setLaunchRecordsError(null)
+    setLaunchError(null)
+    setLaunchSuccessJobId(null)
+    setIsLaunching(false)
   }
 
   async function handleSave() {
@@ -214,10 +307,75 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
     await setActive(def.id)
   }
 
+  function toggleSelectedFolder(folderId: string) {
+    setLaunchError(null)
+    setLaunchSuccessJobId(null)
+    if (selectedFolderIds.includes(folderId)) {
+      setSelectedFolderIds((prev) => prev.filter((id) => id !== folderId))
+      return
+    }
+    setSelectedFolderIds((prev) => [...prev, folderId])
+  }
+
+  async function handleLaunchWorkflow() {
+    if (!currentLaunchDef) return
+    if (!canDirectLaunch) {
+      setLaunchError('该工作流缺少文件夹选择器节点，无法直接启动')
+      return
+    }
+    if (selectedFolderIds.length === 0) {
+      setLaunchError('请至少选择一条文件夹记录')
+      return
+    }
+
+    setIsLaunching(true)
+    setLaunchError(null)
+    setLaunchSuccessJobId(null)
+    try {
+      const nextGraphJson = applyFolderSelectionToEnabledPickers(
+        currentLaunchDef.graph_json,
+        selectedFolderIds,
+      )
+      await updateWorkflowDef(currentLaunchDef.id, { graph_json: nextGraphJson })
+      await fetchDefs()
+      const res = await startWorkflowJob({ workflow_def_id: currentLaunchDef.id })
+      setLaunchSuccessJobId(res.job_id)
+      void fetchRunsForJob(res.job_id)
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : '启动失败')
+    } finally {
+      setIsLaunching(false)
+    }
+  }
+
+  const launchedRuns = launchSuccessJobId ? (runsByJobId[launchSuccessJobId] ?? []) : []
+  const launchedRun = launchedRuns[0] ?? null
+  const launchedReviewSummary = launchedRun ? reviewSummaryByRunId[launchedRun.id] : undefined
+
+  useEffect(() => {
+    if (!launchSuccessJobId) return
+    void fetchRunsForJob(launchSuccessJobId)
+  }, [launchSuccessJobId, fetchRunsForJob])
+
+  useEffect(() => {
+    if (!launchedRun || launchedRun.status !== 'waiting_input') return
+    void fetchRunReviews(launchedRun.id)
+  }, [launchedRun, fetchRunReviews])
+
+  const RUN_STATUS_LABELS: Record<WorkflowRunStatus, string> = {
+    pending: '等待中',
+    running: '进行中',
+    succeeded: '已完成',
+    failed: '失败',
+    partial: '部分完成',
+    waiting_input: '待确认',
+    rolled_back: '已回退',
+  }
+
   return (
     <section className="mx-auto max-w-5xl px-6 py-8">
       <div className="mb-8 flex items-end justify-between border-b-2 border-foreground pb-4">
-        <h1 className="text-3xl font-black tracking-tight uppercase">工作流定义</h1>
+        <h1 className="text-3xl font-black tracking-tight uppercase">工作流管理</h1>
         <button
           type="button"
           onClick={openCreate}
@@ -284,6 +442,14 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
+                        onClick={() => openLaunchDialog(def)}
+                        className="flex items-center gap-1.5 border-2 border-foreground bg-green-300 px-3 py-1.5 text-xs font-bold text-green-900 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
+                      >
+                        <Play className="h-3 w-3" />
+                        启动
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => openEdit(def)}
                         className="flex items-center gap-1.5 border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
                       >
@@ -310,6 +476,168 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {launchDialog.open && currentLaunchDef && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl border-2 border-foreground bg-background p-6 shadow-hard-lg">
+            <h2 className="mb-2 text-xl font-black tracking-tight">启动工作流</h2>
+            <p className="mb-4 text-sm font-bold text-muted-foreground">
+              当前工作流：{currentLaunchDef.name}
+            </p>
+
+            <div className="mb-4 border-2 border-foreground bg-muted/20 p-3">
+              <p className="text-xs font-black tracking-wider">节点检测结果</p>
+              {launchCheckError ? (
+                <p className="mt-2 text-xs font-bold text-red-700">{launchCheckError}</p>
+              ) : canDirectLaunch ? (
+                <p className="mt-2 text-xs font-bold text-green-700">
+                  检测到 {enabledPickerCount} 个启用中的 folder-picker 节点，将统一写入所选记录。
+                </p>
+              ) : (
+                <p className="mt-2 text-xs font-bold text-amber-700">
+                  该工作流缺少文件夹选择器节点，无法直接启动。
+                </p>
+              )}
+            </div>
+
+            {canDirectLaunch && !launchCheckError && (
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-2 block text-sm font-black tracking-widest">搜索文件夹记录</label>
+                  <input
+                    type="text"
+                    value={launchSearchQuery}
+                    onChange={(e) => {
+                      setLaunchSearchQuery(e.target.value)
+                      setLaunchError(null)
+                    }}
+                    placeholder="输入名称或路径关键词"
+                    className="w-full border-2 border-foreground bg-background px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-2 focus:ring-offset-background"
+                  />
+                </div>
+
+                <div className="max-h-72 space-y-1 overflow-auto border-2 border-foreground bg-muted/20 p-2">
+                  {launchRecordsLoading ? (
+                    <p className="py-8 text-center text-xs font-bold text-muted-foreground">记录加载中...</p>
+                  ) : launchRecordsError ? (
+                    <div className="py-4 text-center">
+                      <p className="text-xs font-bold text-red-700">{launchRecordsError}</p>
+                      <button
+                        type="button"
+                        onClick={() => setLaunchReloadKey((prev) => prev + 1)}
+                        className="mt-3 border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background"
+                      >
+                        重试
+                      </button>
+                    </div>
+                  ) : launchFolderRecords.length === 0 ? (
+                    <p className="py-8 text-center text-xs font-bold text-muted-foreground">暂无可选记录</p>
+                  ) : (
+                    launchFolderRecords.map((folder) => (
+                      <label
+                        key={folder.id}
+                        className="flex cursor-pointer items-start gap-2 border-2 border-foreground bg-background px-2 py-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedFolderIds.includes(folder.id)}
+                          onChange={() => toggleSelectedFolder(folder.id)}
+                          className="mt-0.5 h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
+                        />
+                        <span className="min-w-0">
+                          <span className="block truncate text-xs font-black">{folder.name}</span>
+                          <span className="block truncate font-mono text-[10px] text-muted-foreground">{folder.path}</span>
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </div>
+
+                <p className="text-xs font-bold text-muted-foreground">
+                  已选记录：{selectedFolderIds.length} 条
+                </p>
+              </div>
+            )}
+
+            {launchError && (
+              <p className="mt-4 border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
+                {launchError}
+              </p>
+            )}
+
+            {launchSuccessJobId && (
+              <div className="mt-4 space-y-3">
+                <div className="border-2 border-green-900 bg-green-100 px-4 py-3 text-sm font-bold text-green-900 shadow-hard">
+                  启动成功，作业 ID：{launchSuccessJobId}
+                </div>
+                <div className="border-2 border-foreground bg-background p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h3 className="text-sm font-black tracking-wide">当前运行卡片</h3>
+                    <span className="border-2 border-foreground bg-muted px-2 py-0.5 text-xs font-black">
+                      {launchedRun ? RUN_STATUS_LABELS[launchedRun.status] : '初始化中'}
+                    </span>
+                  </div>
+                  {!launchedRun ? (
+                    <p className="text-xs font-bold text-muted-foreground">正在获取运行状态...</p>
+                  ) : launchedRun.status === 'waiting_input' ? (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold text-purple-800">
+                        确认进度：{(launchedReviewSummary?.approved ?? 0) + (launchedReviewSummary?.rolled_back ?? 0)} / {launchedReviewSummary?.total ?? 0}
+                      </p>
+                      <p className="text-[11px] font-bold text-muted-foreground">
+                        待确认 {launchedReviewSummary?.pending ?? 0}，已通过 {launchedReviewSummary?.approved ?? 0}，已回退 {launchedReviewSummary?.rolled_back ?? 0}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs font-bold text-muted-foreground">
+                      运行状态：{RUN_STATUS_LABELS[launchedRun.status]}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => navigate('/jobs')}
+                    className="mt-3 border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background"
+                  >
+                    查看完整明细
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-8 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={closeLaunchDialog}
+                disabled={isLaunching}
+                className="border-2 border-foreground bg-background px-6 py-2.5 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
+              >
+                关闭
+              </button>
+
+              <div className="flex items-center gap-3">
+                {launchSuccessJobId && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/jobs')}
+                    className="border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
+                  >
+                    前往作业页
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleLaunchWorkflow()}
+                  disabled={!canDirectLaunch || !!launchCheckError || selectedFolderIds.length === 0 || isLaunching}
+                  className="inline-flex items-center gap-2 border-2 border-foreground bg-green-300 px-6 py-2.5 text-sm font-bold text-green-900 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-green-300 disabled:hover:text-green-900 disabled:hover:shadow-none disabled:hover:translate-y-0"
+                >
+                  {isLaunching && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {isLaunching ? '启动中…' : '确认启动'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

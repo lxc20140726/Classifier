@@ -1,5 +1,12 @@
 import { request } from '@/api/client'
-import type { PaginatedResponse, ProvideInputBody, WorkflowRun, WorkflowRunDetail } from '@/types'
+import type {
+  PaginatedResponse,
+  ProcessingReviewItem,
+  ProcessingReviewSummary,
+  ProvideInputBody,
+  WorkflowRun,
+  WorkflowRunDetail,
+} from '@/types'
 
 export interface WorkflowRunQueryParams {
   page?: number
@@ -51,5 +58,21 @@ export function provideWorkflowRunRawInput(id: string, body: Record<string, unkn
   return request<undefined>(`/workflow-runs/${id}/provide-input`, {
     method: 'POST',
     body: JSON.stringify(body),
+  })
+}
+
+export function listWorkflowRunReviews(id: string) {
+  return request<{ data: ProcessingReviewItem[]; summary: ProcessingReviewSummary }>(`/workflow-runs/${id}/reviews`)
+}
+
+export function approveWorkflowRunReview(id: string, reviewId: string) {
+  return request<{ approved: boolean }>(`/workflow-runs/${id}/reviews/${reviewId}/approve`, {
+    method: 'POST',
+  })
+}
+
+export function rollbackWorkflowRunReview(id: string, reviewId: string) {
+  return request<{ rolled_back: boolean }>(`/workflow-runs/${id}/reviews/${reviewId}/rollback`, {
+    method: 'POST',
   })
 }

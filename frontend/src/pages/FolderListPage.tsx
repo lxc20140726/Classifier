@@ -286,6 +286,9 @@ function FolderCard({
         <span className={cn('px-2 py-0.5 text-xs font-bold', STATUS_COLOR[folder.status])}>
           {STATUS_LABEL[folder.status]}
         </span>
+        {folder.has_other_files === true && (
+          <span className="border-2 border-amber-900 bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-900">含其他文件</span>
+        )}
         {folder.category_source === 'manual' && (
           <span className="border-2 border-indigo-900 bg-indigo-200 px-2 py-0.5 text-xs font-bold text-indigo-900">手动</span>
         )}
@@ -427,6 +430,9 @@ function FolderRow({
           <span className={cn('px-2 py-0.5 text-xs font-bold', STATUS_COLOR[folder.status])}>
             {STATUS_LABEL[folder.status]}
           </span>
+          {folder.has_other_files === true && (
+            <span className="border-2 border-amber-900 bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-900">含其他文件</span>
+          )}
         </div>
       </td>
       <td className="hidden px-4 py-4 text-xs font-bold text-muted-foreground sm:table-cell">

@@ -27,6 +27,7 @@ import type {
   JobStatus,
   NodeRun,
   NodeRunStatus,
+  ProcessingReviewItem,
   ScheduledWorkflow,
   WorkflowDefinition,
   WorkflowRun,
@@ -58,6 +59,8 @@ const JOB_STATUS_LABELS: Record<JobStatus, string> = {
   failed: '失败',
   partial: '部分完成',
   cancelled: '已取消',
+  waiting_input: '待确认',
+  rolled_back: '已回退',
 }
 
 const JOB_STATUS_STYLES: Record<JobStatus, string> = {
@@ -67,6 +70,8 @@ const JOB_STATUS_STYLES: Record<JobStatus, string> = {
   failed: 'bg-red-300 text-red-900 border-2 border-foreground',
   partial: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
   cancelled: 'bg-gray-300 text-gray-900 border-2 border-foreground',
+  waiting_input: 'bg-purple-300 text-purple-900 border-2 border-foreground',
+  rolled_back: 'bg-orange-300 text-orange-900 border-2 border-foreground',
 }
 
 const WF_STATUS_LABELS: Record<WorkflowRunStatus, string> = {
@@ -105,14 +110,6 @@ const NODE_STATUS_STYLES: Record<NodeRunStatus, string> = {
   failed: 'bg-red-300 text-red-900 border-2 border-foreground',
   skipped: 'bg-gray-300 text-gray-900 border-2 border-foreground',
   waiting_input: 'bg-purple-300 text-purple-900 border-2 border-foreground',
-}
-
-const CATEGORY_LABELS: Record<string, string> = {
-  photo: '照片',
-  video: '视频',
-  manga: '漫画',
-  mixed: '混合',
-  other: '其他',
 }
 
 function NodeResultPreview({ node }: { node: NodeRun }) {
@@ -297,16 +294,27 @@ function NodeRunsPanel({ runId }: { runId: string }) {
 
 function WorkflowRunRow({ run }: { run: WorkflowRun }) {
   const [expanded, setExpanded] = useState(false)
-  const [selectedCategory, setSelectedCategory] = useState<string>('photo')
   const [isActing, setIsActing] = useState(false)
-  const { rollbackRun, provideInput, fetchRunDetail, fetchRunsForJob } = useWorkflowRunStore()
+  const {
+    rollbackRun,
+    fetchRunDetail,
+    fetchRunsForJob,
+    fetchRunReviews,
+    approveReview,
+    rollbackReview,
+    reviewsByRunId,
+    reviewSummaryByRunId,
+  } = useWorkflowRunStore()
   const pushNotification = useNotificationStore((s) => s.pushNotification)
+  const reviews = reviewsByRunId[run.id] ?? []
+  const reviewSummary = reviewSummaryByRunId[run.id]
 
   useEffect(() => {
     if (run.status === 'waiting_input') {
       void fetchRunDetail(run.id)
+      void fetchRunReviews(run.id)
     }
-  }, [run.id, run.status, fetchRunDetail])
+  }, [run.id, run.status, fetchRunDetail, fetchRunReviews])
 
   async function handleRollback() {
     setIsActing(true)
@@ -332,10 +340,21 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
     }
   }
 
-  async function handleProvideInput() {
+  async function handleApproveReview(reviewId: string) {
     setIsActing(true)
     try {
-      await provideInput(run.id, selectedCategory as 'photo' | 'video' | 'manga' | 'mixed' | 'other')
+      await approveReview(run.id, reviewId)
+      await fetchRunsForJob(run.job_id)
+    } finally {
+      setIsActing(false)
+    }
+  }
+
+  async function handleRollbackReview(reviewId: string) {
+    setIsActing(true)
+    try {
+      await rollbackReview(run.id, reviewId)
+      await fetchRunsForJob(run.job_id)
     } finally {
       setIsActing(false)
     }
@@ -371,25 +390,7 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
               </button>
             )}
             {run.status === 'waiting_input' && (
-              <div className="flex items-center gap-2">
-                <select
-                  value={selectedCategory}
-                  onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="border-2 border-foreground bg-background px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
-                >
-                  {Object.entries(CATEGORY_LABELS).map(([val, label]) => (
-                    <option key={val} value={val}>{label}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  disabled={isActing}
-                  onClick={() => void handleProvideInput()}
-                  className="border-2 border-purple-900 bg-purple-200 px-3 py-1 text-xs font-bold text-purple-900 transition-all hover:bg-purple-900 hover:text-purple-100 hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50"
-                >
-                  确认
-                </button>
-              </div>
+              <span className="text-xs font-bold text-purple-900">请展开后逐目录确认</span>
             )}
           </div>
         </td>
@@ -397,6 +398,57 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
       {expanded && (
         <tr className="border-b-2 border-foreground bg-muted/10">
           <td colSpan={5} className="px-6 py-4 space-y-4">
+            {run.status === 'waiting_input' && (
+              <div className="space-y-3 border-2 border-purple-900 bg-purple-50 p-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-black text-purple-900">目录确认面板</h4>
+                  {reviewSummary && (
+                    <p className="text-xs font-bold text-purple-900">
+                      待确认 {reviewSummary.pending} / 总数 {reviewSummary.total}（通过 {reviewSummary.approved}，回退 {reviewSummary.rolled_back}）
+                    </p>
+                  )}
+                </div>
+                {reviews.length === 0 ? (
+                  <p className="text-xs font-bold text-muted-foreground">暂无确认项</p>
+                ) : (
+                  <div className="space-y-2">
+                    {reviews.map((review: ProcessingReviewItem) => (
+                      <div key={review.id} className="flex items-center justify-between border-2 border-foreground bg-background px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-black">{review.after?.name ?? review.before?.name ?? review.folder_id}</p>
+                          <p className="truncate font-mono text-[10px] text-muted-foreground">
+                            {review.before?.path ?? '—'} → {review.after?.path ?? '—'}
+                          </p>
+                        </div>
+                        <div className="ml-3 flex items-center gap-2">
+                          <StatusBadge status={review.status} labels={{ pending: '待确认', approved: '已通过', rolled_back: '已回退' }} styles={{ pending: 'bg-purple-300 text-purple-900 border-2 border-foreground', approved: 'bg-green-300 text-green-900 border-2 border-foreground', rolled_back: 'bg-orange-300 text-orange-900 border-2 border-foreground' }} />
+                          {review.status === 'pending' && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={isActing}
+                                onClick={() => void handleApproveReview(review.id)}
+                                className="border-2 border-green-900 bg-green-200 px-2 py-1 text-xs font-bold text-green-900 transition-all hover:bg-green-900 hover:text-green-100 disabled:opacity-50"
+                              >
+                                确认通过
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isActing}
+                                onClick={() => void handleRollbackReview(review.id)}
+                                className="border-2 border-red-900 bg-red-200 px-2 py-1 text-xs font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 disabled:opacity-50"
+                              >
+                                不通过并回退
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <NodeRunsPanel runId={run.id} />
           </td>
         </tr>

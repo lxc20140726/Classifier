@@ -108,6 +108,17 @@ export function useSSE() {
         useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'failed' })
       })
 
+      const refreshRunReviews = (event: MessageEvent<string>) => {
+        const payload = JSON.parse(event.data) as { workflow_run_id: string }
+        if (!payload.workflow_run_id) return
+        void useWorkflowRunStore.getState().fetchRunDetail(payload.workflow_run_id)
+        void useWorkflowRunStore.getState().fetchRunReviews(payload.workflow_run_id)
+        void useJobStore.getState().fetchJobs()
+      }
+
+      eventSource.addEventListener('workflow_run.review_pending', refreshRunReviews)
+      eventSource.addEventListener('workflow_run.review_updated', refreshRunReviews)
+
       eventSource.onerror = () => {
         eventSource?.close()
         reconnectTimer = window.setTimeout(connect, 3000)

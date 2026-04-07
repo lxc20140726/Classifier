@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ChevronRight, RotateCcw, X } from 'lucide-react'
 
 import { revertSnapshot, type RevertResult } from '@/api/snapshots'
+import { listAuditLogs } from '@/api/auditLogs'
 import { ApiRequestError } from '@/api/client'
 import { cn } from '@/lib/utils'
 import { useSnapshotStore } from '@/store/snapshotStore'
-import type { Snapshot } from '@/types'
+import type { AuditLog, Snapshot } from '@/types'
 
 export interface SnapshotDrawerProps {
   open: boolean
@@ -26,6 +27,26 @@ const OP_LABELS: Record<string, string> = {
   rename: '重命名记录',
 }
 
+const AUDIT_RESULT_LABELS: Record<string, string> = {
+  success: '成功',
+  succeeded: '成功',
+  moved: '已移动',
+  renamed: '已重命名',
+  skipped: '已跳过',
+  partial: '部分完成',
+  failed: '失败',
+}
+
+const AUDIT_RESULT_CLASSES: Record<string, string> = {
+  success: 'bg-green-300 text-black border-2 border-black',
+  succeeded: 'bg-green-300 text-black border-2 border-black',
+  moved: 'bg-primary text-primary-foreground border-2 border-black',
+  renamed: 'bg-primary text-primary-foreground border-2 border-black',
+  skipped: 'bg-muted text-muted-foreground border-2 border-black',
+  partial: 'bg-yellow-300 text-black border-2 border-black',
+  failed: 'bg-red-300 text-red-950 border-2 border-black',
+}
+
 const STATUS_LABELS: Record<Snapshot['status'], string> = {
   pending: '待完成',
   committed: '已提交',
@@ -41,6 +62,41 @@ const STATUS_CLASSES: Record<Snapshot['status'], string> = {
 function formatDate(value: string): string {
   if (!value) return '未知时间'
   return new Date(value).toLocaleString('zh-CN')
+}
+
+function parseTime(value: string): number {
+  const ts = Date.parse(value)
+  return Number.isNaN(ts) ? 0 : ts
+}
+
+function isProcessingAudit(log: AuditLog): boolean {
+  const action = log.action.trim().toLowerCase()
+  if (action.startsWith('phase4.processing.')) return true
+  if (!action.startsWith('workflow.')) return false
+
+  return (
+    action.startsWith('workflow.move-node') ||
+    action.startsWith('workflow.rename-node') ||
+    action.startsWith('workflow.compress-node') ||
+    action.startsWith('workflow.thumbnail-node') ||
+    action.startsWith('workflow.audit-log')
+  )
+}
+
+function resolveAuditActionLabel(action: string): string {
+  const normalized = action.trim().toLowerCase()
+  if (normalized.startsWith('workflow.move-node.rollback')) return '回滚记录（移动）'
+  if (normalized.startsWith('workflow.rename-node.rollback')) return '回滚记录（重命名）'
+  if (normalized.startsWith('workflow.compress-node.rollback')) return '回滚记录（压缩）'
+  if (normalized.startsWith('workflow.thumbnail-node.rollback')) return '回滚记录（缩略图）'
+  if (normalized.startsWith('workflow.move-node')) return '处理记录（移动）'
+  if (normalized.startsWith('workflow.rename-node')) return '处理记录（重命名）'
+  if (normalized.startsWith('workflow.compress-node')) return '处理记录（压缩）'
+  if (normalized.startsWith('workflow.thumbnail-node')) return '处理记录（缩略图）'
+  if (normalized.startsWith('workflow.audit-log')) return '处理记录（审计）'
+  if (normalized.startsWith('phase4.processing.')) return '处理记录'
+
+  return '处理记录'
 }
 
 function renderDetail(detail: Record<string, unknown> | null): Array<[string, string]> {
@@ -136,6 +192,9 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
   const storeError = useSnapshotStore((store) => store.error)
   const fetchSnapshots = useSnapshotStore((store) => store.fetchSnapshots)
   const handleRevertDone = useSnapshotStore((store) => store.handleRevertDone)
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
+  const [isAuditLoading, setIsAuditLoading] = useState(false)
+  const [auditError, setAuditError] = useState<string | null>(null)
   const [state, setState] = useState<DrawerState>({
     revertingId: null,
     lastAttemptedId: null,
@@ -149,6 +208,9 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
     prevKeyRef.current = openKey
     if (openKey !== null) {
       setState({ revertingId: null, lastAttemptedId: null, localError: null, failureDetail: null })
+      setAuditLogs([])
+      setIsAuditLoading(false)
+      setAuditError(null)
     }
   }
 
@@ -157,6 +219,34 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
       void fetchSnapshots(folderId)
     }
   }, [fetchSnapshots, folderId, open])
+
+  useEffect(() => {
+    if (!open || !folderId) return
+
+    let cancelled = false
+    setIsAuditLoading(true)
+    setAuditError(null)
+
+    void (async () => {
+      try {
+        const response = await listAuditLogs({ folderId, page: 1, limit: 200 })
+        if (cancelled) return
+        setAuditLogs((response.data ?? []).filter(isProcessingAudit))
+      } catch (error) {
+        if (cancelled) return
+        setAuditLogs([])
+        setAuditError(error instanceof Error ? error.message : '处理记录加载失败')
+      } finally {
+        if (!cancelled) {
+          setIsAuditLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [folderId, open])
 
   async function handleRevert(snapshotId: string) {
     if (!folderId) return
@@ -189,7 +279,22 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
   }
 
   const error = state.localError ?? storeError
-  const orderedSnapshots = useMemo(() => [...snapshots].reverse(), [snapshots])
+  const timelineItems = useMemo(() => {
+    const snapshotItems = snapshots.map((snapshot) => ({
+      id: `snapshot-${snapshot.id}`,
+      createdAt: snapshot.created_at,
+      kind: 'snapshot' as const,
+      snapshot,
+    }))
+    const auditItems = auditLogs.map((audit) => ({
+      id: `audit-${audit.id}`,
+      createdAt: audit.created_at,
+      kind: 'audit' as const,
+      audit,
+    }))
+
+    return [...snapshotItems, ...auditItems].sort((a, b) => parseTime(b.createdAt) - parseTime(a.createdAt))
+  }, [auditLogs, snapshots])
 
   return (
     <>
@@ -235,24 +340,116 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
               {error}
             </div>
           )}
+          {auditError && (
+            <div className="mb-6 border-2 border-foreground bg-yellow-100 px-4 py-3 text-sm font-bold text-yellow-900 shadow-hard">
+              处理记录加载失败：{auditError}
+            </div>
+          )}
 
-          {isLoading && <p className="text-sm font-bold text-muted-foreground">正在加载快照记录...</p>}
+          {(isLoading || isAuditLoading) && (
+            <p className="text-sm font-bold text-muted-foreground">正在加载时间线记录...</p>
+          )}
 
-          {!isLoading && !error && orderedSnapshots.length === 0 && (
+          {!isLoading && !isAuditLoading && !error && timelineItems.length === 0 && (
             <div className="border-2 border-dashed border-foreground px-4 py-12 text-center text-sm font-bold text-muted-foreground">
               这个文件夹还没有快照记录。
             </div>
           )}
 
-          {orderedSnapshots.length > 0 && (
+          {timelineItems.length > 0 && (
             <ol className="relative space-y-8 pl-8 before:absolute before:left-[15px] before:top-2 before:h-[calc(100%-0.5rem)] before:w-0.5 before:bg-foreground">
-              {orderedSnapshots.map((snapshot) => {
-                const detailItems = renderDetail(snapshot.detail)
-                const operationLabel = OP_LABELS[snapshot.operation_type] ?? snapshot.operation_type
-                const isReverting = state.revertingId === snapshot.id
+              {timelineItems.map((item) => {
+                if (item.kind === 'snapshot') {
+                  const snapshot = item.snapshot
+                  const detailItems = renderDetail(snapshot.detail)
+                  const operationLabel = OP_LABELS[snapshot.operation_type] ?? snapshot.operation_type
+                  const isReverting = state.revertingId === snapshot.id
+
+                  return (
+                    <li key={item.id} className="relative">
+                      <span className="absolute left-[-32px] top-1.5 h-4 w-4 rounded-full border-2 border-foreground bg-primary" />
+                      <div className="border-2 border-foreground bg-card p-5 shadow-hard transition-all hover:-translate-y-1 hover:shadow-hard-hover">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <span className="text-base font-black tracking-tight">{operationLabel}</span>
+                              <span
+                                className={cn(
+                                  'px-2 py-0.5 text-xs font-bold',
+                                  STATUS_CLASSES[snapshot.status],
+                                )}
+                              >
+                                {STATUS_LABELS[snapshot.status]}
+                              </span>
+                            </div>
+                            <p className="text-xs font-mono font-bold text-muted-foreground">{formatDate(snapshot.created_at)}</p>
+                            <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-muted-foreground">
+                              <span>前状态 {snapshot.before.length} 条</span>
+                              {snapshot.after != null && <span>后状态 {snapshot.after.length} 条</span>}
+                            </div>
+                          </div>
+
+                          {snapshot.status === 'committed' && (
+                            <button
+                              type="button"
+                              disabled={state.revertingId !== null}
+                              onClick={() => void handleRevert(snapshot.id)}
+                              className="inline-flex items-center gap-1.5 border-2 border-foreground bg-background px-3 py-2 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                              {isReverting ? '回退中...' : '回退到此节点'}
+                            </button>
+                          )}
+                        </div>
+
+                        {state.failureDetail && state.revertingId === null && snapshot.id === state.lastAttemptedId && (
+                          <RevertFailurePanel detail={state.failureDetail} />
+                        )}
+
+                        {detailItems.length > 0 && (
+                          <dl className="mt-5 grid gap-3 border-2 border-foreground bg-muted/30 p-4 text-xs sm:grid-cols-2">
+                            {detailItems.map(([label, value]) => (
+                              <div key={`${snapshot.id}-${label}`}>
+                                <dt className="font-bold text-muted-foreground">{label}</dt>
+                                <dd className="mt-1 break-all font-mono font-medium text-foreground">{value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        )}
+
+                        {snapshot.after != null && snapshot.after.length > 0 && (
+                          <div className="mt-5 space-y-3 text-xs">
+                            <p className="font-black text-foreground">路径变化</p>
+                            {snapshot.after.slice(0, 3).map((record, index) => (
+                              <div key={`${snapshot.id}-${record.current_path}-${index}`} className="border-2 border-foreground bg-background px-3 py-3 font-mono">
+                                <div className="break-all text-muted-foreground">{record.original_path}</div>
+                                <div className="my-2 flex items-center gap-1 font-bold text-primary">
+                                  <ChevronRight className="h-4 w-4" />
+                                  <span>变更后</span>
+                                </div>
+                                <div className="break-all font-bold text-foreground">{record.current_path}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  )
+                }
+
+                const audit = item.audit
+                const result = audit.result.trim().toLowerCase()
+                const resultLabel = AUDIT_RESULT_LABELS[result] ?? (audit.result.trim() || '已记录')
+                const resultClass = AUDIT_RESULT_CLASSES[result] ?? 'bg-muted text-muted-foreground border-2 border-black'
+                const operationLabel = resolveAuditActionLabel(audit.action)
+                const detail = audit.detail != null ? { ...audit.detail } : {}
+                if (audit.folder_path !== '') {
+                  detail.folder_path = audit.folder_path
+                }
+                const detailItems = renderDetail(detail)
 
                 return (
-                  <li key={snapshot.id} className="relative">
+                  <li key={item.id} className="relative">
                     <span className="absolute left-[-32px] top-1.5 h-4 w-4 rounded-full border-2 border-foreground bg-primary" />
                     <div className="border-2 border-foreground bg-card p-5 shadow-hard transition-all hover:-translate-y-1 hover:shadow-hard-hover">
                       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -262,40 +459,20 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                             <span
                               className={cn(
                                 'px-2 py-0.5 text-xs font-bold',
-                                STATUS_CLASSES[snapshot.status],
+                                resultClass,
                               )}
                             >
-                              {STATUS_LABELS[snapshot.status]}
+                              {resultLabel}
                             </span>
                           </div>
-                          <p className="text-xs font-mono font-bold text-muted-foreground">{formatDate(snapshot.created_at)}</p>
-                          <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-muted-foreground">
-                            <span>前状态 {snapshot.before.length} 条</span>
-                            {snapshot.after != null && <span>后状态 {snapshot.after.length} 条</span>}
-                          </div>
+                          <p className="text-xs font-mono font-bold text-muted-foreground">{formatDate(audit.created_at)}</p>
                         </div>
-
-                        {snapshot.status === 'committed' && (
-                          <button
-                            type="button"
-                            disabled={state.revertingId !== null}
-                            onClick={() => void handleRevert(snapshot.id)}
-                            className="inline-flex items-center gap-1.5 border-2 border-foreground bg-background px-3 py-2 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
-                          >
-                            <RotateCcw className="h-4 w-4" />
-                            {isReverting ? '回退中...' : '回退到此节点'}
-                          </button>
-                        )}
                       </div>
-
-                      {state.failureDetail && state.revertingId === null && snapshot.id === state.lastAttemptedId && (
-                        <RevertFailurePanel detail={state.failureDetail} />
-                      )}
 
                       {detailItems.length > 0 && (
                         <dl className="mt-5 grid gap-3 border-2 border-foreground bg-muted/30 p-4 text-xs sm:grid-cols-2">
                           {detailItems.map(([label, value]) => (
-                            <div key={`${snapshot.id}-${label}`}>
+                            <div key={`${audit.id}-${label}`}>
                               <dt className="font-bold text-muted-foreground">{label}</dt>
                               <dd className="mt-1 break-all font-mono font-medium text-foreground">{value}</dd>
                             </div>
@@ -303,19 +480,9 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                         </dl>
                       )}
 
-                      {snapshot.after != null && snapshot.after.length > 0 && (
-                        <div className="mt-5 space-y-3 text-xs">
-                          <p className="font-black text-foreground">路径变化</p>
-                          {snapshot.after.slice(0, 3).map((record, index) => (
-                            <div key={`${snapshot.id}-${record.current_path}-${index}`} className="border-2 border-foreground bg-background px-3 py-3 font-mono">
-                              <div className="break-all text-muted-foreground">{record.original_path}</div>
-                              <div className="my-2 flex items-center gap-1 font-bold text-primary">
-                                <ChevronRight className="h-4 w-4" />
-                                <span>变更后</span>
-                              </div>
-                              <div className="break-all font-bold text-foreground">{record.current_path}</div>
-                            </div>
-                          ))}
+                      {audit.error_msg !== '' && (
+                        <div className="mt-5 border-2 border-foreground bg-red-100 px-3 py-2 text-xs font-bold text-red-900">
+                          {audit.error_msg}
                         </div>
                       )}
                     </div>

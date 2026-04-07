@@ -32,6 +32,10 @@ interface RawFolder {
   ImageCount?: number
   video_count?: number
   VideoCount?: number
+  other_file_count?: number
+  OtherFileCount?: number
+  has_other_files?: boolean
+  HasOtherFiles?: boolean
   total_files?: number
   TotalFiles?: number
   total_size?: number
@@ -60,6 +64,8 @@ function parseFolder(raw: RawFolder): Folder {
     status: raw.status ?? raw.Status ?? 'pending',
     image_count: raw.image_count ?? raw.ImageCount ?? 0,
     video_count: raw.video_count ?? raw.VideoCount ?? 0,
+    other_file_count: raw.other_file_count ?? raw.OtherFileCount ?? 0,
+    has_other_files: raw.has_other_files ?? raw.HasOtherFiles ?? false,
     total_files: raw.total_files ?? raw.TotalFiles ?? 0,
     total_size: raw.total_size ?? raw.TotalSize ?? 0,
     marked_for_move: raw.marked_for_move ?? raw.MarkedForMove ?? false,

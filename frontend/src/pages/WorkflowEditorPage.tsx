@@ -86,6 +86,21 @@ function useEditorContext(): EditorContextValue {
 
 const INITIAL_GRAPH: WorkflowGraph = { nodes: [], edges: [] }
 const CONFIG_AUTO_SAVE_DEBOUNCE_MS = 700
+const NODE_INSERT_FALLBACK_START = { x: 160, y: 140 }
+const NODE_INSERT_FALLBACK_COLUMN_GAP = 280
+const NODE_INSERT_FALLBACK_ROW_GAP = 180
+const NODE_INSERT_ESTIMATED_SIZE = { width: 320, height: 180 }
+const NODE_INSERT_STAGGER_OFFSETS = [
+  { x: 0, y: 0 },
+  { x: 28, y: 28 },
+  { x: -28, y: 28 },
+  { x: 28, y: -28 },
+  { x: -28, y: -28 },
+]
+
+interface FlowPositionProjector {
+  screenToFlowPosition: (position: { x: number; y: number }) => { x: number; y: number }
+}
 
 /**
  * 节点分类定义：按业务语义划分颜色主题，保证同类节点颜色一致。
@@ -96,7 +111,6 @@ const CONFIG_AUTO_SAVE_DEBOUNCE_MS = 700
  *   青色 → 分类器（判断决策）
  *   琥珀 → 逻辑控制（流程分支）
  *   绿色 → 执行操作（文件变更）
- *   石板 → 审计日志（记录追踪）
  */
 interface NodeCategory {
   label: string
@@ -148,13 +162,6 @@ const NODE_CATEGORIES: NodeCategory[] = [
     accentClass: 'from-emerald-500/20 to-green-500/10 border-emerald-200 dark:from-emerald-500/25 dark:to-green-500/15 dark:border-emerald-700',
     borderHoverClass: 'hover:border-emerald-300 dark:hover:border-emerald-500',
     types: new Set(['move-node', 'rename-node', 'compress-node', 'thumbnail-node']),
-  },
-  {
-    label: '审计日志',
-    iconColor: 'text-slate-500 dark:text-slate-400',
-    accentClass: 'from-slate-400/20 to-zinc-400/10 border-slate-200 dark:from-slate-400/20 dark:to-zinc-400/10 dark:border-slate-600',
-    borderHoverClass: 'hover:border-slate-300 dark:hover:border-slate-500',
-    types: new Set(['audit-log']),
   },
 ]
 
@@ -712,13 +719,6 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
       return (
         <NodeUsageHint>
           聚合所有分类器的信号，取最高置信度结果，将最终分类写入数据库。需将各分类器的信号端口（signal_kw / signal_ft / signal_ext）分别连入对应输入端口。无需配置。
-        </NodeUsageHint>
-      )
-
-    case 'audit-log':
-      return (
-        <NodeUsageHint>
-          将处理结果写入审计日志，同时透传输入数据到下游。接在需要审计的节点之后连线，无需配置。
         </NodeUsageHint>
       )
 
@@ -1474,6 +1474,8 @@ function WorkflowEditorScreen() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [rollbackingRunId, setRollbackingRunId] = useState<string | null>(null)
   const [nodeErrorModal, setNodeErrorModal] = useState<{ nodeId: string; nodeLabel: string; error: string } | null>(null)
+  const canvasViewportRef = useRef<HTMLDivElement | null>(null)
+  const reactFlowRef = useRef<FlowPositionProjector | null>(null)
 
   const nodesByRunId = useWorkflowRunStore((s) => s.nodesByRunId)
   const runsByJobId = useWorkflowRunStore((s) => s.runsByJobId)
@@ -1824,18 +1826,40 @@ function WorkflowEditorScreen() {
     [workflowNodes, schemas, updateNode, updateNodeConfig, removeNodeConfig, addNodeConfig, deleteNode, nodeRunByNodeId, rollbackingRunId, handleRollbackRun, openNodeErrorModal],
   )
 
+  const getNewNodePosition = useCallback((nodeCount: number): EditorNode['position'] => {
+    const fallbackPosition = {
+      x: NODE_INSERT_FALLBACK_START.x + ((nodeCount % 3) * NODE_INSERT_FALLBACK_COLUMN_GAP),
+      y: NODE_INSERT_FALLBACK_START.y + (Math.floor(nodeCount / 3) * NODE_INSERT_FALLBACK_ROW_GAP),
+    }
+    const container = canvasViewportRef.current
+    const reactFlow = reactFlowRef.current
+    if (!container || !reactFlow) return fallbackPosition
+
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return fallbackPosition
+
+    const centerPosition = reactFlow.screenToFlowPosition({
+      x: rect.left + (rect.width / 2),
+      y: rect.top + (rect.height / 2),
+    })
+    const offset = NODE_INSERT_STAGGER_OFFSETS[nodeCount % NODE_INSERT_STAGGER_OFFSETS.length]
+
+    return {
+      x: centerPosition.x - (NODE_INSERT_ESTIMATED_SIZE.width / 2) + offset.x,
+      y: centerPosition.y - (NODE_INSERT_ESTIMATED_SIZE.height / 2) + offset.y,
+    }
+  }, [])
+
   // ─── Add node ────────────────────────────────────────────────────────────────
 
   function addNode(schema: NodeSchema) {
     setNodes((currentNodes) => {
+      const position = getNewNodePosition(currentNodes.length)
       const nodeId = buildNodeId(schema.type, currentNodes)
       const nextNode: EditorNode = {
         id: nodeId,
         type: 'workflowNode',
-        position: {
-          x: 160 + ((currentNodes.length % 3) * 280),
-          y: 140 + (Math.floor(currentNodes.length / 3) * 180),
-        },
+        position,
         data: { label: schema.label, type: schema.type, enabled: true, schema },
       }
       setWorkflowNodes((currentWorkflowNodes) => ({
@@ -2086,7 +2110,7 @@ function WorkflowEditorScreen() {
           </aside>
 
           {/* ── Canvas ───────────────────────────────────────────────────── */}
-          <div className="relative min-w-0 flex-1">
+          <div ref={canvasViewportRef} className="relative min-w-0 flex-1">
             <button
               type="button"
               onClick={() => setSelectionModeOn((v) => !v)}
@@ -2105,6 +2129,7 @@ function WorkflowEditorScreen() {
               nodes={nodes}
               edges={edges}
               nodeTypes={NODE_TYPES}
+              onInit={(instance) => { reactFlowRef.current = instance }}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}

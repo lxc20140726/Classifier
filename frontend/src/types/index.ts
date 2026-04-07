@@ -1,7 +1,7 @@
 export type Category = 'photo' | 'video' | 'mixed' | 'manga' | 'other'
 export type FolderStatus = 'pending' | 'done' | 'skip'
 export type CategorySource = 'auto' | 'manual'
-export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partial' | 'cancelled'
+export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partial' | 'cancelled' | 'waiting_input' | 'rolled_back'
 
 export interface Folder {
   id: string
@@ -14,6 +14,8 @@ export interface Folder {
   status: FolderStatus
   image_count: number
   video_count: number
+  other_file_count: number
+  has_other_files: boolean
   total_files: number
   total_size: number
   marked_for_move: boolean
@@ -168,7 +170,6 @@ export type NodeType =
   | 'rename-node'
   | 'compress-node'
   | 'thumbnail-node'
-  | 'audit-log'
 
 export interface ProvideInputBody {
   category: 'photo' | 'video' | 'manga' | 'mixed' | 'other'
@@ -214,6 +215,64 @@ export interface NodeRun {
 export interface WorkflowRunDetail {
   data: WorkflowRun
   node_runs: NodeRun[]
+  review_summary?: ProcessingReviewSummary
+}
+
+export type ProcessingReviewStatus = 'pending' | 'approved' | 'rolled_back'
+
+export interface ProcessingReviewDiff {
+  path_changed: boolean
+  name_changed: boolean
+  new_artifacts: string[]
+  executed_steps: Array<{
+    node_type: string
+    node_label: string
+    status: string
+  }>
+}
+
+export interface ProcessingReviewSummary {
+  total: number
+  pending: number
+  approved: number
+  rolled_back: number
+  rejected: number
+  failed_step_runs: number
+}
+
+export interface ProcessingReviewItem {
+  id: string
+  workflow_run_id: string
+  job_id: string
+  folder_id: string
+  status: ProcessingReviewStatus
+  before: {
+    path?: string
+    name?: string
+    cover_image?: string
+    status?: string
+    key_files_count?: number
+  } | null
+  after: {
+    path?: string
+    name?: string
+    cover_image?: string
+    status?: string
+    artifact_paths?: string[]
+  } | null
+  step_results: Array<{
+    source_path: string
+    target_path?: string
+    node_type: string
+    node_label: string
+    status: string
+    error?: string
+  }>
+  diff: ProcessingReviewDiff | null
+  error: string
+  created_at: string
+  updated_at: string
+  reviewed_at: string | null
 }
 
 export interface WorkflowNodeEvent {
