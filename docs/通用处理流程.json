@@ -1,250 +1,407 @@
 {
-    "nodes": [
-      {
-        "id": "n-scanner",
-        "type": "folder-tree-scanner",
-        "label": "目录树扫描器",
-        "config": {
-          "source_dir": ""
-        },
-        "inputs": {
-          "source_dir": {
-            "link_source": {
-              "source_node_id": "folder-picker-2",
-              "source_port": "path"
-            }
+  "nodes": [
+    {
+      "id": "g-reader",
+      "type": "classification-reader",
+      "label": "分类读取器",
+      "config": {},
+      "inputs": {
+        "entry": {
+          "link_source": {
+            "source_node_id": "db-subtree-reader-12",
+            "source_port": "entry"
+          }
+        }
+      },
+      "ui_position": {
+        "x": -1884,
+        "y": 955
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-split",
+      "type": "folder-splitter",
+      "label": "文件夹拆分器",
+      "config": {
+        "split_depth": 1,
+        "split_mixed": true
+      },
+      "inputs": {
+        "entry": {
+          "link_source": {
+            "source_node_id": "g-reader",
+            "source_port": "entry"
+          }
+        }
+      },
+      "ui_position": {
+        "x": -852,
+        "y": 925
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-router",
+      "type": "category-router",
+      "label": "类别路由器",
+      "config": {},
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-split",
+            "source_port": "items"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 151,
+        "y": 894
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-rename-video",
+      "type": "rename-node",
+      "label": "重命名节点",
+      "config": {
+        "strategy": "template",
+        "template": "{name}"
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-router",
+            "source_port": "video"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 1438,
+        "y": -12
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-rename-manga",
+      "type": "rename-node",
+      "label": "重命名节点",
+      "config": {
+        "strategy": "template",
+        "template": "{name}"
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-router",
+            "source_port": "manga"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 1482,
+        "y": 2626
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-rename-photo",
+      "type": "rename-node",
+      "label": "重命名节点",
+      "config": {
+        "strategy": "template",
+        "template": "{name}"
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-router",
+            "source_port": "photo"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 1460,
+        "y": 1941
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-rename-other",
+      "type": "rename-node",
+      "label": "重命名节点",
+      "config": {
+        "strategy": "template",
+        "template": "{name}"
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-router",
+            "source_port": "other"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 1428,
+        "y": 1296
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-rename-mixed",
+      "type": "rename-node",
+      "label": "重命名节点",
+      "config": {
+        "strategy": "template",
+        "template": "{name}"
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-router",
+            "source_port": "mixed_leaf"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 1396,
+        "y": 648
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-collect",
+      "type": "collect-node",
+      "label": "收集节点",
+      "config": {},
+      "inputs": {
+        "items_1": {
+          "link_source": {
+            "source_node_id": "g-rename-video",
+            "source_port": "items"
           }
         },
-        "ui_position": {
-          "x": -250,
-          "y": 594
-        },
-        "enabled": true
-      },
-      {
-        "id": "folder-picker-2",
-        "type": "folder-picker",
-        "label": "文件夹选择器",
-        "config": {
-          "source_mode": "folders",
-          "paths": [],
-          "saved_folder_ids": [
-            "2837a11dc07105bd7187adc434554dbec7c39be5"
-          ],
-          "folder_ids": [
-            "2837a11dc07105bd7187adc434554dbec7c39be5"
-          ]
-        },
-        "inputs": {},
-        "ui_position": {
-          "x": -1011,
-          "y": 504
-        },
-        "enabled": true
-      },
-      {
-        "id": "file-tree-classifier-4",
-        "type": "file-tree-classifier",
-        "label": "文件树分类器",
-        "config": {},
-        "inputs": {
-          "trees": {
-            "link_source": {
-              "source_node_id": "n-scanner",
-              "source_port": "tree"
-            }
+        "items_2": {
+          "link_source": {
+            "source_node_id": "g-rename-manga",
+            "source_port": "items"
           }
         },
-        "ui_position": {
-          "x": 754,
-          "y": 341
-        },
-        "enabled": true
-      },
-      {
-        "id": "ext-ratio-classifier-6",
-        "type": "ext-ratio-classifier",
-        "label": "扩展名分类器",
-        "config": {},
-        "inputs": {
-          "trees": {
-            "link_source": {
-              "source_node_id": "n-scanner",
-              "source_port": "tree"
-            }
+        "items_3": {
+          "link_source": {
+            "source_node_id": "g-rename-photo",
+            "source_port": "items"
           }
         },
-        "ui_position": {
-          "x": 761,
-          "y": 758
-        },
-        "enabled": true
-      },
-      {
-        "id": "name-keyword-classifier-7",
-        "type": "name-keyword-classifier",
-        "label": "关键词分类器",
-        "config": {},
-        "inputs": {
-          "trees": {
-            "link_source": {
-              "source_node_id": "n-scanner",
-              "source_port": "tree"
-            }
+        "items_4": {
+          "link_source": {
+            "source_node_id": "g-rename-other",
+            "source_port": "items"
           }
         },
-        "ui_position": {
-          "x": 766,
-          "y": 1181
-        },
-        "enabled": true
-      },
-      {
-        "id": "classification-writer-7",
-        "type": "classification-writer",
-        "label": "分类写入器",
-        "config": {},
-        "inputs": {
-          "entries": {
-            "link_source": {
-              "source_node_id": "signal-aggregator-8",
-              "source_port": "entries"
-            }
+        "items_5": {
+          "link_source": {
+            "source_node_id": "g-rename-mixed",
+            "source_port": "items"
           }
-        },
-        "ui_position": {
-          "x": 1890,
-          "y": 536
-        },
-        "enabled": true
+        }
       },
-      {
-        "id": "signal-aggregator-8",
-        "type": "signal-aggregator",
-        "label": "信号聚合器",
-        "config": {},
-        "inputs": {
-          "signal_ft": {
-            "link_source": {
-              "source_node_id": "file-tree-classifier-4",
-              "source_port": "signal"
-            }
-          },
-          "signal_ext": {
-            "link_source": {
-              "source_node_id": "ext-ratio-classifier-6",
-              "source_port": "signal"
-            }
-          },
-          "trees": {
-            "link_source": {
-              "source_node_id": "n-scanner",
-              "source_port": "tree"
-            }
-          },
-          "signal_kw": {
-            "link_source": {
-              "source_node_id": "name-keyword-classifier-7",
-              "source_port": "signal"
-            }
+      "ui_position": {
+        "x": 2648,
+        "y": 1171
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-move",
+      "type": "move-node",
+      "label": "移动节点",
+      "config": {
+        "conflict_policy": "auto_rename",
+        "move_unit": "folder",
+        "target_dir": ".processed"
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-collect",
+            "source_port": "items"
           }
-        },
-        "ui_position": {
-          "x": 1620,
-          "y": 915
-        },
-        "enabled": true
+        }
       },
-      {
-        "id": "classification-db-result-preview-8",
-        "type": "classification-db-result-preview",
-        "label": "分类落库结果预览",
-        "config": {},
-        "inputs": {
-          "entries": {
-            "link_source": {
-              "source_node_id": "classification-writer-7",
-              "source_port": "entries"
-            }
+      "ui_position": {
+        "x": 3952,
+        "y": 693
+      },
+      "enabled": true
+    },
+    {
+      "id": "g-audit",
+      "type": "audit-log",
+      "label": "审计日志",
+      "config": {
+        "action": "phase4.processing.generic",
+        "level": "info"
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "g-move",
+            "source_port": "items"
           }
-        },
-        "ui_position": {
-          "x": 2276,
-          "y": 551
-        },
-        "enabled": true
-      }
-    ],
-    "edges": [
-      {
-        "id": "xy-edge__folder-picker-2out-1-n-scannerin-0",
-        "source": "folder-picker-2",
-        "source_port": "path",
-        "target": "n-scanner",
-        "target_port": "source_dir"
+        }
       },
-      {
-        "id": "xy-edge__n-scannerout-0-file-tree-classifier-4in-0",
-        "source": "n-scanner",
-        "source_port": "tree",
-        "target": "file-tree-classifier-4",
-        "target_port": "trees"
+      "ui_position": {
+        "x": 4421,
+        "y": 585
       },
-      {
-        "id": "xy-edge__n-scannerout-0-name-keyword-classifier-7in-0",
-        "source": "n-scanner",
-        "source_port": "tree",
-        "target": "name-keyword-classifier-7",
-        "target_port": "trees"
+      "enabled": true
+    },
+    {
+      "id": "db-subtree-reader-12",
+      "type": "db-subtree-reader",
+      "label": "子树读取器",
+      "config": {},
+      "inputs": {
+        "path": {
+          "link_source": {
+            "source_node_id": "folder-picker-13",
+            "source_port": "path"
+          }
+        }
       },
-      {
-        "id": "xy-edge__n-scannerout-0-ext-ratio-classifier-6in-0",
-        "source": "n-scanner",
-        "source_port": "tree",
-        "target": "ext-ratio-classifier-6",
-        "target_port": "trees"
+      "ui_position": {
+        "x": -2715,
+        "y": 934
       },
-      {
-        "id": "xy-edge__file-tree-classifier-4out-0-signal-aggregator-8in-2",
-        "source": "file-tree-classifier-4",
-        "source_port": "signal",
-        "target": "signal-aggregator-8",
-        "target_port": "signal_ft"
+      "enabled": true
+    },
+    {
+      "id": "folder-picker-13",
+      "type": "folder-picker",
+      "label": "文件夹选择器",
+      "config": {},
+      "inputs": {},
+      "ui_position": {
+        "x": -3546,
+        "y": 880
       },
-      {
-        "id": "xy-edge__ext-ratio-classifier-6out-0-signal-aggregator-8in-3",
-        "source": "ext-ratio-classifier-6",
-        "source_port": "signal",
-        "target": "signal-aggregator-8",
-        "target_port": "signal_ext"
-      },
-      {
-        "id": "xy-edge__n-scannerout-0-signal-aggregator-8in-0",
-        "source": "n-scanner",
-        "source_port": "tree",
-        "target": "signal-aggregator-8",
-        "target_port": "trees"
-      },
-      {
-        "id": "xy-edge__name-keyword-classifier-7out-0-signal-aggregator-8in-1",
-        "source": "name-keyword-classifier-7",
-        "source_port": "signal",
-        "target": "signal-aggregator-8",
-        "target_port": "signal_kw"
-      },
-      {
-        "id": "xy-edge__signal-aggregator-8out-0-classification-writer-7in-0",
-        "source": "signal-aggregator-8",
-        "source_port": "entries",
-        "target": "classification-writer-7",
-        "target_port": "entries"
-      },
-      {
-        "id": "xy-edge__classification-writer-7out-0-classification-db-result-preview-8in-0",
-        "source": "classification-writer-7",
-        "source_port": "entries",
-        "target": "classification-db-result-preview-8",
-        "target_port": "entries"
-      }
-    ]
-  }
+      "enabled": true
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-reader-split",
+      "source": "g-reader",
+      "source_port": "entry",
+      "target": "g-split",
+      "target_port": "entry"
+    },
+    {
+      "id": "e-split-router",
+      "source": "g-split",
+      "source_port": "items",
+      "target": "g-router",
+      "target_port": "items"
+    },
+    {
+      "id": "e-router-rename-video",
+      "source": "g-router",
+      "source_port": "video",
+      "target": "g-rename-video",
+      "target_port": "items"
+    },
+    {
+      "id": "e-router-rename-manga",
+      "source": "g-router",
+      "source_port": "manga",
+      "target": "g-rename-manga",
+      "target_port": "items"
+    },
+    {
+      "id": "e-router-rename-photo",
+      "source": "g-router",
+      "source_port": "photo",
+      "target": "g-rename-photo",
+      "target_port": "items"
+    },
+    {
+      "id": "e-router-rename-other",
+      "source": "g-router",
+      "source_port": "other",
+      "target": "g-rename-other",
+      "target_port": "items"
+    },
+    {
+      "id": "e-router-rename-mixed",
+      "source": "g-router",
+      "source_port": "mixed_leaf",
+      "target": "g-rename-mixed",
+      "target_port": "items"
+    },
+    {
+      "id": "e-rename-video-collect",
+      "source": "g-rename-video",
+      "source_port": "items",
+      "target": "g-collect",
+      "target_port": "items_1"
+    },
+    {
+      "id": "e-rename-manga-collect",
+      "source": "g-rename-manga",
+      "source_port": "items",
+      "target": "g-collect",
+      "target_port": "items_2"
+    },
+    {
+      "id": "e-rename-photo-collect",
+      "source": "g-rename-photo",
+      "source_port": "items",
+      "target": "g-collect",
+      "target_port": "items_3"
+    },
+    {
+      "id": "e-rename-other-collect",
+      "source": "g-rename-other",
+      "source_port": "items",
+      "target": "g-collect",
+      "target_port": "items_4"
+    },
+    {
+      "id": "e-rename-mixed-collect",
+      "source": "g-rename-mixed",
+      "source_port": "items",
+      "target": "g-collect",
+      "target_port": "items_5"
+    },
+    {
+      "id": "e-collect-move",
+      "source": "g-collect",
+      "source_port": "items",
+      "target": "g-move",
+      "target_port": "items"
+    },
+    {
+      "id": "e-move-audit-items",
+      "source": "g-move",
+      "source_port": "items",
+      "target": "g-audit",
+      "target_port": "items"
+    },
+    {
+      "id": "xy-edge__folder-picker-13out-1-db-subtree-reader-12in-0",
+      "source": "folder-picker-13",
+      "source_port": "path",
+      "target": "db-subtree-reader-12",
+      "target_port": "path"
+    },
+    {
+      "id": "xy-edge__db-subtree-reader-12out-0-g-readerin-0",
+      "source": "db-subtree-reader-12",
+      "source_port": "entry",
+      "target": "g-reader",
+      "target_port": "entry"
+    }
+  ]
+}
