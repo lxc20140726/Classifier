@@ -36,11 +36,9 @@ func (e *compressNodeExecutor) Schema() NodeSchema {
 		Description: "将处理项打包为 cbz/zip 压缩文件",
 		Inputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待压缩的处理项列表", Required: true, SkipOnEmpty: true, AcceptDefault: true},
-			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已处理的处理项列表"},
-			{Name: "step_results", Type: PortTypeProcessingStepResultList, RequiredOutput: true, Description: "累计处理步骤结果"},
 		},
 	}
 }
@@ -97,8 +95,6 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	includePatterns := stringSliceConfig(input.Node.Config, "include_patterns", defaultCompressNodeIncludePatterns)
 	excludePatterns := stringSliceConfig(input.Node.Config, "exclude_patterns", nil)
 
-	rawAccumulated, _ := firstPresentTyped(input.Inputs, "step_results")
-	accumulated := processingStepResultsFromAny(rawAccumulated)
 	stepResults := make([]ProcessingStepResult, 0, len(items))
 	archives := make([]string, 0, len(items))
 	for _, item := range items {
@@ -145,7 +141,7 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	return NodeExecutionOutput{
 		Outputs: map[string]TypedValue{
 			"items":        {Type: PortTypeProcessingItemList, Value: items},
-			"step_results": {Type: PortTypeProcessingStepResultList, Value: append(accumulated, stepResults...)},
+			"step_results": {Type: PortTypeProcessingStepResultList, Value: stepResults},
 		},
 		Status: ExecutionSuccess,
 	}, nil
@@ -164,12 +160,17 @@ func (e *compressNodeExecutor) Rollback(ctx context.Context, input NodeRollbackI
 		return fmt.Errorf("%s.Rollback: delete_source=true rollback is not supported", e.Type())
 	}
 
-	archivePaths, err := compressNodeCollectArchivePaths(input)
+	entries, err := compressNodeCollectRollbackEntries(input)
 	if err != nil {
 		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
 	}
+	entries = compressNodeFilterRollbackEntries(entries, input.Folder)
 
-	for _, archivePath := range archivePaths {
+	for _, entry := range entries {
+		archivePath := strings.TrimSpace(entry.ArchivePath)
+		if archivePath == "" {
+			continue
+		}
 		exists, err := e.fs.Exists(ctx, archivePath)
 		if err != nil {
 			return fmt.Errorf("%s.Rollback: check archive path %q: %w", e.Type(), archivePath, err)
@@ -202,22 +203,28 @@ func compressNodeDeleteSourceEnabled(nodeRun *repository.NodeRun) (bool, error) 
 	return folderSplitterBoolConfig(payload.Node.Config, "delete_source", false), nil
 }
 
-func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) {
-	pathSet := map[string]struct{}{}
+type compressRollbackEntry struct {
+	FolderID    string
+	SourcePath  string
+	ArchivePath string
+}
+
+func compressNodeCollectRollbackEntries(input NodeRollbackInput) ([]compressRollbackEntry, error) {
+	pathSet := map[string]compressRollbackEntry{}
 
 	if input.NodeRun != nil && strings.TrimSpace(input.NodeRun.OutputJSON) != "" {
 		typedOutputs, typed, err := parseTypedNodeOutputs(input.NodeRun.OutputJSON)
 		if err != nil {
 			return nil, fmt.Errorf("parse node output json for node run %q: %w", input.NodeRun.ID, err)
 		}
-		var paths []string
+		var entries []compressRollbackEntry
 		if typed {
-			paths = compressNodeArchivePathsFromStepResults(typedOutputs["step_results"].Value)
+			entries = compressNodeRollbackEntriesFromValues(typedOutputs["items"].Value, typedOutputs["step_results"].Value)
 		} else {
 			return nil, fmt.Errorf("parse node output json for node run %q: typed outputs required", input.NodeRun.ID)
 		}
-		for _, path := range paths {
-			pathSet[path] = struct{}{}
+		for _, entry := range entries {
+			pathSet[strings.TrimSpace(entry.ArchivePath)] = entry
 		}
 	}
 
@@ -229,23 +236,47 @@ func compressNodeCollectArchivePaths(input NodeRollbackInput) ([]string, error) 
 		if err != nil {
 			return nil, fmt.Errorf("parse node snapshot output json for snapshot %q: %w", snapshot.ID, err)
 		}
-		var paths []string
+		var entries []compressRollbackEntry
 		if typed {
-			paths = compressNodeArchivePathsFromStepResults(typedOutputs["step_results"].Value)
+			entries = compressNodeRollbackEntriesFromValues(typedOutputs["items"].Value, typedOutputs["step_results"].Value)
 		} else {
 			return nil, fmt.Errorf("parse node snapshot output json for snapshot %q: typed outputs required", snapshot.ID)
 		}
-		for _, path := range paths {
-			pathSet[path] = struct{}{}
+		for _, entry := range entries {
+			pathSet[strings.TrimSpace(entry.ArchivePath)] = entry
 		}
 	}
 
-	paths := make([]string, 0, len(pathSet))
-	for path := range pathSet {
-		paths = append(paths, path)
+	entries := make([]compressRollbackEntry, 0, len(pathSet))
+	for _, entry := range pathSet {
+		entries = append(entries, entry)
 	}
 
-	return paths, nil
+	return entries, nil
+}
+
+func compressNodeRollbackEntriesFromValues(itemsValue any, stepResultsValue any) []compressRollbackEntry {
+	items, _ := categoryRouterToItems(itemsValue)
+	stepResults := processingStepResultsFromAny(stepResultsValue)
+	entries := make([]compressRollbackEntry, 0, len(stepResults))
+	for index, step := range stepResults {
+		if strings.TrimSpace(step.NodeType) != compressNodeExecutorType {
+			continue
+		}
+		target := strings.TrimSpace(step.TargetPath)
+		if target == "" {
+			continue
+		}
+		entry := compressRollbackEntry{
+			SourcePath:  strings.TrimSpace(step.SourcePath),
+			ArchivePath: target,
+		}
+		if index < len(items) {
+			entry.FolderID = strings.TrimSpace(items[index].FolderID)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 func compressNodeArchivePathsFromStepResults(raw any) []string {
@@ -264,6 +295,30 @@ func compressNodeArchivePathsFromStepResults(raw any) []string {
 		paths = append(paths, strings.TrimSpace(step.TargetPath))
 	}
 	return uniqueCompactStringSlice(paths)
+}
+
+func compressNodeFilterRollbackEntries(entries []compressRollbackEntry, folder *repository.Folder) []compressRollbackEntry {
+	if len(entries) == 0 || folder == nil {
+		return entries
+	}
+	folderID := strings.TrimSpace(folder.ID)
+	folderPath := strings.TrimSpace(folder.Path)
+	if folderID == "" && folderPath == "" {
+		return entries
+	}
+
+	filtered := make([]compressRollbackEntry, 0, len(entries))
+	for _, entry := range entries {
+		if folderID != "" && strings.TrimSpace(entry.FolderID) == folderID {
+			filtered = append(filtered, entry)
+			continue
+		}
+		sourcePath := strings.TrimSpace(entry.SourcePath)
+		if folderPath != "" && (sourcePath == folderPath || strings.HasPrefix(sourcePath, folderPath+string(filepath.Separator))) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func anyToStringSlice(raw any) []string {

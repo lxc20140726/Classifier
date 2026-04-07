@@ -33,11 +33,9 @@ func (e *phase4MoveNodeExecutor) Schema() NodeSchema {
 		Description: "将处理项移动到目标目录，支持冲突策略和操作回滚",
 		Inputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待移动的处理项列表", Required: true, SkipOnEmpty: true, AcceptDefault: true},
-			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已移动的处理项列表"},
-			{Name: "step_results", Type: PortTypeProcessingStepResultList, RequiredOutput: true, Description: "累计处理步骤结果"},
 		},
 	}
 }
@@ -92,8 +90,6 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 	}
 
 	movedItems := make([]ProcessingItem, 0, len(items))
-	rawAccumulated, _ := firstPresentTyped(input.Inputs, "step_results")
-	accumulated := processingStepResultsFromAny(rawAccumulated)
 	stepResults := make([]ProcessingStepResult, 0, len(items))
 	processedCount := 0
 	for _, item := range items {
@@ -157,7 +153,7 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 	return NodeExecutionOutput{
 		Outputs: map[string]TypedValue{
 			"items":        {Type: PortTypeProcessingItemList, Value: movedItems},
-			"step_results": {Type: PortTypeProcessingStepResultList, Value: append(accumulated, stepResults...)},
+			"step_results": {Type: PortTypeProcessingStepResultList, Value: stepResults},
 		},
 		Status: ExecutionSuccess,
 	}, nil
@@ -172,6 +168,7 @@ func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbac
 	if err != nil {
 		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
 	}
+	entries = phase4MoveFilterRollbackEntries(entries, input.Folder)
 
 	for _, entry := range entries {
 		entry.TargetPath = normalizeWorkflowPath(entry.TargetPath)
@@ -201,6 +198,31 @@ func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbac
 	}
 
 	return nil
+}
+
+func phase4MoveFilterRollbackEntries(entries []phase4MoveRollbackEntry, folder *repository.Folder) []phase4MoveRollbackEntry {
+	if len(entries) == 0 || folder == nil {
+		return entries
+	}
+	folderID := strings.TrimSpace(folder.ID)
+	folderPath := strings.TrimSpace(folder.Path)
+	if folderID == "" && folderPath == "" {
+		return entries
+	}
+
+	filtered := make([]phase4MoveRollbackEntry, 0, len(entries))
+	for _, entry := range entries {
+		if folderID != "" && strings.TrimSpace(entry.FolderID) == folderID {
+			filtered = append(filtered, entry)
+			continue
+		}
+		sourcePath := strings.TrimSpace(entry.SourcePath)
+		targetPath := strings.TrimSpace(entry.TargetPath)
+		if folderPath != "" && (sourcePath == folderPath || targetPath == folderPath || strings.HasPrefix(sourcePath, folderPath+string(filepath.Separator)) || strings.HasPrefix(targetPath, folderPath+string(filepath.Separator))) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 type phase4MoveRollbackEntry struct {

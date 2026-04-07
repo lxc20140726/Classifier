@@ -78,20 +78,22 @@ func buildClassifiedEntryFromTree(tree FolderTree, signalsBySource map[string]ma
 	}
 
 	bestSignal := pickBestSignalByPath(tree.Path, signalsBySource)
-	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, subtreeEntries, tree.Files)
+	summary := summarizeFolderTreeMedia(tree)
+	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, summary)
 	if strings.TrimSpace(finalCategory) == "" {
 		finalCategory = "other"
 	}
 
 	entry := ClassifiedEntry{
-		Path:       strings.TrimSpace(tree.Path),
-		Name:       strings.TrimSpace(tree.Name),
-		Category:   finalCategory,
-		Confidence: confidence,
-		Reason:     reason,
-		Classifier: signalAggregatorExecutorType,
-		Files:      append([]FileEntry(nil), tree.Files...),
-		Subtree:    subtreeEntries,
+		Path:          strings.TrimSpace(tree.Path),
+		Name:          strings.TrimSpace(tree.Name),
+		Category:      finalCategory,
+		Confidence:    confidence,
+		Reason:        reason,
+		Classifier:    signalAggregatorExecutorType,
+		HasOtherFiles: summary.hasOtherFiles,
+		Files:         append([]FileEntry(nil), tree.Files...),
+		Subtree:       subtreeEntries,
 	}
 	if entry.Name == "" && entry.Path != "" {
 		entry.Name = entry.Path

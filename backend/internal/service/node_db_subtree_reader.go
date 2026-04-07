@@ -113,15 +113,16 @@ func dbSubtreeBuildEntry(folders []*repository.Folder, rootPath string) (Classif
 			continue
 		}
 		pathToEntry[path] = &ClassifiedEntry{
-			FolderID:   folder.ID,
-			Path:       path,
-			Name:       strings.TrimSpace(folder.Name),
-			Category:   strings.TrimSpace(folder.Category),
-			Confidence: 1,
-			Reason:     "db:folder",
-			Classifier: dbSubtreeReaderExecutorType,
-			Files:      []FileEntry{},
-			Subtree:    []ClassifiedEntry{},
+			FolderID:      folder.ID,
+			Path:          path,
+			Name:          strings.TrimSpace(folder.Name),
+			Category:      strings.TrimSpace(folder.Category),
+			Confidence:    1,
+			Reason:        "db:folder",
+			Classifier:    dbSubtreeReaderExecutorType,
+			HasOtherFiles: folder.HasOtherFiles,
+			Files:         []FileEntry{},
+			Subtree:       []ClassifiedEntry{},
 		}
 		if pathToEntry[path].Name == "" {
 			pathToEntry[path].Name = filepath.Base(path)

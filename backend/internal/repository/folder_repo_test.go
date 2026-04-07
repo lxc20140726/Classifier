@@ -22,6 +22,8 @@ func TestFolderRepositoryUpsertAndGetters(t *testing.T) {
 		Status:         "pending",
 		ImageCount:     10,
 		VideoCount:     1,
+		OtherFileCount: 2,
+		HasOtherFiles:  true,
 		TotalFiles:     11,
 		TotalSize:      1024,
 		MarkedForMove:  true,
@@ -55,6 +57,9 @@ func TestFolderRepositoryUpsertAndGetters(t *testing.T) {
 
 	if byID.MarkedForMove != updated.MarkedForMove {
 		t.Fatalf("GetByID().MarkedForMove = %v, want %v", byID.MarkedForMove, updated.MarkedForMove)
+	}
+	if byID.OtherFileCount != updated.OtherFileCount || byID.HasOtherFiles != updated.HasOtherFiles {
+		t.Fatalf("GetByID() other stats = %d/%v, want %d/%v", byID.OtherFileCount, byID.HasOtherFiles, updated.OtherFileCount, updated.HasOtherFiles)
 	}
 	if byID.CoverImagePath != updated.CoverImagePath {
 		t.Fatalf("GetByID().CoverImagePath = %q, want %q", byID.CoverImagePath, updated.CoverImagePath)

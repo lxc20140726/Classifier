@@ -74,6 +74,13 @@ type NodeSnapshotRepository interface {
 	ListByNodeRunID(ctx context.Context, nodeRunID string) ([]*NodeSnapshot, error)
 }
 
+type ProcessingReviewRepository interface {
+	Create(ctx context.Context, item *ProcessingReviewItem) error
+	GetByID(ctx context.Context, id string) (*ProcessingReviewItem, error)
+	ListByWorkflowRunID(ctx context.Context, workflowRunID string) ([]*ProcessingReviewItem, error)
+	UpdateDecision(ctx context.Context, id, status, errMsg string, reviewedAt *time.Time) error
+}
+
 type SnapshotRepository interface {
 	Create(ctx context.Context, s *Snapshot) error
 	GetByID(ctx context.Context, id string) (*Snapshot, error)

@@ -14,6 +14,9 @@ import (
 type WorkflowRunReader interface {
 	ListWorkflowRuns(ctx context.Context, jobID string, page, limit int) ([]*repository.WorkflowRun, int, error)
 	GetWorkflowRunDetail(ctx context.Context, workflowRunID string) (*service.WorkflowRunDetail, error)
+	ListProcessingReviews(ctx context.Context, workflowRunID string) (*service.ProcessingReviewList, error)
+	ApproveProcessingReview(ctx context.Context, workflowRunID, reviewID string) error
+	RollbackProcessingReview(ctx context.Context, workflowRunID, reviewID string) error
 	ResumeWorkflowRun(ctx context.Context, workflowRunID string) error
 	ResumeWorkflowRunWithData(ctx context.Context, workflowRunID string, resumeData map[string]any) error
 	RollbackWorkflowRun(ctx context.Context, workflowRunID string) error
@@ -72,7 +75,7 @@ func (h *WorkflowRunHandler) Get(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": detail.Run, "node_runs": detail.NodeRuns})
+	c.JSON(http.StatusOK, gin.H{"data": detail.Run, "node_runs": detail.NodeRuns, "review_summary": detail.ReviewSummary})
 }
 
 func (h *WorkflowRunHandler) Resume(c *gin.Context) {
@@ -128,4 +131,44 @@ func (h *WorkflowRunHandler) ProvideInput(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+func (h *WorkflowRunHandler) ListReviews(c *gin.Context) {
+	resp, err := h.runner.ListProcessingReviews(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list processing reviews"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": resp.Items, "summary": resp.Summary})
+}
+
+func (h *WorkflowRunHandler) ApproveReview(c *gin.Context) {
+	if err := h.runner.ApproveProcessingReview(c.Request.Context(), c.Param("id"), c.Param("reviewId")); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "review item not found"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"approved": true})
+}
+
+func (h *WorkflowRunHandler) RollbackReview(c *gin.Context) {
+	if err := h.runner.RollbackProcessingReview(c.Request.Context(), c.Param("id"), c.Param("reviewId")); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "review item not found"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"rolled_back": true})
 }

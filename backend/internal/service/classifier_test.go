@@ -48,24 +48,16 @@ func TestClassify(t *testing.T) {
 			want:       "other",
 		},
 		{
-			name:       "exact 85 percent photo threshold",
-			folderName: "mostly photos",
-			fileNames: []string{
-				"1.jpg", "2.jpg", "3.jpg", "4.jpg", "5.jpg", "6.jpg", "7.jpg", "8.jpg", "9.jpg",
-				"10.jpg", "11.jpg", "12.jpg", "13.jpg", "14.jpg", "15.jpg", "16.jpg", "17.jpg",
-				"a.mp4", "b.mp4", "c.mp4",
-			},
-			want: "photo",
+			name:       "single image and many videos still mixed",
+			folderName: "mostly videos but mixed",
+			fileNames:  []string{"1.mp4", "2.mp4", "3.mp4", "cover.jpg"},
+			want:       "mixed",
 		},
 		{
-			name:       "exact 85 percent video threshold",
-			folderName: "mostly videos",
-			fileNames: []string{
-				"1.mp4", "2.mp4", "3.mp4", "4.mp4", "5.mp4", "6.mp4", "7.mp4", "8.mp4", "9.mp4",
-				"10.mp4", "11.mp4", "12.mp4", "13.mp4", "14.mp4", "15.mp4", "16.mp4", "17.mp4",
-				"a.jpg", "b.jpg", "c.jpg",
-			},
-			want: "video",
+			name:       "single video and many images still mixed",
+			folderName: "mostly photos but mixed",
+			fileNames:  []string{"1.jpg", "2.jpg", "3.jpg", "clip.mp4"},
+			want:       "mixed",
 		},
 		{
 			name:       "below threshold fallback",

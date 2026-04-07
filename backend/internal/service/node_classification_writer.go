@@ -95,8 +95,13 @@ func (e *classificationWriterNodeExecutor) persistEntry(ctx context.Context, inp
 		Category:       category,
 		CategorySource: "workflow",
 		Status:         "pending",
-		TotalFiles:     len(entry.Files),
 	}
+	stats := summarizeClassifiedEntryMedia(entry)
+	folder.ImageCount = stats.imageCount
+	folder.VideoCount = stats.videoCount
+	folder.OtherFileCount = stats.otherFileCount
+	folder.HasOtherFiles = stats.hasOtherFiles
+	folder.TotalFiles = stats.totalFiles
 	if folder.ID == "" {
 		folder.ID = uuid.NewString()
 	}
@@ -106,6 +111,18 @@ func (e *classificationWriterNodeExecutor) persistEntry(ctx context.Context, inp
 		folder.ID = existing.ID
 		if folder.TotalFiles == 0 {
 			folder.TotalFiles = existing.TotalFiles
+		}
+		if folder.ImageCount == 0 {
+			folder.ImageCount = existing.ImageCount
+		}
+		if folder.VideoCount == 0 {
+			folder.VideoCount = existing.VideoCount
+		}
+		if folder.OtherFileCount == 0 {
+			folder.OtherFileCount = existing.OtherFileCount
+		}
+		if !folder.HasOtherFiles {
+			folder.HasOtherFiles = existing.HasOtherFiles
 		}
 	}
 
@@ -136,6 +153,7 @@ func (e *classificationWriterNodeExecutor) persistEntry(ctx context.Context, inp
 	entry.FolderID = folder.ID
 	entry.Name = name
 	entry.Category = category
+	entry.HasOtherFiles = folder.HasOtherFiles
 	entry.Subtree = children
 	return entry, nil
 }

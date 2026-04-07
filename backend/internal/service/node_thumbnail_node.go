@@ -56,11 +56,9 @@ func (e *thumbnailNodeExecutor) Schema() NodeSchema {
 		Description: "为视频文件夹提取代表帧生成缩略图（依赖运行环境中的 ffmpeg）",
 		Inputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "待生成缩略图的处理项列表", Required: true, SkipOnEmpty: true, AcceptDefault: true},
-			{Name: "step_results", Type: PortTypeProcessingStepResultList, Description: "上游处理步骤结果", Required: false},
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, Description: "已处理的处理项列表"},
-			{Name: "step_results", Type: PortTypeProcessingStepResultList, RequiredOutput: true, Description: "累计处理步骤结果"},
 		},
 	}
 }
@@ -88,8 +86,6 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 	}
 	width := intConfig(input.Node.Config, "width", 640)
 
-	rawAccumulated, _ := firstPresentTyped(input.Inputs, "step_results")
-	accumulated := processingStepResultsFromAny(rawAccumulated)
 	stepResults := make([]ProcessingStepResult, 0, len(items))
 	thumbnailPaths := make([]string, 0, len(items))
 	ensuredDirs := map[string]struct{}{}
@@ -158,7 +154,7 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 	return NodeExecutionOutput{
 		Outputs: map[string]TypedValue{
 			"items":        {Type: PortTypeProcessingItemList, Value: items},
-			"step_results": {Type: PortTypeProcessingStepResultList, Value: append(accumulated, stepResults...)},
+			"step_results": {Type: PortTypeProcessingStepResultList, Value: stepResults},
 		},
 		Status: ExecutionSuccess,
 	}, nil
@@ -169,9 +165,25 @@ func (e *thumbnailNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, 
 }
 
 func (e *thumbnailNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {
-	thumbnailPaths, folderIDs, err := thumbnailNodeCollectRollbackData(input)
+	entries, err := thumbnailNodeCollectRollbackEntries(input)
 	if err != nil {
 		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
+	}
+	entries = thumbnailNodeFilterRollbackEntries(entries, input.Folder)
+	thumbnailPaths := make([]string, 0, len(entries))
+	folderIDSet := map[string]struct{}{}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Path) == "" {
+			continue
+		}
+		thumbnailPaths = append(thumbnailPaths, strings.TrimSpace(entry.Path))
+		if strings.TrimSpace(entry.FolderID) != "" {
+			folderIDSet[strings.TrimSpace(entry.FolderID)] = struct{}{}
+		}
+	}
+	folderIDs := make([]string, 0, len(folderIDSet))
+	for folderID := range folderIDSet {
+		folderIDs = append(folderIDs, folderID)
 	}
 
 	for _, thumbnailPath := range thumbnailPaths {
@@ -192,6 +204,98 @@ func (e *thumbnailNodeExecutor) Rollback(ctx context.Context, input NodeRollback
 	}
 
 	return nil
+}
+
+type thumbnailRollbackEntry struct {
+	FolderID string
+	Path     string
+}
+
+func thumbnailNodeFilterRollbackEntries(entries []thumbnailRollbackEntry, folder *repository.Folder) []thumbnailRollbackEntry {
+	if len(entries) == 0 || folder == nil {
+		return entries
+	}
+	folderID := strings.TrimSpace(folder.ID)
+	folderPath := strings.TrimSpace(folder.Path)
+	if folderID == "" && folderPath == "" {
+		return entries
+	}
+
+	filtered := make([]thumbnailRollbackEntry, 0, len(entries))
+	for _, entry := range entries {
+		if folderID != "" && strings.TrimSpace(entry.FolderID) == folderID {
+			filtered = append(filtered, entry)
+			continue
+		}
+		if folderPath != "" && strings.Contains(strings.TrimSpace(entry.Path), strings.TrimSpace(filepath.Base(folderPath))) {
+			filtered = append(filtered, entry)
+			continue
+		}
+	}
+	return filtered
+}
+
+func thumbnailNodeCollectRollbackEntries(input NodeRollbackInput) ([]thumbnailRollbackEntry, error) {
+	entrySet := map[string]thumbnailRollbackEntry{}
+	collect := func(outputJSON string, source string) error {
+		typedOutputs, typed, err := parseTypedNodeOutputs(outputJSON)
+		if err != nil {
+			return fmt.Errorf("parse %s output json: %w", source, err)
+		}
+		if !typed {
+			return fmt.Errorf("parse %s output json: typed outputs required", source)
+		}
+		entries := thumbnailNodeRollbackEntriesFromValues(typedOutputs["items"].Value, typedOutputs["step_results"].Value)
+		for _, entry := range entries {
+			if strings.TrimSpace(entry.Path) == "" {
+				continue
+			}
+			key := strings.TrimSpace(entry.Path) + "|" + strings.TrimSpace(entry.FolderID)
+			entrySet[key] = entry
+		}
+		return nil
+	}
+
+	if input.NodeRun != nil && strings.TrimSpace(input.NodeRun.OutputJSON) != "" {
+		if err := collect(input.NodeRun.OutputJSON, fmt.Sprintf("node run %q", input.NodeRun.ID)); err != nil {
+			return nil, err
+		}
+	}
+	for _, snapshot := range input.Snapshots {
+		if snapshot == nil || snapshot.Kind != "post" || strings.TrimSpace(snapshot.OutputJSON) == "" {
+			continue
+		}
+		if err := collect(snapshot.OutputJSON, fmt.Sprintf("snapshot %q", snapshot.ID)); err != nil {
+			return nil, err
+		}
+	}
+
+	entries := make([]thumbnailRollbackEntry, 0, len(entrySet))
+	for _, entry := range entrySet {
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func thumbnailNodeRollbackEntriesFromValues(itemsValue any, stepResultsValue any) []thumbnailRollbackEntry {
+	items, _ := categoryRouterToItems(itemsValue)
+	stepResults := processingStepResultsFromAny(stepResultsValue)
+	entries := make([]thumbnailRollbackEntry, 0, len(stepResults))
+	for index, step := range stepResults {
+		if strings.TrimSpace(step.NodeType) != thumbnailNodeExecutorType {
+			continue
+		}
+		path := strings.TrimSpace(step.TargetPath)
+		if path == "" {
+			continue
+		}
+		entry := thumbnailRollbackEntry{Path: path}
+		if index < len(items) {
+			entry.FolderID = strings.TrimSpace(items[index].FolderID)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 func thumbnailNodeCollectRollbackData(input NodeRollbackInput) ([]string, []string, error) {

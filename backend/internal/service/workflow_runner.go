@@ -22,8 +22,18 @@ type StartWorkflowJobInput struct {
 }
 
 type WorkflowRunDetail struct {
-	Run      *repository.WorkflowRun
-	NodeRuns []*repository.NodeRun
+	Run           *repository.WorkflowRun
+	NodeRuns      []*repository.NodeRun
+	ReviewSummary *ProcessingReviewSummary
+}
+
+type ProcessingReviewSummary struct {
+	Total          int `json:"total"`
+	Pending        int `json:"pending"`
+	Approved       int `json:"approved"`
+	RolledBack     int `json:"rolled_back"`
+	Rejected       int `json:"rejected"`
+	FailedStepRuns int `json:"failed_step_runs"`
 }
 
 type NodeExecutionInput struct {
@@ -146,6 +156,7 @@ type WorkflowRunnerService struct {
 	jobs          repository.JobRepository
 	folders       repository.FolderRepository
 	snapshots     repository.SnapshotRepository
+	reviews       repository.ProcessingReviewRepository
 	workflowDefs  repository.WorkflowDefinitionRepository
 	workflowRuns  repository.WorkflowRunRepository
 	nodeRuns      repository.NodeRunRepository
@@ -199,12 +210,15 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newPhase4MoveNodeExecutor(fsAdapter, folderRepo))
 	svc.RegisterExecutor(newThumbnailNodeExecutor(fsAdapter, folderRepo))
 	svc.RegisterExecutor(newCompressNodeExecutor(fsAdapter))
-	svc.RegisterExecutor(newAuditLogNodeExecutor(auditSvc))
 	svc.RegisterExecutor(newClassificationDBResultPreviewExecutor())
 	svc.RegisterExecutor(newProcessingResultPreviewExecutor())
 	svc.RegisterExecutor(newFolderPickerNodeExecutor(fsAdapter, folderRepo))
 
 	return svc
+}
+
+func (s *WorkflowRunnerService) SetProcessingReviewRepository(repo repository.ProcessingReviewRepository) {
+	s.reviews = repo
 }
 
 func (s *WorkflowRunnerService) RegisterExecutor(executor WorkflowNodeExecutor) {
@@ -280,8 +294,24 @@ func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID
 		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
 		return
 	}
-	_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
-	_ = s.jobs.UpdateStatus(ctx, jobID, "succeeded", "")
+
+	latestRun, err := s.workflowRuns.GetByID(ctx, run.ID)
+	if err != nil {
+		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+		return
+	}
+
+	switch latestRun.Status {
+	case "waiting_input":
+		_ = s.jobs.UpdateStatus(ctx, jobID, "waiting_input", "")
+	case "succeeded", "partial", "rolled_back":
+		_ = s.jobs.IncrementProgress(ctx, jobID, 1, 0)
+		_ = s.jobs.UpdateStatus(ctx, jobID, latestRun.Status, "")
+	default:
+		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+	}
 }
 
 func (s *WorkflowRunnerService) ListWorkflowRuns(ctx context.Context, jobID string, page, limit int) ([]*repository.WorkflowRun, int, error) {
@@ -307,7 +337,16 @@ func (s *WorkflowRunnerService) GetWorkflowRunDetail(ctx context.Context, workfl
 		return nil, fmt.Errorf("workflowRunner.GetWorkflowRunDetail list node runs %q: %w", workflowRunID, err)
 	}
 
-	return &WorkflowRunDetail{Run: run, NodeRuns: nodeRuns}, nil
+	detail := &WorkflowRunDetail{Run: run, NodeRuns: nodeRuns}
+	if s.reviews != nil {
+		items, listErr := s.reviews.ListByWorkflowRunID(ctx, workflowRunID)
+		if listErr != nil {
+			return nil, fmt.Errorf("workflowRunner.GetWorkflowRunDetail list reviews %q: %w", workflowRunID, listErr)
+		}
+		detail.ReviewSummary = buildProcessingReviewSummary(items, nodeRuns)
+	}
+
+	return detail, nil
 }
 
 func (s *WorkflowRunnerService) ResumeWorkflowRun(ctx context.Context, workflowRunID string) error {
@@ -346,6 +385,31 @@ func (s *WorkflowRunnerService) ResumeWorkflowRunWithData(ctx context.Context, w
 
 	if err := s.executeWorkflowRun(ctx, workflowRunID, true); err != nil {
 		return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData: %w", err)
+	}
+
+	run, err := s.workflowRuns.GetByID(ctx, workflowRunID)
+	if err != nil {
+		return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData get workflow run %q: %w", workflowRunID, err)
+	}
+	job, err := s.jobs.GetByID(ctx, run.JobID)
+	if err != nil {
+		return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData get job %q: %w", run.JobID, err)
+	}
+
+	if run.Status == "waiting_input" {
+		if err := s.jobs.UpdateStatus(ctx, run.JobID, "waiting_input", ""); err != nil {
+			return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData set job waiting_input %q: %w", run.JobID, err)
+		}
+		return nil
+	}
+
+	if strings.TrimSpace(job.Status) == "waiting_input" {
+		if err := s.jobs.IncrementProgress(ctx, run.JobID, 1, 0); err != nil {
+			return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData increment job progress %q: %w", run.JobID, err)
+		}
+	}
+	if err := s.jobs.UpdateStatus(ctx, run.JobID, run.Status, ""); err != nil {
+		return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData update job %q status %q: %w", run.JobID, run.Status, err)
 	}
 
 	return nil
@@ -539,6 +603,15 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 		if firstErr != nil {
 			return firstErr
 		}
+	}
+
+	reviewEntered, reviewErr := s.prepareProcessingReviews(ctx, run.ID, folder)
+	if reviewErr != nil {
+		return fmt.Errorf("workflowRunner.executeWorkflowRun prepare processing reviews for %q: %w", run.ID, reviewErr)
+	}
+	if reviewEntered {
+		_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.processing.review_pending", "success", time.Since(runStartedAt).Milliseconds(), nil)
+		return nil
 	}
 
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "succeeded", ""); err != nil {
@@ -1012,6 +1085,22 @@ func nodeRunIDFromInput(run *repository.NodeRun) string {
 	}
 
 	return run.ID
+}
+
+func workflowRunIDFromInput(run *repository.WorkflowRun) string {
+	if run == nil {
+		return ""
+	}
+
+	return run.ID
+}
+
+func workflowJobIDFromInput(run *repository.WorkflowRun) string {
+	if run == nil {
+		return ""
+	}
+
+	return run.JobID
 }
 
 func folderIDForAudit(primary *repository.Folder, fallback *repository.Folder) string {

@@ -20,9 +20,9 @@ func (r *SQLiteFolderRepository) Upsert(ctx context.Context, f *Folder) error {
 	query := `
 INSERT INTO folders (
 	id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, total_files, total_size, marked_for_move,
+	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET
 	path = excluded.path,
 	source_dir = excluded.source_dir,
@@ -33,6 +33,8 @@ ON CONFLICT(id) DO UPDATE SET
 	status = excluded.status,
 	image_count = excluded.image_count,
 	video_count = excluded.video_count,
+	other_file_count = excluded.other_file_count,
+	has_other_files = excluded.has_other_files,
 	total_files = excluded.total_files,
 	total_size = excluded.total_size,
 	marked_for_move = excluded.marked_for_move,
@@ -55,6 +57,8 @@ ON CONFLICT(id) DO UPDATE SET
 		f.Status,
 		f.ImageCount,
 		f.VideoCount,
+		f.OtherFileCount,
+		boolToInt(f.HasOtherFiles),
 		f.TotalFiles,
 		f.TotalSize,
 		boolToInt(f.MarkedForMove),
@@ -73,7 +77,7 @@ func (r *SQLiteFolderRepository) GetByID(ctx context.Context, id string) (*Folde
 	folder, err := scanFolder(
 		r.db.QueryRowContext(ctx, `
 SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, total_files, total_size, marked_for_move,
+	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
 FROM folders
 WHERE id = ?
@@ -90,7 +94,7 @@ func (r *SQLiteFolderRepository) GetByPath(ctx context.Context, path string) (*F
 	folder, err := scanFolder(
 		r.db.QueryRowContext(ctx, `
 SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, total_files, total_size, marked_for_move,
+	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
 FROM folders
 WHERE path = ? AND deleted_at IS NULL
@@ -159,7 +163,7 @@ func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilt
 	rows, err := r.db.QueryContext(
 		ctx,
 		`SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, total_files, total_size, marked_for_move,
+	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
 FROM folders`+whereClause+`
 ORDER BY updated_at DESC
@@ -196,7 +200,7 @@ func (r *SQLiteFolderRepository) ListByPathPrefix(ctx context.Context, prefix st
 	rows, err := r.db.QueryContext(
 		ctx,
 		`SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, total_files, total_size, marked_for_move,
+	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
 FROM folders
 WHERE deleted_at IS NULL AND (path = ? OR path LIKE ? OR path LIKE ?)
@@ -365,6 +369,7 @@ func (r *SQLiteFolderRepository) Delete(ctx context.Context, id string) error {
 func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	folder := &Folder{}
 	var markedForMove int
+	var hasOtherFiles int
 	var deletedAt any
 	var deleteStagingPath sql.NullString
 	var coverImagePath sql.NullString
@@ -382,6 +387,8 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 		&folder.Status,
 		&folder.ImageCount,
 		&folder.VideoCount,
+		&folder.OtherFileCount,
+		&hasOtherFiles,
 		&folder.TotalFiles,
 		&folder.TotalSize,
 		&markedForMove,
@@ -399,6 +406,7 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	}
 
 	folder.MarkedForMove = intToBool(markedForMove)
+	folder.HasOtherFiles = intToBool(hasOtherFiles)
 	if folder.DeletedAt, err = parseNullableTime(deletedAt); err != nil {
 		return nil, fmt.Errorf("scanFolder parse deleted_at: %w", err)
 	}

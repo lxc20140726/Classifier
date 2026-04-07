@@ -107,6 +107,121 @@ func TestPhase3WorkflowE2E_BatchSourceDirClassification(t *testing.T) {
 	}
 }
 
+func TestPhase3WorkflowE2E_ComplexNestedMixedClassification(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	adapter := fs.NewMockAdapter()
+	adapter.AddDir("/source", []fs.DirEntry{
+		{Name: "剧集库", IsDir: true},
+		{Name: "旅行图集", IsDir: true},
+		{Name: "活动记录", IsDir: true},
+	})
+	adapter.AddDir("/source/剧集库", []fs.DirEntry{{Name: "国剧", IsDir: true}})
+	adapter.AddDir("/source/剧集库/国剧", []fs.DirEntry{{Name: "第01季", IsDir: true}})
+	adapter.AddDir("/source/剧集库/国剧/第01季", []fs.DirEntry{
+		{Name: "ep01.mp4", IsDir: false, Size: 300},
+		{Name: "ep02.mkv", IsDir: false, Size: 280},
+	})
+	adapter.AddDir("/source/旅行图集", []fs.DirEntry{{Name: "2024", IsDir: true}})
+	adapter.AddDir("/source/旅行图集/2024", []fs.DirEntry{{Name: "日本", IsDir: true}})
+	adapter.AddDir("/source/旅行图集/2024/日本", []fs.DirEntry{{Name: "Day01", IsDir: true}})
+	adapter.AddDir("/source/旅行图集/2024/日本/Day01", []fs.DirEntry{
+		{Name: "001.jpg", IsDir: false, Size: 110},
+		{Name: "002.png", IsDir: false, Size: 120},
+	})
+	adapter.AddDir("/source/活动记录", []fs.DirEntry{{Name: "婚礼", IsDir: true}})
+	adapter.AddDir("/source/活动记录/婚礼", []fs.DirEntry{
+		{Name: "原片视频", IsDir: true},
+		{Name: "相册照片", IsDir: true},
+		{Name: "混合精选", IsDir: true},
+	})
+	adapter.AddDir("/source/活动记录/婚礼/原片视频", []fs.DirEntry{{Name: "clip01.mp4", IsDir: false, Size: 500}})
+	adapter.AddDir("/source/活动记录/婚礼/相册照片", []fs.DirEntry{
+		{Name: "p1.jpg", IsDir: false, Size: 90},
+		{Name: "p2.jpeg", IsDir: false, Size: 100},
+	})
+	adapter.AddDir("/source/活动记录/婚礼/混合精选", []fs.DirEntry{
+		{Name: "highlight.mp4", IsDir: false, Size: 260},
+		{Name: "cover.jpg", IsDir: false, Size: 80},
+	})
+
+	svc, jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, _ := newPhase3WorkflowTestEnv(t, adapter)
+
+	def := createPhase3WorkflowDef(t, workflowDefRepo, "wf-complex-nested-classification", repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "picker", Type: "folder-picker", Enabled: true, Config: map[string]any{"paths": []any{"/source"}}},
+			{ID: "scanner", Type: folderTreeScannerExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"source_dir": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "picker", SourcePort: "path"}},
+			}},
+			{ID: "kw", Type: "name-keyword-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", SourcePort: "tree"}},
+			}},
+			{ID: "ft", Type: "file-tree-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", SourcePort: "tree"}},
+			}},
+			{ID: "ext", Type: "ext-ratio-classifier", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"trees": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", SourcePort: "tree"}},
+			}},
+			{ID: "subtree", Type: subtreeAggregatorExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"trees":      {LinkSource: &repository.NodeLinkSource{SourceNodeID: "scanner", SourcePort: "tree"}},
+				"signal_kw":  {LinkSource: &repository.NodeLinkSource{SourceNodeID: "kw", SourcePort: "signal"}},
+				"signal_ft":  {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ft", SourcePort: "signal"}},
+				"signal_ext": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "ext", SourcePort: "signal"}},
+			}},
+			{ID: "writer", Type: "classification-writer", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"entries": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "subtree", SourcePort: "entry"}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e0", Source: "picker", SourcePort: "path", Target: "scanner", TargetPort: "source_dir"},
+			{ID: "e1", Source: "scanner", SourcePort: "tree", Target: "kw", TargetPort: "trees"},
+			{ID: "e2", Source: "scanner", SourcePort: "tree", Target: "ft", TargetPort: "trees"},
+			{ID: "e3", Source: "scanner", SourcePort: "tree", Target: "ext", TargetPort: "trees"},
+			{ID: "e4", Source: "scanner", SourcePort: "tree", Target: "subtree", TargetPort: "trees"},
+			{ID: "e5", Source: "kw", SourcePort: "signal", Target: "subtree", TargetPort: "signal_kw"},
+			{ID: "e6", Source: "ft", SourcePort: "signal", Target: "subtree", TargetPort: "signal_ft"},
+			{ID: "e7", Source: "ext", SourcePort: "signal", Target: "subtree", TargetPort: "signal_ext"},
+			{ID: "e8", Source: "subtree", SourcePort: "entry", Target: "writer", TargetPort: "entries"},
+		},
+	})
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+		nodeRuns, _, listErr := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 80})
+		if listErr != nil {
+			t.Fatalf("job status = %q, want succeeded; failed listing node runs: %v", job.Status, listErr)
+		}
+		t.Fatalf("job status = %q, want succeeded (workflow_run_status=%q resume_node_id=%q node_runs=%v)", job.Status, run.Status, run.ResumeNodeID, compactNodeRuns(nodeRuns))
+	}
+
+	checks := []struct {
+		path string
+		want string
+	}{
+		{path: "/source/活动记录", want: "mixed"},
+		{path: "/source/活动记录/婚礼", want: "mixed"},
+		{path: "/source/活动记录/婚礼/原片视频", want: "video"},
+		{path: "/source/活动记录/婚礼/相册照片", want: "photo"},
+		{path: "/source/活动记录/婚礼/混合精选", want: "mixed"},
+	}
+	for _, tc := range checks {
+		folder, getErr := folderRepo.GetByPath(ctx, tc.path)
+		if getErr != nil {
+			t.Fatalf("folderRepo.GetByPath(%q) error = %v", tc.path, getErr)
+		}
+		if folder.Category != tc.want {
+			t.Fatalf("folder %q category = %q, want %q", tc.path, folder.Category, tc.want)
+		}
+	}
+}
+
 func TestPhase3WorkflowE2E_MoveRollback(t *testing.T) {
 	t.Parallel()
 
@@ -188,7 +303,6 @@ func newPhase3WorkflowTestEnv(t *testing.T, adapter *fs.MockAdapter) (*WorkflowR
 	nodeRunRepo := repository.NewNodeRunRepository(database)
 	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
 	snapshotRepo := repository.NewSnapshotRepository(database)
-	auditRepo := repository.NewAuditRepository(database)
 
 	svc := NewWorkflowRunnerService(jobRepo, folderRepo, snapshotRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, nil)
 	svc.RegisterExecutor(newFolderPickerNodeExecutor(adapter, folderRepo))
@@ -197,8 +311,8 @@ func newPhase3WorkflowTestEnv(t *testing.T, adapter *fs.MockAdapter) (*WorkflowR
 	svc.RegisterExecutor(NewFileTreeClassifierExecutor())
 	svc.RegisterExecutor(NewConfidenceCheckExecutor())
 	svc.RegisterExecutor(newSignalAggregatorExecutor())
+	svc.RegisterExecutor(newSubtreeAggregatorExecutor(folderRepo, snapshotRepo, nil))
 	svc.RegisterExecutor(newClassificationWriterExecutor(folderRepo, snapshotRepo))
-	_ = auditRepo
 
 	return svc, jobRepo, folderRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo
 }

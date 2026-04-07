@@ -53,6 +53,7 @@ func main() {
 	auditRepo := repository.NewAuditRepository(sqlDB)
 	workflowDefRepo := repository.NewWorkflowDefinitionRepository(sqlDB)
 	workflowRunRepo := repository.NewWorkflowRunRepository(sqlDB)
+	processingReviewRepo := repository.NewProcessingReviewRepository(sqlDB)
 	nodeRunRepo := repository.NewNodeRunRepository(sqlDB)
 	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(sqlDB)
 	scheduledWorkflowRepo := repository.NewScheduledWorkflowRepository(sqlDB)
@@ -68,16 +69,14 @@ func main() {
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
 	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, scannerSvc)
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, snapshotRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
+	workflowRunnerSvc.SetProcessingReviewRepository(processingReviewRepo)
 	scheduledWorkflowSvc := service.NewScheduledWorkflowService(scheduledWorkflowRepo, workflowRunnerSvc, scanJobStarterSvc)
 	scheduledWorkflowScheduler := service.NewScheduledWorkflowScheduler(scheduledWorkflowRepo, scheduledWorkflowSvc)
-	if err := service.SeedDefaultWorkflow(context.Background(), workflowDefRepo); err != nil {
-		log.Fatalf("seed default workflow: %v", err)
+	if err := service.NormalizeWorkflowDefinitionGraphs(context.Background(), workflowDefRepo); err != nil {
+		log.Fatalf("normalize workflow definition graphs: %v", err)
 	}
-	if err := service.SeedDefaultProcessingWorkflow(context.Background(), workflowDefRepo); err != nil {
-		log.Fatalf("seed default processing workflow: %v", err)
-	}
-	if err := service.SeedGenericProcessingWorkflow(context.Background(), workflowDefRepo); err != nil {
-		log.Fatalf("seed generic processing workflow: %v", err)
+	if err := service.SeedBuiltinWorkflows(context.Background(), workflowDefRepo, configRepo); err != nil {
+		log.Fatalf("seed builtin workflows: %v", err)
 	}
 
 	if err := scheduledWorkflowSvc.BootstrapLegacyScanCron(context.Background(), configRepo); err != nil {
@@ -137,6 +136,9 @@ func main() {
 		workflowRuns := api.Group("/workflow-runs")
 		{
 			workflowRuns.GET("/:id", workflowRunHandler.Get)
+			workflowRuns.GET("/:id/reviews", workflowRunHandler.ListReviews)
+			workflowRuns.POST("/:id/reviews/:reviewId/approve", workflowRunHandler.ApproveReview)
+			workflowRuns.POST("/:id/reviews/:reviewId/rollback", workflowRunHandler.RollbackReview)
 			workflowRuns.POST("/:id/resume", workflowRunHandler.Resume)
 			workflowRuns.POST("/:id/provide-input", workflowRunHandler.ProvideInput)
 			workflowRuns.POST("/:id/rollback", workflowRunHandler.Rollback)

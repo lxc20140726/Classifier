@@ -44,6 +44,13 @@ var mangaExts = map[string]bool{
 
 var mangaKeywords = []string{"漫画", "comic", "manga"}
 
+type mediaFileStats struct {
+	imageCount     int
+	videoCount     int
+	mangaCount     int
+	otherFileCount int
+}
+
 func Classify(folderName string, fileNames []string) string {
 	folderNameLower := strings.ToLower(folderName)
 	for _, keyword := range mangaKeywords {
@@ -52,44 +59,41 @@ func Classify(folderName string, fileNames []string) string {
 		}
 	}
 
-	imageCount := 0
-	videoCount := 0
-
-	for _, fileName := range fileNames {
-		ext := strings.ToLower(filepath.Ext(fileName))
-
-		if mangaExts[ext] {
-			return "manga"
-		}
-
-		if imageExts[ext] {
-			imageCount++
-		}
-
-		if videoExts[ext] {
-			videoCount++
-		}
+	stats := summarizeMediaFiles(fileNames)
+	if stats.mangaCount > 0 {
+		return "manga"
 	}
 
-	totalMedia := imageCount + videoCount
-	if totalMedia == 0 {
-		return "other"
-	}
-
-	imageRatio := float64(imageCount) / float64(totalMedia)
-	videoRatio := float64(videoCount) / float64(totalMedia)
-
-	if imageRatio >= 0.85 {
-		return "photo"
-	}
-
-	if videoRatio >= 0.85 {
-		return "video"
-	}
-
-	if imageRatio >= 0.15 && videoRatio >= 0.15 {
+	if stats.imageCount > 0 && stats.videoCount > 0 {
 		return "mixed"
 	}
 
+	if stats.imageCount > 0 {
+		return "photo"
+	}
+
+	if stats.videoCount > 0 {
+		return "video"
+	}
+
 	return "other"
+}
+
+func summarizeMediaFiles(fileNames []string) mediaFileStats {
+	stats := mediaFileStats{}
+	for _, fileName := range fileNames {
+		ext := strings.ToLower(filepath.Ext(fileName))
+		switch {
+		case mangaExts[ext]:
+			stats.mangaCount++
+		case imageExts[ext]:
+			stats.imageCount++
+		case videoExts[ext]:
+			stats.videoCount++
+		default:
+			stats.otherFileCount++
+		}
+	}
+
+	return stats
 }

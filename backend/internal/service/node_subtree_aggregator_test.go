@@ -165,12 +165,18 @@ func TestSubtreeAggregatorExecutorRecursiveMixedAggregation(t *testing.T) {
 				Path: "/src/MyCollection",
 				Name: "MyCollection",
 				Subdirs: []FolderTree{
-					{Path: "/src/MyCollection/manga-a", Name: "manga-a"},
-					{Path: "/src/MyCollection/video-b", Name: "video-b"},
+					{
+						Path:  "/src/MyCollection/photo-a",
+						Name:  "photo-a",
+						Files: []FileEntry{{Name: "a.jpg", Ext: ".jpg"}},
+					},
+					{
+						Path:  "/src/MyCollection/video-b",
+						Name:  "video-b",
+						Files: []FileEntry{{Name: "b.mp4", Ext: ".mp4"}},
+					},
 				},
 			}},
-			"signal_kw":  []ClassificationSignal{{SourcePath: "/src/MyCollection/manga-a", Category: "manga", Confidence: 0.95, Reason: "keyword:manga"}},
-			"signal_ext": []ClassificationSignal{{SourcePath: "/src/MyCollection/video-b", Category: "video", Confidence: 0.7, Reason: "ext:video"}},
 		}),
 	})
 	if err != nil {
@@ -187,8 +193,8 @@ func TestSubtreeAggregatorExecutorRecursiveMixedAggregation(t *testing.T) {
 	if len(entries[0].Subtree) != 2 {
 		t.Fatalf("subtree count = %d, want 2", len(entries[0].Subtree))
 	}
-	if entries[0].Subtree[0].Category != "manga" {
-		t.Fatalf("child[0] category = %q, want manga", entries[0].Subtree[0].Category)
+	if entries[0].Subtree[0].Category != "photo" {
+		t.Fatalf("child[0] category = %q, want photo", entries[0].Subtree[0].Category)
 	}
 	if entries[0].Subtree[1].Category != "video" {
 		t.Fatalf("child[1] category = %q, want video", entries[0].Subtree[1].Category)
@@ -212,14 +218,10 @@ func TestSubtreeAggregatorExecutorUniformChildrenAndStrongDirectSignalOverride(t
 					Path: "/src/Series",
 					Name: "Series",
 					Subdirs: []FolderTree{
-						{Path: "/src/Series/a", Name: "a"},
-						{Path: "/src/Series/b", Name: "b"},
+						{Path: "/src/Series/a", Name: "a", Files: []FileEntry{{Name: "a.jpg", Ext: ".jpg"}}},
+						{Path: "/src/Series/b", Name: "b", Files: []FileEntry{{Name: "b.jpg", Ext: ".jpg"}}},
 					},
 				}},
-				"signal_kw": []ClassificationSignal{
-					{SourcePath: "/src/Series/a", Category: "manga", Confidence: 0.95, Reason: "keyword:a"},
-					{SourcePath: "/src/Series/b", Category: "manga", Confidence: 0.95, Reason: "keyword:b"},
-				},
 			}),
 		})
 		if err != nil {
@@ -227,8 +229,8 @@ func TestSubtreeAggregatorExecutorUniformChildrenAndStrongDirectSignalOverride(t
 		}
 
 		entries := out.Outputs["entry"].Value.([]ClassifiedEntry)
-		if entries[0].Category != "manga" {
-			t.Fatalf("root category = %q, want manga", entries[0].Category)
+		if entries[0].Category != "photo" {
+			t.Fatalf("root category = %q, want photo", entries[0].Category)
 		}
 	})
 
@@ -247,11 +249,7 @@ func TestSubtreeAggregatorExecutorUniformChildrenAndStrongDirectSignalOverride(t
 						{Path: "/src/Series/b", Name: "b"},
 					},
 				}},
-				"signal_kw": []ClassificationSignal{
-					{SourcePath: "/src/Series/a", Category: "manga", Confidence: 0.95, Reason: "keyword:a"},
-					{SourcePath: "/src/Series/b", Category: "manga", Confidence: 0.95, Reason: "keyword:b"},
-					{SourcePath: "/src/Series", Category: "video", Confidence: 0.9, Reason: "keyword:root"},
-				},
+				"signal_kw": []ClassificationSignal{{SourcePath: "/src/Series", Category: "video", Confidence: 0.9, Reason: "keyword:root"}},
 			}),
 		})
 		if err != nil {
@@ -309,5 +307,47 @@ func TestSubtreeAggregatorExecutorEmptyTreesReturnsSuccess(t *testing.T) {
 	}
 	if len(folderRepo.updateCategoryCalls) != 0 {
 		t.Fatalf("UpdateCategory calls = %d, want 0", len(folderRepo.updateCategoryCalls))
+	}
+}
+
+func TestSubtreeAggregatorExecutorHasOtherFilesPropagation(t *testing.T) {
+	t.Parallel()
+
+	folderRepo := &subtreeAggregatorFakeFolderRepo{}
+	executor := newSubtreeAggregatorExecutor(folderRepo, nil, nil)
+
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		SourceDir: "/src",
+		Inputs: testInputs(map[string]any{
+			"trees": []FolderTree{{
+				Path: "/src/Album",
+				Name: "Album",
+				Files: []FileEntry{
+					{Name: "cover.jpg", Ext: ".jpg"},
+					{Name: "note.txt", Ext: ".txt"},
+				},
+				Subdirs: []FolderTree{
+					{
+						Path:  "/src/Album/clip",
+						Name:  "clip",
+						Files: []FileEntry{{Name: "a.mp4", Ext: ".mp4"}},
+					},
+				},
+			}},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	entries := out.Outputs["entry"].Value.([]ClassifiedEntry)
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if entries[0].Category != "mixed" {
+		t.Fatalf("root category = %q, want mixed", entries[0].Category)
+	}
+	if !entries[0].HasOtherFiles {
+		t.Fatalf("root HasOtherFiles = false, want true")
 	}
 }

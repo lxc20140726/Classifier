@@ -90,13 +90,14 @@ func classificationReaderToEntry(raw any) (ClassifiedEntry, bool) {
 		return *value, true
 	case map[string]any:
 		entry := ClassifiedEntry{
-			FolderID:   anyString(value["folder_id"]),
-			Path:       anyString(value["path"]),
-			Name:       anyString(value["name"]),
-			Category:   anyString(value["category"]),
-			Confidence: asFloat64(value["confidence"]),
-			Reason:     anyString(value["reason"]),
-			Classifier: anyString(value["classifier"]),
+			FolderID:      anyString(value["folder_id"]),
+			Path:          anyString(value["path"]),
+			Name:          anyString(value["name"]),
+			Category:      anyString(value["category"]),
+			Confidence:    asFloat64(value["confidence"]),
+			Reason:        anyString(value["reason"]),
+			Classifier:    anyString(value["classifier"]),
+			HasOtherFiles: asBool(value["has_other_files"]),
 		}
 		return entry, true
 	default:

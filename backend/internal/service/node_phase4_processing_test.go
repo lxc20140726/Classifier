@@ -472,35 +472,6 @@ func TestCompressNodeExecutorRollbackDeleteSourceUnsupported(t *testing.T) {
 	}
 }
 
-func TestAuditLogNodeExecutorWritesLog(t *testing.T) {
-	t.Parallel()
-
-	repo := &auditRepoStub{}
-	executor := newAuditLogNodeExecutor(NewAuditService(repo))
-
-	_, err := executor.Execute(context.Background(), NodeExecutionInput{
-		WorkflowRun: &repository.WorkflowRun{ID: "run-1", JobID: "job-1"},
-		Node:        repository.WorkflowGraphNode{ID: "node-audit", Type: "audit-log", Config: map[string]any{"action": "phase4.move"}},
-		Inputs: testInputs(map[string]any{
-			"item":   ProcessingItem{FolderID: "folder-1", SourcePath: "/source/folder-1", FolderName: "folder-1"},
-			"result": MoveResult{Status: "moved"},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	if len(repo.logs) != 1 {
-		t.Fatalf("audit logs count = %d, want 1", len(repo.logs))
-	}
-	if repo.logs[0].Action != "phase4.move" {
-		t.Fatalf("audit action = %q, want %q", repo.logs[0].Action, "phase4.move")
-	}
-	if repo.logs[0].FolderID != "folder-1" {
-		t.Fatalf("audit folder_id = %q, want folder-1", repo.logs[0].FolderID)
-	}
-}
-
 func TestThumbnailNodeHelpersAndFfmpegMissing(t *testing.T) {
 	t.Parallel()
 
@@ -829,28 +800,6 @@ func TestEngineV2_AC_COMPAT1_LegacyOutputJsonRollbackCompat(t *testing.T) {
 			t.Fatalf("thumbnail should remain when rollback receives legacy array format")
 		}
 	})
-}
-
-type auditRepoStub struct {
-	logs []*repository.AuditLog
-}
-
-func (s *auditRepoStub) Write(_ context.Context, log *repository.AuditLog) error {
-	s.logs = append(s.logs, log)
-	return nil
-}
-
-func (s *auditRepoStub) List(_ context.Context, _ repository.AuditListFilter) ([]*repository.AuditLog, int, error) {
-	return append([]*repository.AuditLog(nil), s.logs...), len(s.logs), nil
-}
-
-func (s *auditRepoStub) GetByID(_ context.Context, id string) (*repository.AuditLog, error) {
-	for _, item := range s.logs {
-		if item.ID == id {
-			return item, nil
-		}
-	}
-	return nil, nil
 }
 
 func mustMkdirAll(t *testing.T, path string) {

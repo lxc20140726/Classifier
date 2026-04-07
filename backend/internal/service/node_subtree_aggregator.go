@@ -144,6 +144,18 @@ func (e *subtreeAggregatorNodeExecutor) syncSourceDirSummaryClassification(ctx c
 	if summaryCategory == "" {
 		return nil
 	}
+	summary := mediaSummary{}
+	for _, entry := range entries {
+		summary = mergeMediaSummary(summary, summarizeClassifiedEntryMedia(entry))
+	}
+	rootFolder.ImageCount = summary.imageCount
+	rootFolder.VideoCount = summary.videoCount
+	rootFolder.OtherFileCount = summary.otherFileCount
+	rootFolder.HasOtherFiles = summary.hasOtherFiles
+	rootFolder.TotalFiles = summary.totalFiles
+	if err := e.folders.Upsert(ctx, rootFolder); err != nil {
+		return fmt.Errorf("upsert source dir summary stats for folder %q: %w", rootFolder.ID, err)
+	}
 
 	snapshotID, err := e.createCategorySnapshot(ctx, input, rootFolder, sourceDir)
 	if err != nil {
@@ -203,21 +215,13 @@ func summarizeEntriesCategory(entries []ClassifiedEntry) string {
 		return ""
 	}
 
-	seen := make(map[string]struct{}, len(entries))
+	summary := mediaSummary{}
 	for _, entry := range entries {
-		category := strings.TrimSpace(entry.Category)
-		if category == "" {
-			category = "other"
-		}
-		seen[category] = struct{}{}
-	}
-	if len(seen) == 1 {
-		for category := range seen {
-			return category
-		}
+		summary = mergeMediaSummary(summary, summarizeClassifiedEntryMedia(entry))
 	}
 
-	return "mixed"
+	category, _, _ := aggregateTreeCategory(ClassificationSignal{}, summary)
+	return category
 }
 
 func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input NodeExecutionInput, tree FolderTree, signalsBySource map[string]map[string]ClassificationSignal) (ClassifiedEntry, error) {
@@ -236,12 +240,22 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 	}
 
 	bestSignal := pickBestSignalByPath(tree.Path, signalsBySource)
-	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, subtreeEntries, tree.Files)
+	summary := summarizeFolderTreeMedia(tree)
+	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, summary)
 	if finalCategory == "" {
 		finalCategory = folder.Category
 	}
 	if finalCategory == "" {
 		finalCategory = "other"
+	}
+
+	folder.ImageCount = summary.imageCount
+	folder.VideoCount = summary.videoCount
+	folder.OtherFileCount = summary.otherFileCount
+	folder.HasOtherFiles = summary.hasOtherFiles
+	folder.TotalFiles = summary.totalFiles
+	if err := e.folders.Upsert(ctx, folder); err != nil {
+		return ClassifiedEntry{}, fmt.Errorf("upsert folder stats for %q: %w", folder.ID, err)
 	}
 
 	snapshotID, err := e.createCategorySnapshot(ctx, input, folder, tree.Path)
@@ -257,15 +271,16 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 	}
 
 	entry := ClassifiedEntry{
-		FolderID:   folder.ID,
-		Path:       folder.Path,
-		Name:       folder.Name,
-		Category:   finalCategory,
-		Confidence: confidence,
-		Reason:     reason,
-		Classifier: e.Type(),
-		Files:      append([]FileEntry(nil), tree.Files...),
-		Subtree:    subtreeEntries,
+		FolderID:      folder.ID,
+		Path:          folder.Path,
+		Name:          folder.Name,
+		Category:      finalCategory,
+		Confidence:    confidence,
+		Reason:        reason,
+		Classifier:    e.Type(),
+		HasOtherFiles: summary.hasOtherFiles,
+		Files:         append([]FileEntry(nil), tree.Files...),
+		Subtree:       subtreeEntries,
 	}
 	if strings.TrimSpace(tree.Path) != "" {
 		entry.Path = tree.Path
@@ -290,64 +305,28 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 	return entry, nil
 }
 
-func aggregateTreeCategory(bestSignal ClassificationSignal, subtreeEntries []ClassifiedEntry, leafFiles []FileEntry) (string, float64, string) {
-	if len(subtreeEntries) == 0 {
-		if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) != "" {
-			return bestSignal.Category, bestSignal.Confidence, bestSignal.Reason
-		}
-		leafCategory := inferLeafCategory(leafFiles)
-		if leafCategory != "other" {
-			return leafCategory, 0.7, "leaf:ext-ratio"
-		}
-		return "other", 0, "leaf:no-signal"
+func aggregateTreeCategory(bestSignal ClassificationSignal, summary mediaSummary) (string, float64, string) {
+	if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) == "manga" {
+		return "manga", bestSignal.Confidence, bestSignal.Reason
+	}
+	if summary.hasManga {
+		return "manga", 1, "subtree:manga"
+	}
+	if summary.hasImage && summary.hasVideo {
+		return "mixed", 1, "subtree:media-mixed"
+	}
+	if summary.hasImage {
+		return "photo", 1, "subtree:image-only"
+	}
+	if summary.hasVideo {
+		return "video", 1, "subtree:video-only"
 	}
 
-	childCategories := make(map[string]struct{}, len(subtreeEntries))
-	for _, child := range subtreeEntries {
-		category := strings.TrimSpace(child.Category)
-		if category == "" {
-			category = "other"
-		}
-		childCategories[category] = struct{}{}
-	}
-
-	inferredCategory := "other"
-	if len(childCategories) == 1 {
-		for category := range childCategories {
-			inferredCategory = category
-		}
-	} else {
-		inferredCategory = "mixed"
-	}
-
-	if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) != "" && bestSignal.Confidence >= 0.8 {
+	if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) != "" {
 		return bestSignal.Category, bestSignal.Confidence, bestSignal.Reason
 	}
 
-	if inferredCategory == "mixed" {
-		return inferredCategory, 1, "subtree:mixed"
-	}
-	return inferredCategory, 1, "subtree:uniform"
-}
-
-func inferLeafCategory(files []FileEntry) string {
-	if len(files) == 0 {
-		return "other"
-	}
-
-	fileNames := make([]string, 0, len(files))
-	for _, file := range files {
-		name := strings.TrimSpace(file.Name)
-		if name == "" {
-			continue
-		}
-		fileNames = append(fileNames, name)
-	}
-	if len(fileNames) == 0 {
-		return "other"
-	}
-
-	return Classify("", fileNames)
+	return "other", 0, "subtree:no-media"
 }
 
 func (e *subtreeAggregatorNodeExecutor) ensureFolderForTree(ctx context.Context, input NodeExecutionInput, tree FolderTree) (*repository.Folder, error) {

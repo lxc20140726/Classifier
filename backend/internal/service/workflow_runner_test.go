@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -92,6 +94,11 @@ type resumeDataMergeExecutor struct {
 
 type processingItemSourceExecutor struct {
 	items []ProcessingItem
+}
+
+type classifiedEntrySourceExecutor struct {
+	nodeType string
+	entry    ClassifiedEntry
 }
 
 type processingItemListProducerExecutor struct {
@@ -329,6 +336,41 @@ func (e *processingItemSourceExecutor) Resume(_ context.Context, _ NodeExecution
 }
 
 func (e *processingItemSourceExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *classifiedEntrySourceExecutor) Type() string {
+	if e.nodeType != "" {
+		return e.nodeType
+	}
+	return "classified-entry-source"
+}
+
+func (e *classifiedEntrySourceExecutor) Schema() NodeSchema {
+	return NodeSchema{
+		Type:        e.Type(),
+		Label:       "Classified Entry Source",
+		Description: "Emit one classified entry for processing-flow tests",
+		Outputs: []PortDef{
+			{Name: "entry", Type: PortTypeJSON, RequiredOutput: true},
+		},
+	}
+}
+
+func (e *classifiedEntrySourceExecutor) Execute(_ context.Context, _ NodeExecutionInput) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{
+			"entry": {Type: PortTypeJSON, Value: e.entry},
+		},
+		Status: ExecutionSuccess,
+	}, nil
+}
+
+func (e *classifiedEntrySourceExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
+	return NodeExecutionOutput{}, nil
+}
+
+func (e *classifiedEntrySourceExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
 }
 
@@ -1554,6 +1596,342 @@ func TestWorkflowRunnerServiceSingleCategoryBranchesAutoSkip(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+	snapshotRepo := repository.NewSnapshotRepository(database)
+	auditRepo := repository.NewAuditRepository(database)
+	auditSvc := NewAuditService(auditRepo)
+
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "source")
+	targetRoot := filepath.Join(root, "target")
+	mixedParentPath := filepath.Join(sourceRoot, "活动记录", "婚礼")
+	videoLeafPath := filepath.Join(mixedParentPath, "原片视频")
+	photoLeafPath := filepath.Join(mixedParentPath, "相册照片")
+	mixedLeafPath := filepath.Join(mixedParentPath, "混合精选")
+
+	writeFile := func(path string) {
+		t.Helper()
+		mustMkdirAll(t, filepath.Dir(path))
+		if err := os.WriteFile(path, []byte("fixture"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+		}
+	}
+	writeFile(filepath.Join(videoLeafPath, "clip01.mp4"))
+	writeFile(filepath.Join(videoLeafPath, "clip02.mkv"))
+	writeFile(filepath.Join(photoLeafPath, "p1.jpg"))
+	writeFile(filepath.Join(photoLeafPath, "p2.png"))
+	writeFile(filepath.Join(mixedLeafPath, "highlight.mp4"))
+	writeFile(filepath.Join(mixedLeafPath, "cover.jpg"))
+
+	videoTargetDir := normalizeWorkflowPath(filepath.Join(targetRoot, "video"))
+	videoThumbDir := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "thumbs"))
+	photoTargetDir := normalizeWorkflowPath(filepath.Join(targetRoot, "photo"))
+	photoArchiveDir := normalizeWorkflowPath(filepath.Join(targetRoot, "photo", "archives"))
+	mixedThumbDir := normalizeWorkflowPath(filepath.Join(targetRoot, "mixed", "thumbs"))
+	mixedArchiveDir := normalizeWorkflowPath(filepath.Join(targetRoot, "mixed", "archives"))
+
+	entrySource := &classifiedEntrySourceExecutor{
+		nodeType: "classified-entry-source",
+		entry: ClassifiedEntry{
+			Path:     normalizeWorkflowPath(mixedParentPath),
+			Name:     "婚礼",
+			Category: "mixed",
+			Subtree: []ClassifiedEntry{
+				{Path: normalizeWorkflowPath(videoLeafPath), Name: "原片视频", Category: "video"},
+				{Path: normalizeWorkflowPath(photoLeafPath), Name: "相册照片", Category: "photo"},
+				{Path: normalizeWorkflowPath(mixedLeafPath), Name: "混合精选", Category: "mixed"},
+			},
+		},
+	}
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "src", Type: entrySource.Type(), Enabled: true},
+			{ID: "reader", Type: classificationReaderExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"entry": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "src", SourcePort: "entry"}},
+			}},
+			{ID: "split", Type: folderSplitterExecutorType, Enabled: true, Config: map[string]any{
+				"split_mixed":        true,
+				"split_with_subdirs": true,
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"entry": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "reader", SourcePort: "entry"}},
+			}},
+			{ID: "router", Type: categoryRouterExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "split", SourcePort: "items"}},
+			}},
+			{ID: "rename-video", Type: renameNodeExecutorType, Enabled: true, Config: map[string]any{
+				"strategy": "template",
+				"template": "{name}",
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "video"}},
+			}},
+			{ID: "move-video", Type: phase4MoveNodeExecutorType, Enabled: true, Config: map[string]any{
+				"target_dir": videoTargetDir,
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename-video", SourcePort: "items"}},
+			}},
+			{ID: "thumbnail-video", Type: thumbnailNodeExecutorType, Enabled: true, Config: map[string]any{
+				"output_dir": videoThumbDir,
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "move-video", SourcePort: "items"}},
+			}},
+			{ID: "rename-photo", Type: renameNodeExecutorType, Enabled: true, Config: map[string]any{
+				"strategy": "template",
+				"template": "{name}",
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "photo"}},
+			}},
+			{ID: "move-photo", Type: phase4MoveNodeExecutorType, Enabled: true, Config: map[string]any{
+				"target_dir": photoTargetDir,
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "rename-photo", SourcePort: "items"}},
+			}},
+			{ID: "compress-photo", Type: compressNodeExecutorType, Enabled: true, Config: map[string]any{
+				"target_dir": photoArchiveDir,
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "move-photo", SourcePort: "items"}},
+			}},
+			{ID: "thumbnail-mixed", Type: thumbnailNodeExecutorType, Enabled: true, Config: map[string]any{
+				"output_dir": mixedThumbDir,
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "mixed_leaf"}},
+			}},
+			{ID: "compress-mixed", Type: compressNodeExecutorType, Enabled: true, Config: map[string]any{
+				"target_dir": mixedArchiveDir,
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "mixed_leaf"}},
+			}},
+			{ID: "mixed-collect", Type: collectNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items_1": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "thumbnail-mixed", SourcePort: "items"}},
+				"items_2": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "compress-mixed", SourcePort: "items"}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e-src-reader", Source: "src", SourcePort: "entry", Target: "reader", TargetPort: "entry"},
+			{ID: "e-reader-split", Source: "reader", SourcePort: "entry", Target: "split", TargetPort: "entry"},
+			{ID: "e-split-router", Source: "split", SourcePort: "items", Target: "router", TargetPort: "items"},
+			{ID: "e-router-rename-video", Source: "router", SourcePort: "video", Target: "rename-video", TargetPort: "items"},
+			{ID: "e-rename-video-move", Source: "rename-video", SourcePort: "items", Target: "move-video", TargetPort: "items"},
+			{ID: "e-move-video-thumb", Source: "move-video", SourcePort: "items", Target: "thumbnail-video", TargetPort: "items"},
+			{ID: "e-router-rename-photo", Source: "router", SourcePort: "photo", Target: "rename-photo", TargetPort: "items"},
+			{ID: "e-rename-photo-move", Source: "rename-photo", SourcePort: "items", Target: "move-photo", TargetPort: "items"},
+			{ID: "e-move-photo-compress", Source: "move-photo", SourcePort: "items", Target: "compress-photo", TargetPort: "items"},
+			{ID: "e-router-mixed-thumb", Source: "router", SourcePort: "mixed_leaf", Target: "thumbnail-mixed", TargetPort: "items"},
+			{ID: "e-router-mixed-compress", Source: "router", SourcePort: "mixed_leaf", Target: "compress-mixed", TargetPort: "items"},
+			{ID: "e-mixed-thumb-collect", Source: "thumbnail-mixed", SourcePort: "items", Target: "mixed-collect", TargetPort: "items_1"},
+			{ID: "e-mixed-compress-collect", Source: "compress-mixed", SourcePort: "items", Target: "mixed-collect", TargetPort: "items_2"},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-complex-mixed-leaf-fanout", Name: "wf-complex-mixed-leaf-fanout", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	adapter := fs.NewOSAdapter()
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, snapshotRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, auditSvc)
+	svc.RegisterExecutor(entrySource)
+	testThumbnailExecutor := newThumbnailNodeExecutor(adapter, folderRepo)
+	testThumbnailExecutor.lookPath = func(string) (string, error) {
+		return "/usr/bin/ffmpeg", nil
+	}
+	testThumbnailExecutor.runFFmpeg = func(ctx context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) == 0 {
+			return nil, nil
+		}
+		outputPath := args[len(args)-1]
+		writer, err := adapter.OpenFileWrite(ctx, outputPath, 0o644)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := writer.Write([]byte("thumb")); err != nil {
+			_ = writer.Close()
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+
+		return nil, nil
+	}
+	svc.RegisterExecutor(testThumbnailExecutor)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+		nodeRuns, _, listErr := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 80})
+		if listErr != nil {
+			t.Fatalf("job status = %q, want succeeded; failed listing node runs: %v", job.Status, listErr)
+		}
+		t.Fatalf("job status = %q, want succeeded (workflow_run_status=%q resume_node_id=%q node_runs=%v)", job.Status, run.Status, run.ResumeNodeID, compactNodeRuns(nodeRuns))
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	nodeRuns, _, err := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 80})
+	if err != nil {
+		t.Fatalf("nodeRunRepo.List() error = %v", err)
+	}
+
+	for _, nodeID := range []string{"split", "router", "rename-video", "move-video", "thumbnail-video", "rename-photo", "move-photo", "compress-photo", "thumbnail-mixed", "compress-mixed", "mixed-collect"} {
+		if got := nodeRunStatusByID(nodeRuns, nodeID); got != "succeeded" {
+			t.Fatalf("%s status = %q, want succeeded", nodeID, got)
+		}
+	}
+
+	splitRun := nodeRunByID(nodeRuns, "split")
+	if splitRun == nil {
+		t.Fatalf("split node run not found")
+	}
+	splitOutputs, typed, err := parseTypedNodeOutputs(splitRun.OutputJSON)
+	if err != nil {
+		t.Fatalf("parse split output error = %v", err)
+	}
+	if !typed {
+		t.Fatalf("split output is not typed")
+	}
+	splitItems, ok := categoryRouterToItems(splitOutputs["items"].Value)
+	if !ok {
+		t.Fatalf("split items output type = %T, want processing items", splitOutputs["items"].Value)
+	}
+	if len(splitItems) != 3 {
+		t.Fatalf("split items len = %d, want 3", len(splitItems))
+	}
+	splitPathSet := map[string]struct{}{}
+	for _, item := range splitItems {
+		splitPathSet[normalizeWorkflowPath(item.SourcePath)] = struct{}{}
+	}
+	if _, exists := splitPathSet[normalizeWorkflowPath(mixedParentPath)]; exists {
+		t.Fatalf("split output should not contain non-leaf mixed path %q", mixedParentPath)
+	}
+	for _, expected := range []string{normalizeWorkflowPath(videoLeafPath), normalizeWorkflowPath(photoLeafPath), normalizeWorkflowPath(mixedLeafPath)} {
+		if _, exists := splitPathSet[expected]; !exists {
+			t.Fatalf("split output missing expected leaf path %q", expected)
+		}
+	}
+
+	routerRun := nodeRunByID(nodeRuns, "router")
+	if routerRun == nil {
+		t.Fatalf("router node run not found")
+	}
+	routerOutputs, typed, err := parseTypedNodeOutputs(routerRun.OutputJSON)
+	if err != nil {
+		t.Fatalf("parse router output error = %v", err)
+	}
+	if !typed {
+		t.Fatalf("router output is not typed")
+	}
+	mixedLeafItems, ok := categoryRouterToItems(routerOutputs["mixed_leaf"].Value)
+	if !ok {
+		t.Fatalf("router mixed_leaf output type = %T, want processing items", routerOutputs["mixed_leaf"].Value)
+	}
+	if len(mixedLeafItems) != 1 {
+		t.Fatalf("router mixed_leaf len = %d, want 1", len(mixedLeafItems))
+	}
+	if got := normalizeWorkflowPath(mixedLeafItems[0].SourcePath); got != normalizeWorkflowPath(mixedLeafPath) {
+		t.Fatalf("router mixed_leaf source_path = %q, want %q", got, normalizeWorkflowPath(mixedLeafPath))
+	}
+
+	videoMovedPath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "原片视频"))
+	photoMovedPath := normalizeWorkflowPath(filepath.Join(targetRoot, "photo", "相册照片"))
+	mixedUnexpectedMovePath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "混合精选"))
+	if !pathExists(t, videoMovedPath) {
+		t.Fatalf("video moved path %q should exist", videoMovedPath)
+	}
+	if !pathExists(t, photoMovedPath) {
+		t.Fatalf("photo moved path %q should exist", photoMovedPath)
+	}
+	if pathExists(t, mixedUnexpectedMovePath) {
+		t.Fatalf("mixed leaf path should not be moved to %q", mixedUnexpectedMovePath)
+	}
+
+	videoThumbPath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "thumbs", "原片视频.jpg"))
+	photoArchivePath := normalizeWorkflowPath(filepath.Join(targetRoot, "photo", "archives", "相册照片.cbz"))
+	mixedThumbPath := normalizeWorkflowPath(filepath.Join(targetRoot, "mixed", "thumbs", "混合精选.jpg"))
+	mixedArchivePath := normalizeWorkflowPath(filepath.Join(targetRoot, "mixed", "archives", "混合精选.cbz"))
+	if !pathExists(t, videoThumbPath) {
+		t.Fatalf("video thumbnail path %q should exist", videoThumbPath)
+	}
+	if !pathExists(t, photoArchivePath) {
+		t.Fatalf("photo archive path %q should exist", photoArchivePath)
+	}
+	if !pathExists(t, mixedThumbPath) {
+		t.Fatalf("mixed thumbnail path %q should exist", mixedThumbPath)
+	}
+	if !pathExists(t, mixedArchivePath) {
+		t.Fatalf("mixed archive path %q should exist", mixedArchivePath)
+	}
+
+	if pathExists(t, normalizeWorkflowPath(videoLeafPath)) {
+		t.Fatalf("source video leaf %q should not exist after move", normalizeWorkflowPath(videoLeafPath))
+	}
+	if pathExists(t, normalizeWorkflowPath(photoLeafPath)) {
+		t.Fatalf("source photo leaf %q should not exist after move", normalizeWorkflowPath(photoLeafPath))
+	}
+	if !pathExists(t, normalizeWorkflowPath(mixedLeafPath)) {
+		t.Fatalf("mixed leaf %q should remain in source path", normalizeWorkflowPath(mixedLeafPath))
+	}
+
+	remainingEntries, err := os.ReadDir(mixedLeafPath)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", mixedLeafPath, err)
+	}
+	if len(remainingEntries) == 0 {
+		t.Fatalf("mixed leaf %q should remain non-empty after processing", mixedLeafPath)
+	}
+
+	logs, _, err := auditRepo.List(ctx, repository.AuditListFilter{
+		JobID:  jobID,
+		Action: "workflow.compress-node",
+		Page:   1,
+		Limit:  20,
+	})
+	if err != nil {
+		t.Fatalf("auditRepo.List() error = %v", err)
+	}
+	foundMixedCompress := false
+	for _, log := range logs {
+		if normalizeWorkflowPath(log.FolderPath) != normalizeWorkflowPath(mixedArchivePath) {
+			continue
+		}
+		if log.Result != "success" {
+			continue
+		}
+		foundMixedCompress = true
+		break
+	}
+	if !foundMixedCompress {
+		t.Fatalf("missing mixed compress audit log for %q", normalizeWorkflowPath(mixedArchivePath))
+	}
+}
+
+func nodeRunByID(nodeRuns []*repository.NodeRun, nodeID string) *repository.NodeRun {
+	for _, nodeRun := range nodeRuns {
+		if nodeRun.NodeID == nodeID {
+			return nodeRun
+		}
+	}
+
+	return nil
 }
 
 func waitJobDone(t *testing.T, jobRepo repository.JobRepository, jobID string) *repository.Job {

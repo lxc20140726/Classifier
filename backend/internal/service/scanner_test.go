@@ -111,6 +111,9 @@ func TestScan(t *testing.T) {
 				if folder.ImageCount != 2 || folder.VideoCount != 0 || folder.TotalFiles != 3 {
 					t.Fatalf("counts = image:%d video:%d total:%d, want 2/0/3", folder.ImageCount, folder.VideoCount, folder.TotalFiles)
 				}
+				if folder.OtherFileCount != 1 || !folder.HasOtherFiles {
+					t.Fatalf("other stats = count:%d has:%v, want 1/true", folder.OtherFileCount, folder.HasOtherFiles)
+				}
 
 				if folder.TotalSize != 350 {
 					t.Fatalf("folder.TotalSize = %d, want 350", folder.TotalSize)
@@ -152,6 +155,9 @@ func TestScan(t *testing.T) {
 				if folder.ImageCount != 1 || folder.VideoCount != 1 || folder.TotalFiles != 2 {
 					t.Fatalf("counts = image:%d video:%d total:%d, want 1/1/2", folder.ImageCount, folder.VideoCount, folder.TotalFiles)
 				}
+				if folder.OtherFileCount != 0 || folder.HasOtherFiles {
+					t.Fatalf("other stats = count:%d has:%v, want 0/false", folder.OtherFileCount, folder.HasOtherFiles)
+				}
 
 				if folder.TotalSize != 420 {
 					t.Fatalf("folder.TotalSize = %d, want 420", folder.TotalSize)
@@ -188,6 +194,47 @@ func TestScan(t *testing.T) {
 				}
 				if folder.TotalFiles != 2 || folder.ImageCount != 1 || folder.VideoCount != 1 {
 					t.Fatalf("counts = image:%d video:%d total:%d, want 1/1/2", folder.ImageCount, folder.VideoCount, folder.TotalFiles)
+				}
+				if folder.Category != "mixed" {
+					t.Fatalf("folder.Category = %q, want mixed", folder.Category)
+				}
+			},
+		},
+		{
+			name: "parent directory becomes mixed from photo and video subtrees",
+			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
+				t.Helper()
+
+				rootPath := filepath.Join(sourceDir, "library")
+				photoPath := filepath.Join(rootPath, "photos")
+				videoPath := filepath.Join(rootPath, "videos")
+				adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "library", IsDir: true}})
+				adapter.AddDir(rootPath, []fs.DirEntry{
+					{Name: "photos", IsDir: true},
+					{Name: "videos", IsDir: true},
+				})
+				adapter.AddDir(photoPath, []fs.DirEntry{{Name: "a.jpg", IsDir: false}})
+				adapter.AddDir(videoPath, []fs.DirEntry{{Name: "b.mp4", IsDir: false}, {Name: "note.txt", IsDir: false}})
+				adapter.AddFile(filepath.Join(photoPath, "a.jpg"), 120)
+				adapter.AddFile(filepath.Join(videoPath, "b.mp4"), 500)
+				adapter.AddFile(filepath.Join(videoPath, "note.txt"), 20)
+			},
+			wantCount: 1,
+			assert: func(t *testing.T, repo repository.FolderRepository, sourceDir string) {
+				t.Helper()
+				path := filepath.Join(sourceDir, "library")
+				folder, err := repo.GetByPath(context.Background(), path)
+				if err != nil {
+					t.Fatalf("GetByPath(%q) error = %v", path, err)
+				}
+				if folder.Category != "mixed" {
+					t.Fatalf("folder.Category = %q, want mixed", folder.Category)
+				}
+				if folder.ImageCount != 1 || folder.VideoCount != 1 || folder.OtherFileCount != 1 || folder.TotalFiles != 3 {
+					t.Fatalf("counts = image:%d video:%d other:%d total:%d, want 1/1/1/3", folder.ImageCount, folder.VideoCount, folder.OtherFileCount, folder.TotalFiles)
+				}
+				if !folder.HasOtherFiles {
+					t.Fatalf("folder.HasOtherFiles = false, want true")
 				}
 			},
 		},

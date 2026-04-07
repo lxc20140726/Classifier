@@ -141,7 +141,6 @@ func TestSeedDefaultProcessingWorkflow_CreatesExpectedGraphAndIsIdempotent(t *te
 		"rename-node",
 		"compress-node",
 		"move-node",
-		"audit-log",
 	}
 	if len(gotTypes) != len(wantTypes) {
 		t.Fatalf("node count = %d, want %d; got %v", len(gotTypes), len(wantTypes), gotTypes)
@@ -271,7 +270,6 @@ func TestSeedGenericProcessingWorkflow_CreatesExpectedGraphAndIsIdempotent(t *te
 		"rename-node",
 		"collect-node",
 		"move-node",
-		"audit-log",
 	}
 	if len(gotTypes) != len(wantTypes) {
 		t.Fatalf("node count = %d, want %d; got %v", len(gotTypes), len(wantTypes), gotTypes)
@@ -351,5 +349,135 @@ func TestSeedGenericProcessingWorkflow_DoesNotDuplicateWithOtherSeededFlows(t *t
 	}
 	if total != 3 || len(items) != 3 {
 		t.Fatalf("workflow count = total:%d len:%d, want 3", total, len(items))
+	}
+}
+
+func TestSeedGenericProcessingWorkflow_DoesNotOverwriteExistingGraph(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	repo := repository.NewWorkflowDefinitionRepository(database)
+
+	customGraph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{
+				ID:      "custom-trigger",
+				Type:    "trigger",
+				Config:  map[string]any{},
+				Inputs:  map[string]repository.NodeInputSpec{},
+				Enabled: true,
+			},
+		},
+		Edges: []repository.WorkflowGraphEdge{},
+	}
+	customGraphBytes, err := json.Marshal(customGraph)
+	if err != nil {
+		t.Fatalf("json.Marshal(customGraph) error = %v", err)
+	}
+
+	if err := repo.Create(ctx, &repository.WorkflowDefinition{
+		ID:          "wf-custom-generic",
+		Name:        "通用处理流程",
+		Description: "用户自定义版本",
+		GraphJSON:   string(customGraphBytes),
+		IsActive:    true,
+		Version:     7,
+	}); err != nil {
+		t.Fatalf("repo.Create() error = %v", err)
+	}
+
+	if err := SeedGenericProcessingWorkflow(ctx, repo); err != nil {
+		t.Fatalf("SeedGenericProcessingWorkflow() error = %v", err)
+	}
+
+	item, err := workflowDefinitionByName(ctx, repo, "通用处理流程")
+	if err != nil {
+		t.Fatalf("workflowDefinitionByName() error = %v", err)
+	}
+	if item == nil {
+		t.Fatalf("workflowDefinitionByName() = nil, want existing item")
+	}
+	if item.ID != "wf-custom-generic" {
+		t.Fatalf("item.ID = %q, want wf-custom-generic", item.ID)
+	}
+	if item.Description != "用户自定义版本" {
+		t.Fatalf("item.Description = %q, want 用户自定义版本", item.Description)
+	}
+	if item.GraphJSON != string(customGraphBytes) {
+		t.Fatalf("item.GraphJSON was overwritten")
+	}
+	if !item.IsActive {
+		t.Fatalf("item.IsActive = false, want true")
+	}
+	if item.Version != 7 {
+		t.Fatalf("item.Version = %d, want 7", item.Version)
+	}
+}
+
+func TestSeedBuiltinWorkflows_DoesNotRecreateDeletedDefinitionsAfterInitialized(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	workflowRepo := repository.NewWorkflowDefinitionRepository(database)
+	configRepo := repository.NewConfigRepository(database)
+
+	if err := configRepo.Set(ctx, workflowSeedInitializedKey, "1"); err != nil {
+		t.Fatalf("configRepo.Set(seed marker) error = %v", err)
+	}
+	if err := SeedBuiltinWorkflows(ctx, workflowRepo, configRepo); err != nil {
+		t.Fatalf("SeedBuiltinWorkflows() error = %v", err)
+	}
+
+	items, total, err := workflowRepo.List(ctx, repository.WorkflowDefListFilter{Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("workflowRepo.List() error = %v", err)
+	}
+	if total != 0 || len(items) != 0 {
+		t.Fatalf("workflow count = total:%d len:%d, want 0", total, len(items))
+	}
+}
+
+func TestSeedBuiltinWorkflows_SetsMarkerWithoutSeedingWhenDefinitionsExist(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	workflowRepo := repository.NewWorkflowDefinitionRepository(database)
+	configRepo := repository.NewConfigRepository(database)
+
+	if err := workflowRepo.Create(ctx, &repository.WorkflowDefinition{
+		ID:          "wf-manual",
+		Name:        "用户自定义流程",
+		Description: "manual",
+		GraphJSON:   `{"nodes":[],"edges":[]}`,
+		IsActive:    true,
+		Version:     1,
+	}); err != nil {
+		t.Fatalf("workflowRepo.Create() error = %v", err)
+	}
+
+	if err := SeedBuiltinWorkflows(ctx, workflowRepo, configRepo); err != nil {
+		t.Fatalf("SeedBuiltinWorkflows() error = %v", err)
+	}
+
+	items, total, err := workflowRepo.List(ctx, repository.WorkflowDefListFilter{Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("workflowRepo.List() error = %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("workflow count = total:%d len:%d, want 1", total, len(items))
+	}
+	if items[0].Name != "用户自定义流程" {
+		t.Fatalf("items[0].Name = %q, want 用户自定义流程", items[0].Name)
+	}
+
+	marker, err := configRepo.Get(ctx, workflowSeedInitializedKey)
+	if err != nil {
+		t.Fatalf("configRepo.Get(seed marker) error = %v", err)
+	}
+	if marker != "1" {
+		t.Fatalf("seed marker = %q, want 1", marker)
 	}
 }

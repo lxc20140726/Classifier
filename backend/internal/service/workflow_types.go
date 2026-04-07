@@ -23,15 +23,16 @@ type ClassificationSignal struct {
 }
 
 type ClassifiedEntry struct {
-	FolderID   string            `json:"folder_id"`
-	Path       string            `json:"path"`
-	Name       string            `json:"name"`
-	Category   string            `json:"category"`
-	Confidence float64           `json:"confidence"`
-	Reason     string            `json:"reason"`
-	Classifier string            `json:"classifier"`
-	Files      []FileEntry       `json:"files"`
-	Subtree    []ClassifiedEntry `json:"subtree,omitempty"`
+	FolderID      string            `json:"folder_id"`
+	Path          string            `json:"path"`
+	Name          string            `json:"name"`
+	Category      string            `json:"category"`
+	Confidence    float64           `json:"confidence"`
+	Reason        string            `json:"reason"`
+	Classifier    string            `json:"classifier"`
+	HasOtherFiles bool              `json:"has_other_files"`
+	Files         []FileEntry       `json:"files"`
+	Subtree       []ClassifiedEntry `json:"subtree,omitempty"`
 }
 
 type ProcessingItem struct {

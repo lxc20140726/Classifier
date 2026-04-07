@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,6 +19,14 @@ type stubWorkflowRunReader struct {
 	resumeWithDataRunID  string
 	resumeWithData       map[string]any
 	resumeWithDataErr    error
+	reviewsResp          *service.ProcessingReviewList
+	reviewsErr           error
+	approveErr           error
+	rollbackReviewErr    error
+	approveRunID         string
+	approveReviewID      string
+	rollbackRunID        string
+	rollbackReviewID     string
 }
 
 func (s *stubWorkflowRunReader) ListWorkflowRuns(_ context.Context, _ string, _ int, _ int) ([]*repository.WorkflowRun, int, error) {
@@ -30,6 +39,25 @@ func (s *stubWorkflowRunReader) GetWorkflowRunDetail(_ context.Context, _ string
 
 func (s *stubWorkflowRunReader) ResumeWorkflowRun(_ context.Context, _ string) error {
 	return nil
+}
+
+func (s *stubWorkflowRunReader) ListProcessingReviews(_ context.Context, _ string) (*service.ProcessingReviewList, error) {
+	if s.reviewsResp != nil || s.reviewsErr != nil {
+		return s.reviewsResp, s.reviewsErr
+	}
+	return &service.ProcessingReviewList{}, nil
+}
+
+func (s *stubWorkflowRunReader) ApproveProcessingReview(_ context.Context, runID, reviewID string) error {
+	s.approveRunID = runID
+	s.approveReviewID = reviewID
+	return s.approveErr
+}
+
+func (s *stubWorkflowRunReader) RollbackProcessingReview(_ context.Context, runID, reviewID string) error {
+	s.rollbackRunID = runID
+	s.rollbackReviewID = reviewID
+	return s.rollbackReviewErr
 }
 
 func (s *stubWorkflowRunReader) ResumeWorkflowRunWithData(_ context.Context, runID string, resumeData map[string]any) error {
@@ -47,6 +75,9 @@ func setupWorkflowRunRouter(reader WorkflowRunReader) *gin.Engine {
 	r := gin.New()
 	h := NewWorkflowRunHandler(reader)
 	r.POST("/workflow-runs/:id/provide-input", h.ProvideInput)
+	r.GET("/workflow-runs/:id/reviews", h.ListReviews)
+	r.POST("/workflow-runs/:id/reviews/:reviewId/approve", h.ApproveReview)
+	r.POST("/workflow-runs/:id/reviews/:reviewId/rollback", h.RollbackReview)
 	return r
 }
 
@@ -98,5 +129,88 @@ func TestWorkflowRunHandler_ProvideInput_InvalidCategory(t *testing.T) {
 	}
 	if reader.resumeWithDataCalled {
 		t.Fatalf("ResumeWorkflowRunWithData called = true, want false")
+	}
+}
+
+func TestWorkflowRunHandler_ListReviews_OK(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	reader := &stubWorkflowRunReader{
+		reviewsResp: &service.ProcessingReviewList{
+			Items: []*repository.ProcessingReviewItem{
+				{ID: "review-1", WorkflowRunID: "run-1", Status: "pending"},
+			},
+			Summary: &service.ProcessingReviewSummary{Total: 1, Pending: 1},
+		},
+	}
+	router := setupWorkflowRunRouter(reader)
+
+	req := httptest.NewRequest(http.MethodGet, "/workflow-runs/run-1/reviews", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp struct {
+		Data    []map[string]any              `json:"data"`
+		Summary service.ProcessingReviewSummary `json:"summary"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("data len = %d, want 1", len(resp.Data))
+	}
+	if resp.Summary.Pending != 1 {
+		t.Fatalf("summary.pending = %d, want 1", resp.Summary.Pending)
+	}
+}
+
+func TestWorkflowRunHandler_ApproveAndRollbackReview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	reader := &stubWorkflowRunReader{}
+	router := setupWorkflowRunRouter(reader)
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/workflow-runs/run-1/reviews/review-1/approve", nil)
+	approveW := httptest.NewRecorder()
+	router.ServeHTTP(approveW, approveReq)
+	if approveW.Code != http.StatusOK {
+		t.Fatalf("approve status = %d, want %d", approveW.Code, http.StatusOK)
+	}
+	if reader.approveRunID != "run-1" || reader.approveReviewID != "review-1" {
+		t.Fatalf("approve args = (%q,%q), want (run-1,review-1)", reader.approveRunID, reader.approveReviewID)
+	}
+
+	rollbackReq := httptest.NewRequest(http.MethodPost, "/workflow-runs/run-1/reviews/review-2/rollback", nil)
+	rollbackW := httptest.NewRecorder()
+	router.ServeHTTP(rollbackW, rollbackReq)
+	if rollbackW.Code != http.StatusOK {
+		t.Fatalf("rollback status = %d, want %d", rollbackW.Code, http.StatusOK)
+	}
+	if reader.rollbackRunID != "run-1" || reader.rollbackReviewID != "review-2" {
+		t.Fatalf("rollback args = (%q,%q), want (run-1,review-2)", reader.rollbackRunID, reader.rollbackReviewID)
+	}
+}
+
+func TestWorkflowRunHandler_ReviewNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	reader := &stubWorkflowRunReader{approveErr: repository.ErrNotFound, rollbackReviewErr: repository.ErrNotFound}
+	router := setupWorkflowRunRouter(reader)
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/workflow-runs/run-1/reviews/review-missing/approve", nil)
+	approveW := httptest.NewRecorder()
+	router.ServeHTTP(approveW, approveReq)
+	if approveW.Code != http.StatusNotFound {
+		t.Fatalf("approve status = %d, want %d", approveW.Code, http.StatusNotFound)
+	}
+
+	rollbackReq := httptest.NewRequest(http.MethodPost, "/workflow-runs/run-1/reviews/review-missing/rollback", nil)
+	rollbackW := httptest.NewRecorder()
+	router.ServeHTTP(rollbackW, rollbackReq)
+	if rollbackW.Code != http.StatusNotFound {
+		t.Fatalf("rollback status = %d, want %d", rollbackW.Code, http.StatusNotFound)
 	}
 }

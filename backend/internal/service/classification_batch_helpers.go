@@ -200,3 +200,18 @@ func asFloat64(value any) float64 {
 		return 0
 	}
 }
+
+func asBool(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	default:
+		return false
+	}
+}

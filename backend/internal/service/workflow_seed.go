@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,44 @@ import (
 
 	"github.com/liqiye/classifier/internal/repository"
 )
+
+const workflowSeedInitializedKey = "workflow_seed_initialized"
+
+func SeedBuiltinWorkflows(
+	ctx context.Context,
+	workflowRepo repository.WorkflowDefinitionRepository,
+	configRepo repository.ConfigRepository,
+) error {
+	seedMarker, err := configRepo.Get(ctx, workflowSeedInitializedKey)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("seedBuiltinWorkflows read seed marker: %w", err)
+	}
+	if strings.TrimSpace(seedMarker) == "1" {
+		return nil
+	}
+
+	items, _, err := workflowRepo.List(ctx, repository.WorkflowDefListFilter{Page: 1, Limit: 1})
+	if err != nil {
+		return fmt.Errorf("seedBuiltinWorkflows list definitions: %w", err)
+	}
+	if len(items) == 0 {
+		if err := SeedDefaultWorkflow(ctx, workflowRepo); err != nil {
+			return fmt.Errorf("seedBuiltinWorkflows seed default workflow: %w", err)
+		}
+		if err := SeedDefaultProcessingWorkflow(ctx, workflowRepo); err != nil {
+			return fmt.Errorf("seedBuiltinWorkflows seed default processing workflow: %w", err)
+		}
+		if err := SeedGenericProcessingWorkflow(ctx, workflowRepo); err != nil {
+			return fmt.Errorf("seedBuiltinWorkflows seed generic processing workflow: %w", err)
+		}
+	}
+
+	if err := configRepo.Set(ctx, workflowSeedInitializedKey, "1"); err != nil {
+		return fmt.Errorf("seedBuiltinWorkflows persist seed marker: %w", err)
+	}
+
+	return nil
+}
 
 func SeedDefaultWorkflow(ctx context.Context, repo repository.WorkflowDefinitionRepository) error {
 	items, _, err := repo.List(ctx, repository.WorkflowDefListFilter{Limit: 1})
@@ -220,19 +259,6 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-compress", SourcePort: "items"}}},
 				Enabled: true,
 			},
-			{
-				ID:   "p-audit",
-				Type: "audit-log",
-				Config: map[string]any{
-					"action": "phase4.processing",
-					"level":  "info",
-				},
-				Inputs: map[string]repository.NodeInputSpec{
-					"item":   {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-move", SourcePort: "items"}},
-					"result": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-move", SourcePort: "results"}},
-				},
-				Enabled: true,
-			},
 		},
 		Edges: []repository.WorkflowGraphEdge{
 			{ID: "e-reader-split", Source: "p-reader", SourcePort: "entry", Target: "p-split", TargetPort: "entry"},
@@ -241,8 +267,6 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 			{ID: "e-thumbnail-rename", Source: "p-thumbnail", SourcePort: "items", Target: "p-rename", TargetPort: "items"},
 			{ID: "e-rename-compress", Source: "p-rename", SourcePort: "items", Target: "p-compress", TargetPort: "items"},
 			{ID: "e-compress-move", Source: "p-compress", SourcePort: "items", Target: "p-move", TargetPort: "items"},
-			{ID: "e-move-audit-item", Source: "p-move", SourcePort: "items", Target: "p-audit", TargetPort: "item"},
-			{ID: "e-move-audit-result", Source: "p-move", SourcePort: "results", Target: "p-audit", TargetPort: "result"},
 		},
 	}
 
@@ -370,18 +394,6 @@ func SeedGenericProcessingWorkflow(ctx context.Context, repo repository.Workflow
 				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-collect", SourcePort: "items"}}},
 				Enabled: true,
 			},
-			{
-				ID:   "g-audit",
-				Type: "audit-log",
-				Config: map[string]any{
-					"action": "phase4.processing.generic",
-					"level":  "info",
-				},
-				Inputs: map[string]repository.NodeInputSpec{
-					"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "g-move", SourcePort: "items"}},
-				},
-				Enabled: true,
-			},
 		},
 		Edges: []repository.WorkflowGraphEdge{
 			{ID: "e-reader-split", Source: "g-reader", SourcePort: "entry", Target: "g-split", TargetPort: "entry"},
@@ -397,7 +409,6 @@ func SeedGenericProcessingWorkflow(ctx context.Context, repo repository.Workflow
 			{ID: "e-rename-other-collect", Source: "g-rename-other", SourcePort: "items", Target: "g-collect", TargetPort: "items_4"},
 			{ID: "e-rename-mixed-collect", Source: "g-rename-mixed", SourcePort: "items", Target: "g-collect", TargetPort: "items_5"},
 			{ID: "e-collect-move", Source: "g-collect", SourcePort: "items", Target: "g-move", TargetPort: "items"},
-			{ID: "e-move-audit-items", Source: "g-move", SourcePort: "items", Target: "g-audit", TargetPort: "items"},
 		},
 	}
 
@@ -411,21 +422,14 @@ func SeedGenericProcessingWorkflow(ctx context.Context, repo repository.Workflow
 		return fmt.Errorf("seedGenericProcessingWorkflow get existing workflow: %w", err)
 	}
 	if existing != nil {
-		existing.Description = "按类别路由并统一收集合并后执行重命名、移动与审计"
-		existing.GraphJSON = string(graphBytes)
-		if existing.Version <= 0 {
-			existing.Version = 1
-		}
-		if err := repo.Update(ctx, existing); err != nil {
-			return fmt.Errorf("seedGenericProcessingWorkflow update workflow: %w", err)
-		}
+		// Keep user-edited workflow definitions intact across restarts.
 		return nil
 	}
 
 	if err := repo.Create(ctx, &repository.WorkflowDefinition{
 		ID:          uuid.NewString(),
 		Name:        "通用处理流程",
-		Description: "按类别路由并统一收集合并后执行重命名、移动与审计",
+		Description: "按类别路由并统一收集合并后执行重命名与移动",
 		GraphJSON:   string(graphBytes),
 		IsActive:    false,
 		Version:     1,

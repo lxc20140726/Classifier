@@ -64,6 +64,7 @@ func (e *renameNodeExecutor) Execute(_ context.Context, input NodeExecutionInput
 	conditionalRules := renameNodeParseConditionalRules(input.Node.Config)
 
 	result := make([]ProcessingItem, 0, len(items))
+	stepResults := make([]ProcessingStepResult, 0, len(items))
 	for index, item := range items {
 		current := renameNodeCurrentName(item)
 		variables := renameNodeBuildVariables(item, index+1, nil)
@@ -76,13 +77,30 @@ func (e *renameNodeExecutor) Execute(_ context.Context, input NodeExecutionInput
 			candidate = current
 		}
 
+		status := "renamed"
+		if skipIfSame && candidate == current {
+			status = "skipped"
+		}
 		if !skipIfSame || candidate != current {
 			item.TargetName = candidate
 		}
 		result = append(result, item)
+		stepResults = append(stepResults, ProcessingStepResult{
+			SourcePath: strings.TrimSpace(item.SourcePath),
+			TargetPath: strings.TrimSpace(candidate),
+			NodeType:   input.Node.Type,
+			NodeLabel:  strings.TrimSpace(input.Node.Label),
+			Status:     status,
+		})
 	}
 
-	return NodeExecutionOutput{Outputs: map[string]TypedValue{"items": {Type: PortTypeProcessingItemList, Value: result}}, Status: ExecutionSuccess}, nil
+	return NodeExecutionOutput{
+		Outputs: map[string]TypedValue{
+			"items":        {Type: PortTypeProcessingItemList, Value: result},
+			"step_results": {Type: PortTypeProcessingStepResultList, Value: stepResults},
+		},
+		Status: ExecutionSuccess,
+	}, nil
 }
 
 func (e *renameNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {

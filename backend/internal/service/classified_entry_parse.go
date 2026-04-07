@@ -57,6 +57,9 @@ func classifiedEntryFromMap(m map[string]any) (ClassifiedEntry, error) {
 	if v, ok := m["classifier"].(string); ok {
 		entry.Classifier = v
 	}
+	if v, ok := m["has_other_files"].(bool); ok {
+		entry.HasOtherFiles = v
+	}
 	if subtreeRaw, ok := m["subtree"]; ok {
 		subtree, err := parseClassifiedEntryList(subtreeRaw)
 		if err != nil {

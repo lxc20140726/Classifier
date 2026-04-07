@@ -136,7 +136,7 @@ func (r *SQLiteJobRepository) UpdateStatus(ctx context.Context, id, status, errM
 	if status == "running" {
 		query += ", started_at = COALESCE(started_at, CURRENT_TIMESTAMP)"
 	}
-	if status == "succeeded" || status == "failed" || status == "cancelled" || status == "partial" {
+	if status == "succeeded" || status == "failed" || status == "cancelled" || status == "partial" || status == "rolled_back" {
 		query += ", finished_at = CURRENT_TIMESTAMP"
 	}
 

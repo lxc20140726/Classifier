@@ -43,9 +43,13 @@ type scanTarget struct {
 }
 
 type scanMetrics struct {
-	fileNames  []string
-	totalSize  int64
-	totalFiles int
+	fileNames      []string
+	totalSize      int64
+	totalFiles     int
+	imageCount     int
+	videoCount     int
+	otherFileCount int
+	hasOtherFiles  bool
 }
 
 func NewScannerService(
@@ -206,7 +210,6 @@ func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanT
 		s.writeScanAudit(ctx, jobID, "", target.folderPath, target.sourceDir, target.relativePath, "failed", "", err)
 		return nil, err
 	}
-	imageCount, videoCount := countMediaFiles(metrics.fileNames)
 	category := Classify(target.folderName, metrics.fileNames)
 	now := time.Now().UTC()
 
@@ -219,8 +222,10 @@ func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanT
 		Category:       category,
 		CategorySource: "auto",
 		Status:         "pending",
-		ImageCount:     imageCount,
-		VideoCount:     videoCount,
+		ImageCount:     metrics.imageCount,
+		VideoCount:     metrics.videoCount,
+		OtherFileCount: metrics.otherFileCount,
+		HasOtherFiles:  metrics.hasOtherFiles,
 		TotalFiles:     metrics.totalFiles,
 		TotalSize:      metrics.totalSize,
 		MarkedForMove:  false,
@@ -260,6 +265,10 @@ func (s *ScannerService) collectFolderMetrics(ctx context.Context, folderPath st
 			}
 			result.totalFiles += nested.totalFiles
 			result.totalSize += nested.totalSize
+			result.imageCount += nested.imageCount
+			result.videoCount += nested.videoCount
+			result.otherFileCount += nested.otherFileCount
+			result.hasOtherFiles = result.hasOtherFiles || nested.hasOtherFiles
 			result.fileNames = append(result.fileNames, nested.fileNames...)
 			continue
 		}
@@ -271,6 +280,18 @@ func (s *ScannerService) collectFolderMetrics(ctx context.Context, folderPath st
 		result.totalFiles++
 		result.totalSize += info.Size
 		result.fileNames = append(result.fileNames, entry.Name)
+		ext := strings.ToLower(filepath.Ext(entry.Name))
+		switch {
+		case imageExts[ext]:
+			result.imageCount++
+		case videoExts[ext]:
+			result.videoCount++
+		case mangaExts[ext]:
+			// 漫画压缩包不算 other file。
+		default:
+			result.otherFileCount++
+			result.hasOtherFiles = true
+		}
 	}
 
 	return result, nil
@@ -295,13 +316,15 @@ func (s *ScannerService) recordClassificationSnapshot(ctx context.Context, jobID
 	}
 
 	detailJSON, err := json.Marshal(map[string]any{
-		"source_dir":      folder.SourceDir,
-		"relative_path":   folder.RelativePath,
-		"category":        folder.Category,
-		"category_source": folder.CategorySource,
-		"total_files":     folder.TotalFiles,
-		"image_count":     folder.ImageCount,
-		"video_count":     folder.VideoCount,
+		"source_dir":       folder.SourceDir,
+		"relative_path":    folder.RelativePath,
+		"category":         folder.Category,
+		"category_source":  folder.CategorySource,
+		"total_files":      folder.TotalFiles,
+		"image_count":      folder.ImageCount,
+		"video_count":      folder.VideoCount,
+		"other_file_count": folder.OtherFileCount,
+		"has_other_files":  folder.HasOtherFiles,
 	})
 	if err != nil {
 		return fmt.Errorf("scanner.recordClassificationSnapshot marshal detail for folder %q: %w", folder.ID, err)
@@ -383,22 +406,4 @@ func deterministicFolderID(path string) string {
 
 	h := sha1.Sum([]byte(absPath))
 	return hex.EncodeToString(h[:])
-}
-
-func countMediaFiles(fileNames []string) (int, int) {
-	imageCount := 0
-	videoCount := 0
-
-	for _, name := range fileNames {
-		ext := strings.ToLower(filepath.Ext(name))
-		if imageExts[ext] {
-			imageCount++
-		}
-
-		if videoExts[ext] {
-			videoCount++
-		}
-	}
-
-	return imageCount, videoCount
 }

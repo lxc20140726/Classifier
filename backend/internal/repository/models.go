@@ -16,6 +16,8 @@ type Folder struct {
 	Status            string     `db:"status"`
 	ImageCount        int        `db:"image_count"`
 	VideoCount        int        `db:"video_count"`
+	OtherFileCount    int        `db:"other_file_count"`
+	HasOtherFiles     bool       `db:"has_other_files"`
 	TotalFiles        int        `db:"total_files"`
 	TotalSize         int64      `db:"total_size"`
 	MarkedForMove     bool       `db:"marked_for_move"`
@@ -190,6 +192,22 @@ type NodeSnapshot struct {
 	OutputJSON    string    `db:"output_json"`
 	Compensation  string    `db:"compensation"`
 	CreatedAt     time.Time `db:"created_at"`
+}
+
+type ProcessingReviewItem struct {
+	ID              string          `db:"id"                json:"id"`
+	WorkflowRunID   string          `db:"workflow_run_id"   json:"workflow_run_id"`
+	JobID           string          `db:"job_id"            json:"job_id"`
+	FolderID        string          `db:"folder_id"         json:"folder_id"`
+	Status          string          `db:"status"            json:"status"`
+	BeforeJSON      json.RawMessage `db:"before_json"       json:"before"`
+	AfterJSON       json.RawMessage `db:"after_json"        json:"after"`
+	StepResultsJSON json.RawMessage `db:"step_results_json" json:"step_results"`
+	DiffJSON        json.RawMessage `db:"diff_json"         json:"diff"`
+	Error           string          `db:"error"             json:"error"`
+	CreatedAt       time.Time       `db:"created_at"        json:"created_at"`
+	UpdatedAt       time.Time       `db:"updated_at"        json:"updated_at"`
+	ReviewedAt      *time.Time      `db:"reviewed_at"       json:"reviewed_at"`
 }
 
 type WorkflowGraph struct {
