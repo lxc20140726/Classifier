@@ -5,6 +5,7 @@ import { useSSE } from '@/hooks/useSSE'
 import { useThemeStore } from '@/store/themeStore'
 import AuditLogsPage from '@/pages/AuditLogsPage'
 import FolderListPage from '@/pages/FolderListPage'
+import JobHistoryPage from '@/pages/JobHistoryPage'
 import JobsPage from '@/pages/JobsPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import SettingsPage from '@/pages/SettingsPage'
@@ -22,6 +23,7 @@ export default function App() {
           <Route index element={<FolderListPage />} />
           <Route path="audit-logs" element={<AuditLogsPage />} />
           <Route path="jobs" element={<JobsPage />} />
+          <Route path="job-history" element={<JobHistoryPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="workflow-defs" element={<WorkflowDefsPage />} />
           <Route path="*" element={<NotFoundPage />} />

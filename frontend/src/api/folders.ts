@@ -1,5 +1,13 @@
 import { request } from '@/api/client'
-import type { Category, Folder, FolderStatus, PaginatedResponse, ScanStartResponse } from '@/types'
+import type {
+  Category,
+  Folder,
+  FolderStatus,
+  FolderWorkflowSummary,
+  PaginatedResponse,
+  ScanStartResponse,
+  WorkflowStageStatus,
+} from '@/types'
 
 export interface FolderQueryParams {
   status?: FolderStatus
@@ -24,8 +32,8 @@ interface RawFolder {
   Name?: string
   category?: Category
   Category?: Category
-  category_source?: 'auto' | 'manual'
-  CategorySource?: 'auto' | 'manual'
+  category_source?: 'auto' | 'manual' | 'workflow'
+  CategorySource?: 'auto' | 'manual' | 'workflow'
   status?: FolderStatus
   Status?: FolderStatus
   image_count?: number
@@ -50,6 +58,45 @@ interface RawFolder {
   ScannedAt?: string
   updated_at?: string
   UpdatedAt?: string
+  workflow_summary?: RawWorkflowSummary
+  WorkflowSummary?: RawWorkflowSummary
+}
+
+interface RawWorkflowStageSummary {
+  status?: WorkflowStageStatus
+  status_text?: WorkflowStageStatus
+  workflow_run_id?: string
+  workflowRunId?: string
+  WorkflowRunID?: string
+  job_id?: string
+  jobId?: string
+  JobID?: string
+  updated_at?: string
+  updatedAt?: string
+  UpdatedAt?: string
+}
+
+interface RawWorkflowSummary {
+  classification?: RawWorkflowStageSummary
+  Classification?: RawWorkflowStageSummary
+  processing?: RawWorkflowStageSummary
+  Processing?: RawWorkflowStageSummary
+}
+
+function parseWorkflowStage(raw?: RawWorkflowStageSummary): FolderWorkflowSummary['classification'] {
+  return {
+    status: raw?.status ?? raw?.status_text ?? 'not_run',
+    workflow_run_id: raw?.workflow_run_id ?? raw?.workflowRunId ?? raw?.WorkflowRunID,
+    job_id: raw?.job_id ?? raw?.jobId ?? raw?.JobID,
+    updated_at: raw?.updated_at ?? raw?.updatedAt ?? raw?.UpdatedAt,
+  }
+}
+
+function parseWorkflowSummary(raw?: RawWorkflowSummary): FolderWorkflowSummary {
+  return {
+    classification: parseWorkflowStage(raw?.classification ?? raw?.Classification),
+    processing: parseWorkflowStage(raw?.processing ?? raw?.Processing),
+  }
 }
 
 function parseFolder(raw: RawFolder): Folder {
@@ -73,6 +120,7 @@ function parseFolder(raw: RawFolder): Folder {
     delete_staging_path: raw.delete_staging_path ?? raw.DeleteStagingPath ?? null,
     scanned_at: raw.scanned_at ?? raw.ScannedAt ?? '',
     updated_at: raw.updated_at ?? raw.UpdatedAt ?? '',
+    workflow_summary: parseWorkflowSummary(raw.workflow_summary ?? raw.WorkflowSummary),
   }
 }
 

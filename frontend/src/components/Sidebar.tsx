@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Briefcase, FolderKanban, GitBranch, Moon, ScrollText, Settings, Sun } from 'lucide-react'
+import { Briefcase, FolderClock, FolderKanban, GitBranch, Moon, ScrollText, Settings, Sun } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import gsap from 'gsap'
 
@@ -8,7 +8,8 @@ import { useThemeStore } from '@/store/themeStore'
 
 const navItems = [
   { to: '/', label: '文件夹', icon: FolderKanban, end: true },
-  { to: '/jobs', label: '任务管理', icon: Briefcase },
+  { to: '/jobs', label: '计划任务', icon: Briefcase },
+  { to: '/job-history', label: '执行历史', icon: FolderClock },
   { to: '/workflow-defs', label: '工作流', icon: GitBranch },
   { to: '/audit-logs', label: '审计日志', icon: ScrollText },
   { to: '/settings', label: '设置', icon: Settings },

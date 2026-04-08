@@ -3,6 +3,10 @@ import type { AuditLog, PaginatedResponse } from '@/types'
 
 interface AuditLogQueryParams {
   jobId?: string
+  workflowRunId?: string
+  nodeRunId?: string
+  nodeId?: string
+  nodeType?: string
   folderId?: string
   action?: string
   result?: string
@@ -18,6 +22,14 @@ interface RawAuditLog {
   ID?: string
   job_id?: string
   JobID?: string
+  workflow_run_id?: string
+  WorkflowRunID?: string
+  node_run_id?: string
+  NodeRunID?: string
+  node_id?: string
+  NodeID?: string
+  node_type?: string
+  NodeType?: string
   folder_id?: string
   FolderID?: string
   folder_path?: string
@@ -42,6 +54,10 @@ function parseAuditLog(raw: RawAuditLog): AuditLog {
   return {
     id: raw.id ?? raw.ID ?? '',
     job_id: raw.job_id ?? raw.JobID ?? '',
+    workflow_run_id: raw.workflow_run_id ?? raw.WorkflowRunID ?? '',
+    node_run_id: raw.node_run_id ?? raw.NodeRunID ?? '',
+    node_id: raw.node_id ?? raw.NodeID ?? '',
+    node_type: raw.node_type ?? raw.NodeType ?? '',
     folder_id: raw.folder_id ?? raw.FolderID ?? '',
     folder_path: raw.folder_path ?? raw.FolderPath ?? '',
     action: raw.action ?? raw.Action ?? '',
@@ -60,6 +76,10 @@ export async function listAuditLogs(
   const search = new URLSearchParams()
 
   if (params.jobId) search.set('job_id', params.jobId)
+  if (params.workflowRunId) search.set('workflow_run_id', params.workflowRunId)
+  if (params.nodeRunId) search.set('node_run_id', params.nodeRunId)
+  if (params.nodeId) search.set('node_id', params.nodeId)
+  if (params.nodeType) search.set('node_type', params.nodeType)
   if (params.folderId) search.set('folder_id', params.folderId)
   if (params.action) search.set('action', params.action)
   if (params.result) search.set('result', params.result)

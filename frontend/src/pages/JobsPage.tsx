@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { ChevronDown, ChevronRight, FolderSearch, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { FolderSearch, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import gsap from 'gsap'
+import { useNavigate } from 'react-router-dom'
 
 import {
   createScheduledWorkflow,
@@ -14,133 +15,14 @@ import {
 import { listWorkflowDefs } from '@/api/workflowDefs'
 import { CronExpressionField } from '@/components/CronExpressionField'
 import { DirPicker } from '@/components/DirPicker'
-import { ClassificationPreviewInline } from '@/components/workflow-preview/ClassificationPreviewInline'
-import { ProcessingPreviewInline } from '@/components/workflow-preview/ProcessingPreviewInline'
-import { isClassificationSummary, isProcessingSummary, parseNodePreviewSummary } from '@/components/workflow-preview/previewUtils'
 import { cn } from '@/lib/utils'
 import { useConfigStore } from '@/store/configStore'
-import { useJobStore } from '@/store/jobStore'
-import { useNotificationStore } from '@/store/notificationStore'
-import { useWorkflowRunStore } from '@/store/workflowRunStore'
-import type {
-  Job,
-  JobStatus,
-  NodeRun,
-  NodeRunStatus,
-  ProcessingReviewItem,
-  ScheduledWorkflow,
-  WorkflowDefinition,
-  WorkflowRun,
-  WorkflowRunStatus,
-} from '@/types'
-
+import type { ScheduledWorkflow, WorkflowDefinition } from '@/types'
 
 function formatDate(dateStr: string | null) {
   if (!dateStr) return '—'
   return new Date(dateStr).toLocaleString('zh-CN')
 }
-
-function formatDuration(startedAt: string | null, finishedAt: string | null) {
-  if (!startedAt) return '—'
-  const end = finishedAt ? new Date(finishedAt) : new Date()
-  const start = new Date(startedAt)
-  const diffMs = Math.max(0, end.getTime() - start.getTime())
-  if (diffMs < 1000) return '<1 秒'
-  const secs = Math.floor(diffMs / 1000)
-  if (secs < 60) return `${secs} 秒`
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分 ${secs % 60} 秒`
-  return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
-}
-
-const JOB_STATUS_LABELS: Record<JobStatus, string> = {
-  pending: '等待中',
-  running: '进行中',
-  succeeded: '已完成',
-  failed: '失败',
-  partial: '部分完成',
-  cancelled: '已取消',
-  waiting_input: '待确认',
-  rolled_back: '已回退',
-}
-
-const JOB_STATUS_STYLES: Record<JobStatus, string> = {
-  pending: 'bg-gray-200 text-gray-900 border-2 border-foreground',
-  running: 'bg-blue-300 text-blue-900 border-2 border-foreground',
-  succeeded: 'bg-green-300 text-green-900 border-2 border-foreground',
-  failed: 'bg-red-300 text-red-900 border-2 border-foreground',
-  partial: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
-  cancelled: 'bg-gray-300 text-gray-900 border-2 border-foreground',
-  waiting_input: 'bg-purple-300 text-purple-900 border-2 border-foreground',
-  rolled_back: 'bg-orange-300 text-orange-900 border-2 border-foreground',
-}
-
-const WF_STATUS_LABELS: Record<WorkflowRunStatus, string> = {
-  pending: '等待中',
-  running: '进行中',
-  succeeded: '已完成',
-  failed: '失败',
-  partial: '部分完成',
-  waiting_input: '待确认',
-  rolled_back: '已回退',
-}
-
-const WF_STATUS_STYLES: Record<WorkflowRunStatus, string> = {
-  pending: 'bg-gray-200 text-gray-900 border-2 border-foreground',
-  running: 'bg-blue-300 text-blue-900 border-2 border-foreground',
-  succeeded: 'bg-green-300 text-green-900 border-2 border-foreground',
-  failed: 'bg-red-300 text-red-900 border-2 border-foreground',
-  partial: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
-  waiting_input: 'bg-purple-300 text-purple-900 border-2 border-foreground',
-  rolled_back: 'bg-orange-300 text-orange-900 border-2 border-foreground',
-}
-
-const NODE_STATUS_LABELS: Record<NodeRunStatus, string> = {
-  pending: '等待中',
-  running: '进行中',
-  succeeded: '已完成',
-  failed: '失败',
-  skipped: '已跳过',
-  waiting_input: '待确认',
-}
-
-const NODE_STATUS_STYLES: Record<NodeRunStatus, string> = {
-  pending: 'bg-gray-200 text-gray-900 border-2 border-foreground',
-  running: 'bg-blue-300 text-blue-900 border-2 border-foreground',
-  succeeded: 'bg-green-300 text-green-900 border-2 border-foreground',
-  failed: 'bg-red-300 text-red-900 border-2 border-foreground',
-  skipped: 'bg-gray-300 text-gray-900 border-2 border-foreground',
-  waiting_input: 'bg-purple-300 text-purple-900 border-2 border-foreground',
-}
-
-function NodeResultPreview({ node }: { node: NodeRun }) {
-  const summary = parseNodePreviewSummary(node)
-
-  if (node.node_type === 'classification-db-result-preview') {
-    const classificationSummary = isClassificationSummary(summary)
-      ? summary
-      : null
-    return (
-      <div className="max-h-56 overflow-y-auto">
-        <ClassificationPreviewInline summary={classificationSummary} compact />
-      </div>
-    )
-  }
-
-  if (node.node_type === 'processing-result-preview') {
-    const processingSummary = isProcessingSummary(summary)
-      ? summary
-      : null
-    return (
-      <div className="max-h-56 overflow-y-auto">
-        <ProcessingPreviewInline summary={processingSummary} compact />
-      </div>
-    )
-  }
-
-  return <span className="text-[10px] font-bold text-muted-foreground">—</span>
-}
-
-type JobsTab = 'scheduled' | 'history'
 
 interface ScheduledWorkflowFormState {
   jobType: 'workflow' | 'scan'
@@ -148,7 +30,6 @@ interface ScheduledWorkflowFormState {
   workflowDefId: string
   cronSpec: string
   enabled: boolean
-  folderIds: string[]
   sourceDirs: string[]
 }
 
@@ -158,379 +39,12 @@ const EMPTY_SCHEDULED_WORKFLOW_FORM: ScheduledWorkflowFormState = {
   workflowDefId: '',
   cronSpec: '0 * * * *',
   enabled: true,
-  folderIds: [],
   sourceDirs: [],
 }
 
 type ScheduledWorkflowModalMode =
   | { kind: 'create' }
   | { kind: 'edit'; workflow: ScheduledWorkflow }
-
-function StatusBadge({ status, labels, styles }: {
-  status: string
-  labels: Record<string, string>
-  styles: Record<string, string>
-}) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center px-2 py-0.5 text-[10px] font-black',
-        styles[status] ?? 'bg-muted text-muted-foreground border-2 border-foreground',
-      )}
-    >
-      {labels[status] ?? status}
-    </span>
-  )
-}
-
-function ProgressBar({ done, total }: { done: number; total: number }) {
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0
-  return (
-    <div className="flex items-center gap-3">
-      <div className="h-2 flex-1 overflow-hidden border-2 border-foreground bg-muted">
-        <div className="h-full bg-foreground transition-all duration-300" style={{ width: `${pct}%` }} />
-      </div>
-      <span className="min-w-[3rem] text-right text-xs font-black tabular-nums">{done}/{total}</span>
-    </div>
-  )
-}
-
-function NodeRunsPanel({ runId }: { runId: string }) {
-  const { nodesByRunId, fetchRunDetail } = useWorkflowRunStore()
-  const nodes = nodesByRunId[runId] ?? []
-  const listRef = useRef<HTMLTableSectionElement | null>(null)
-
-  useEffect(() => {
-    void fetchRunDetail(runId)
-  }, [runId, fetchRunDetail])
-
-  useEffect(() => {
-    if (nodes.length > 0 && listRef.current) {
-      const items = listRef.current.querySelectorAll('.node-item')
-      const dots = listRef.current.querySelectorAll('.node-dot')
-      const lines = listRef.current.querySelectorAll('.node-line')
-      
-      gsap.fromTo(items, 
-        { opacity: 0, x: -20 }, 
-        { opacity: 1, x: 0, duration: 0.4, stagger: 0.1, ease: "back.out(1.5)" }
-      )
-      
-      // 粒子飞入成为节点圆点的动效
-      dots.forEach((dot, i) => {
-        gsap.fromTo(dot,
-          { 
-            scale: 0,
-            x: () => (Math.random() - 0.5) * 150,
-            y: () => (Math.random() - 0.5) * 150,
-            opacity: 0
-          },
-          { 
-            scale: 1, 
-            x: 0,
-            y: 0,
-            opacity: 1,
-            duration: 0.6, 
-            delay: i * 0.1, 
-            ease: "expo.out" 
-          }
-        )
-      })
-      
-      if (lines.length > 0) {
-        gsap.fromTo(lines,
-          { scaleY: 0 },
-          { scaleY: 1, duration: 0.3, stagger: 0.1, transformOrigin: "top", ease: "none", delay: 0.2 }
-        )
-      }
-    }
-  }, [nodes.length])
-
-  if (nodes.length === 0) {
-    return <p className="py-4 text-xs font-bold text-muted-foreground text-center">暂无节点记录</p>
-  }
-
-  return (
-    <div className="pl-4 py-2">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="border-b-2 border-foreground bg-muted/30">
-            <th className="w-8 py-2"></th>
-            <th className="py-2 pr-4 text-left font-black tracking-widest">节点ID</th>
-            <th className="py-2 pr-4 text-left font-black tracking-widest">类型</th>
-            <th className="py-2 pr-4 text-left font-black tracking-widest">序号</th>
-            <th className="py-2 pr-4 text-left font-black tracking-widest">状态</th>
-            <th className="py-2 text-left font-black tracking-widest">耗时</th>
-            <th className="py-2 text-left font-black tracking-widest">结果预览</th>
-          </tr>
-        </thead>
-        <tbody ref={listRef}>
-          {nodes.map((node: NodeRun, i) => (
-            <tr key={node.id || node.node_id} className="node-item border-b-2 border-foreground/20 last:border-0 hover:bg-muted/10">
-              <td className="py-3 relative">
-                <div className="flex flex-col items-center justify-center h-full">
-                  <div className="node-dot w-3 h-3 bg-foreground rounded-full z-10 relative"></div>
-                  {i < nodes.length - 1 && (
-                    <div className="node-line absolute top-6 bottom-[-12px] w-0.5 bg-foreground z-0"></div>
-                  )}
-                </div>
-              </td>
-              <td className="py-3 pr-4 font-mono font-bold">{node.node_id}</td>
-              <td className="py-3 pr-4 font-bold">{node.node_type}</td>
-              <td className="py-3 pr-4 font-black">{node.sequence}</td>
-              <td className="py-3 pr-4">
-                <StatusBadge status={node.status} labels={NODE_STATUS_LABELS} styles={NODE_STATUS_STYLES} />
-              </td>
-              <td className="py-3 font-mono font-bold">{formatDuration(node.started_at, node.finished_at)}</td>
-              <td className="py-3">
-                <NodeResultPreview node={node} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function WorkflowRunRow({ run }: { run: WorkflowRun }) {
-  const [expanded, setExpanded] = useState(false)
-  const [isActing, setIsActing] = useState(false)
-  const {
-    rollbackRun,
-    fetchRunDetail,
-    fetchRunsForJob,
-    fetchRunReviews,
-    approveReview,
-    rollbackReview,
-    reviewsByRunId,
-    reviewSummaryByRunId,
-  } = useWorkflowRunStore()
-  const pushNotification = useNotificationStore((s) => s.pushNotification)
-  const reviews = reviewsByRunId[run.id] ?? []
-  const reviewSummary = reviewSummaryByRunId[run.id]
-
-  useEffect(() => {
-    if (run.status === 'waiting_input') {
-      void fetchRunDetail(run.id)
-      void fetchRunReviews(run.id)
-    }
-  }, [run.id, run.status, fetchRunDetail, fetchRunReviews])
-
-  async function handleRollback() {
-    setIsActing(true)
-    try {
-      await rollbackRun(run.id)
-      await fetchRunsForJob(run.job_id)
-      pushNotification({
-        level: 'success',
-        title: '回滚完成',
-        message: `工作流运行 ${run.id.slice(0, 8)} 已回退。`,
-        jobId: run.job_id,
-      })
-    } catch (rollbackError) {
-      const message = rollbackError instanceof Error ? rollbackError.message : '回滚失败'
-      pushNotification({
-        level: 'error',
-        title: '回滚失败',
-        message,
-        jobId: run.job_id,
-      })
-    } finally {
-      setIsActing(false)
-    }
-  }
-
-  async function handleApproveReview(reviewId: string) {
-    setIsActing(true)
-    try {
-      await approveReview(run.id, reviewId)
-      await fetchRunsForJob(run.job_id)
-    } finally {
-      setIsActing(false)
-    }
-  }
-
-  async function handleRollbackReview(reviewId: string) {
-    setIsActing(true)
-    try {
-      await rollbackReview(run.id, reviewId)
-      await fetchRunsForJob(run.job_id)
-    } finally {
-      setIsActing(false)
-    }
-  }
-
-  function toggleExpand() {
-    setExpanded((v) => !v)
-  }
-
-  return (
-    <>
-      <tr className="cursor-pointer border-b-2 border-foreground transition-colors hover:bg-muted/20" onClick={toggleExpand}>
-        <td className="py-3 pl-4 pr-3">
-          <div className="flex items-center justify-center w-6 h-6 border-2 border-foreground bg-background transition-transform hover:scale-110">
-            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          </div>
-        </td>
-        <td className="py-3 pr-4 font-mono text-xs font-bold">{run.folder_id.slice(0, 8)}</td>
-        <td className="py-3 pr-4">
-          <StatusBadge status={run.status} labels={WF_STATUS_LABELS} styles={WF_STATUS_STYLES} />
-        </td>
-        <td className="py-3 pr-4 text-xs font-mono font-bold text-muted-foreground">{formatDate(run.created_at)}</td>
-        <td className="py-3" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center gap-2">
-            {(run.status === 'failed' || run.status === 'partial') && (
-              <button
-                type="button"
-                disabled={isActing}
-                onClick={() => void handleRollback()}
-                className="border-2 border-red-900 bg-red-200 px-3 py-1 text-xs font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50"
-              >
-                {isActing ? '回滚中...' : '回滚'}
-              </button>
-            )}
-            {run.status === 'waiting_input' && (
-              <span className="text-xs font-bold text-purple-900">请展开后逐目录确认</span>
-            )}
-          </div>
-        </td>
-      </tr>
-      {expanded && (
-        <tr className="border-b-2 border-foreground bg-muted/10">
-          <td colSpan={5} className="px-6 py-4 space-y-4">
-            {run.status === 'waiting_input' && (
-              <div className="space-y-3 border-2 border-purple-900 bg-purple-50 p-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-black text-purple-900">目录确认面板</h4>
-                  {reviewSummary && (
-                    <p className="text-xs font-bold text-purple-900">
-                      待确认 {reviewSummary.pending} / 总数 {reviewSummary.total}（通过 {reviewSummary.approved}，回退 {reviewSummary.rolled_back}）
-                    </p>
-                  )}
-                </div>
-                {reviews.length === 0 ? (
-                  <p className="text-xs font-bold text-muted-foreground">暂无确认项</p>
-                ) : (
-                  <div className="space-y-2">
-                    {reviews.map((review: ProcessingReviewItem) => (
-                      <div key={review.id} className="flex items-center justify-between border-2 border-foreground bg-background px-3 py-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-black">{review.after?.name ?? review.before?.name ?? review.folder_id}</p>
-                          <p className="truncate font-mono text-[10px] text-muted-foreground">
-                            {review.before?.path ?? '—'} → {review.after?.path ?? '—'}
-                          </p>
-                        </div>
-                        <div className="ml-3 flex items-center gap-2">
-                          <StatusBadge status={review.status} labels={{ pending: '待确认', approved: '已通过', rolled_back: '已回退' }} styles={{ pending: 'bg-purple-300 text-purple-900 border-2 border-foreground', approved: 'bg-green-300 text-green-900 border-2 border-foreground', rolled_back: 'bg-orange-300 text-orange-900 border-2 border-foreground' }} />
-                          {review.status === 'pending' && (
-                            <>
-                              <button
-                                type="button"
-                                disabled={isActing}
-                                onClick={() => void handleApproveReview(review.id)}
-                                className="border-2 border-green-900 bg-green-200 px-2 py-1 text-xs font-bold text-green-900 transition-all hover:bg-green-900 hover:text-green-100 disabled:opacity-50"
-                              >
-                                确认通过
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isActing}
-                                onClick={() => void handleRollbackReview(review.id)}
-                                className="border-2 border-red-900 bg-red-200 px-2 py-1 text-xs font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 disabled:opacity-50"
-                              >
-                                不通过并回退
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <NodeRunsPanel runId={run.id} />
-          </td>
-        </tr>
-      )}
-    </>
-  )
-}
-
-function WorkflowRunsPanel({ jobId }: { jobId: string }) {
-  const { runsByJobId, fetchRunsForJob } = useWorkflowRunStore()
-  const runs = runsByJobId[jobId] ?? []
-
-  useEffect(() => {
-    void fetchRunsForJob(jobId)
-  }, [jobId, fetchRunsForJob])
-
-  if (runs.length === 0) {
-    return <p className="text-xs font-bold text-muted-foreground py-4 text-center">暂无工作流运行记录</p>
-  }
-
-  return (
-    <div className="border-2 border-foreground bg-card shadow-hard">
-      <div className="bg-muted/30 px-4 py-2 border-b-2 border-foreground">
-        <p className="text-xs font-black tracking-widest">WORKFLOW RUNS ({runs.length})</p>
-      </div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b-2 border-foreground bg-muted/10">
-            <th className="w-12" />
-            <th className="py-2 pr-4 text-left font-black tracking-widest">目录ID</th>
-            <th className="py-2 pr-4 text-left font-black tracking-widest">状态</th>
-            <th className="py-2 pr-4 text-left font-black tracking-widest">创建时间</th>
-            <th className="py-2 text-left font-black tracking-widest">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run: WorkflowRun) => (
-            <WorkflowRunRow key={run.id} run={run} />
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function JobRow({ job }: { job: Job }) {
-  const [expanded, setExpanded] = useState(false)
-
-  function toggleExpand() {
-    setExpanded((v) => !v)
-  }
-
-  return (
-    <>
-      <tr className="job-row cursor-pointer border-b-2 border-foreground transition-colors hover:bg-muted/30" onClick={toggleExpand}>
-        <td className="px-4 py-4">
-          <div className="flex items-center justify-center w-6 h-6 border-2 border-foreground bg-background transition-transform hover:scale-110">
-            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          </div>
-        </td>
-        <td className="px-4 py-4 font-mono text-xs font-bold">{job.id.slice(0, 8)}</td>
-        <td className="px-4 py-4 text-sm font-black">{job.type}</td>
-        <td className="px-4 py-4">
-          <StatusBadge status={job.status} labels={JOB_STATUS_LABELS} styles={JOB_STATUS_STYLES} />
-        </td>
-        <td className="w-48 px-4 py-4">
-          <ProgressBar done={job.done} total={job.total} />
-        </td>
-        <td className="px-4 py-4 text-sm font-black">{(job.folder_ids ?? []).length}</td>
-        <td className="px-4 py-4 text-xs font-mono font-bold text-muted-foreground">{formatDate(job.created_at)}</td>
-        <td className="px-4 py-4 text-xs font-mono font-bold text-muted-foreground">{formatDuration(job.started_at, job.finished_at)}</td>
-      </tr>
-      {expanded && (
-        <tr className="border-b-2 border-foreground bg-muted/10">
-          <td colSpan={8} className="px-8 py-6">
-            <WorkflowRunsPanel jobId={job.id} />
-          </td>
-        </tr>
-      )}
-    </>
-  )
-}
 
 function ScheduledWorkflowTable({
   workflows,
@@ -563,7 +77,7 @@ function ScheduledWorkflowTable({
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-black tracking-tight">计划任务</h2>
-          <p className="mt-1 text-sm font-medium text-muted-foreground">用 cron 管理工作流执行，并保留下方执行历史。</p>
+          <p className="mt-1 text-sm font-medium text-muted-foreground">用 cron 管理工作流执行。</p>
         </div>
         <button
           type="button"
@@ -661,7 +175,7 @@ function ScheduledWorkflowModal({
   isSaving,
   onClose,
   onChange,
-  onToggleFolder,
+  onToggleSourceDir,
   onSave,
 }: {
   modal: ScheduledWorkflowModalMode | null
@@ -671,7 +185,7 @@ function ScheduledWorkflowModal({
   isSaving: boolean
   onClose: () => void
   onChange: (patch: Partial<ScheduledWorkflowFormState>) => void
-  onToggleFolder: (folderId: string) => void
+  onToggleSourceDir: (sourceDir: string) => void
   onSave: () => Promise<void>
 }) {
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
@@ -682,7 +196,7 @@ function ScheduledWorkflowModal({
   useEffect(() => {
     if (modal && overlayRef.current && modalRef.current) {
       gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.2 })
-      gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.7)" })
+      gsap.fromTo(modalRef.current, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: 'back.out(1.7)' })
     }
   }, [modal])
 
@@ -749,7 +263,7 @@ function ScheduledWorkflowModal({
               <label className="mb-2 block text-sm font-black tracking-widest">CRON 表达式</label>
               <CronExpressionField
                 value={form.cronSpec}
-                onChange={(v) => onChange({ cronSpec: v })}
+                onChange={(value) => onChange({ cronSpec: value })}
               />
             </div>
 
@@ -768,16 +282,16 @@ function ScheduledWorkflowModal({
 
           <div className="space-y-4 min-w-0">
             <div>
-              <label className="mb-2 block text-sm font-black tracking-widest">{form.jobType === 'scan' ? '扫描输入目录' : '选择目录'}</label>
+              <label className="mb-2 block text-sm font-black tracking-widest">{form.jobType === 'scan' ? '扫描输入目录' : '目录输入说明'}</label>
               {form.jobType === 'workflow' ? (
                 <div className="border-2 border-foreground bg-card px-4 py-4 text-sm font-bold text-muted-foreground shadow-hard">
-                  工作流计划任务已切换到 v2 执行模型，无需预选目录；目录输入请在工作流图内配置（如 `folder-picker` / `folder-tree-scanner`）。
+                  v2 工作流计划任务不再绑定目录列表；目录输入请在工作流图内配置（如 `folder-picker` / `folder-tree-scanner`）。
                 </div>
               ) : (
                 <div className="flex flex-col gap-3 border-2 border-foreground bg-card px-4 py-4 shadow-hard">
                   <div>
                     <p className="text-sm font-black">已选择 {form.sourceDirs.length} 个扫描输入目录</p>
-                    <p className="text-xs font-medium text-muted-foreground mt-1">每个扫描任务维护自己的目录列表，不再依赖设置页。</p>
+                    <p className="text-xs font-medium text-muted-foreground mt-1">每个扫描任务维护自己的目录列表。</p>
                   </div>
                   <button
                     type="button"
@@ -790,7 +304,7 @@ function ScheduledWorkflowModal({
                 </div>
               )}
             </div>
-            
+
             <div className="h-[320px] overflow-y-auto border-2 border-foreground bg-muted/10 p-3">
               <div className="space-y-2">
                 {form.jobType === 'scan' ? form.sourceDirs.map((dir) => (
@@ -798,7 +312,7 @@ function ScheduledWorkflowModal({
                     <p className="break-all font-mono text-xs font-bold text-foreground">{dir}</p>
                     <button
                       type="button"
-                      onClick={() => onToggleFolder(dir)}
+                      onClick={() => onToggleSourceDir(dir)}
                       className="ml-3 shrink-0 border-2 border-red-900 bg-red-100 px-2 py-1 text-xs font-bold text-red-900 transition-all hover:bg-red-900 hover:text-red-100 hover:shadow-hard hover:-translate-y-0.5"
                     >
                       移除
@@ -846,8 +360,7 @@ function ScheduledWorkflowModal({
 }
 
 export default function JobsPage() {
-  const { jobs, total, isLoading, error, fetchJobs } = useJobStore()
-  const [activeTab, setActiveTab] = useState<JobsTab>('scheduled')
+  const navigate = useNavigate()
   const [scheduledWorkflows, setScheduledWorkflows] = useState<ScheduledWorkflow[]>([])
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([])
   const [isScheduledLoading, setIsScheduledLoading] = useState(false)
@@ -859,30 +372,18 @@ export default function JobsPage() {
   const [runningId, setRunningId] = useState<string | null>(null)
 
   useEffect(() => {
-    void fetchJobs()
     void fetchScheduledData()
-  }, [fetchJobs])
-
-  // GSAP Stagger Animation for items
-  useEffect(() => {
-    if (!isLoading && jobs.length > 0 && activeTab === 'history') {
-      gsap.fromTo(
-        '.job-row',
-        { opacity: 0, x: -20 },
-        { opacity: 1, x: 0, duration: 0.4, stagger: 0.05, ease: 'power2.out', clearProps: 'all' }
-      )
-    }
-  }, [jobs, isLoading, activeTab])
+  }, [])
 
   useEffect(() => {
-    if (!isScheduledLoading && scheduledWorkflows.length > 0 && activeTab === 'scheduled') {
+    if (!isScheduledLoading && scheduledWorkflows.length > 0) {
       gsap.fromTo(
         '.scheduled-row',
         { opacity: 0, x: -20 },
-        { opacity: 1, x: 0, duration: 0.4, stagger: 0.05, ease: 'power2.out', clearProps: 'all' }
+        { opacity: 1, x: 0, duration: 0.4, stagger: 0.05, ease: 'power2.out', clearProps: 'all' },
       )
     }
-  }, [scheduledWorkflows, isScheduledLoading, activeTab])
+  }, [scheduledWorkflows, isScheduledLoading])
 
   async function fetchScheduledData() {
     setIsScheduledLoading(true)
@@ -914,7 +415,6 @@ export default function JobsPage() {
       workflowDefId: workflow.workflow_def_id,
       cronSpec: workflow.cron_spec,
       enabled: workflow.enabled,
-      folderIds: workflow.folder_ids,
       sourceDirs: workflow.source_dirs,
     })
     setFormError(null)
@@ -926,24 +426,13 @@ export default function JobsPage() {
     setFormError(null)
   }
 
-  function toggleFolder(folderId: string) {
-    setForm((prev) => {
-      if (prev.jobType === 'scan') {
-        return {
-          ...prev,
-          sourceDirs: prev.sourceDirs.includes(folderId)
-            ? prev.sourceDirs.filter((item) => item !== folderId)
-            : [...prev.sourceDirs, folderId],
-        }
-      }
-
-      return {
-        ...prev,
-        folderIds: prev.folderIds.includes(folderId)
-          ? prev.folderIds.filter((item) => item !== folderId)
-          : [...prev.folderIds, folderId],
-      }
-    })
+  function toggleSourceDir(sourceDir: string) {
+    setForm((prev) => ({
+      ...prev,
+      sourceDirs: prev.sourceDirs.includes(sourceDir)
+        ? prev.sourceDirs.filter((item) => item !== sourceDir)
+        : [...prev.sourceDirs, sourceDir],
+    }))
   }
 
   async function handleSaveScheduledWorkflow() {
@@ -1001,114 +490,45 @@ export default function JobsPage() {
     setRunningId(workflow.id)
     try {
       await runScheduledWorkflowNow(workflow.id)
-      setActiveTab('history')
-      await Promise.all([fetchJobs(), fetchScheduledData()])
+      await fetchScheduledData()
+      navigate('/job-history')
     } finally {
       setRunningId(null)
     }
-  }
-
-  async function handleRefresh() {
-    await Promise.all([fetchJobs(), fetchScheduledData()])
   }
 
   return (
     <div className="flex flex-col gap-8 p-6">
       <div className="flex items-end justify-between border-b-2 border-foreground pb-4">
         <div>
-          <h1 className="text-3xl font-black tracking-tight uppercase">任务管理</h1>
-          <p className="mt-1 text-sm font-bold text-muted-foreground">在这里管理带 cron 的工作流作业，并查看执行历史。</p>
+          <h1 className="text-3xl font-black tracking-tight uppercase">计划任务</h1>
+          <p className="mt-1 text-sm font-bold text-muted-foreground">管理定时执行计划，执行结果请前往“执行历史”。</p>
         </div>
         <button
           type="button"
-          onClick={() => void handleRefresh()}
-          disabled={isLoading || isScheduledLoading}
+          onClick={() => void fetchScheduledData()}
+          disabled={isScheduledLoading}
           className="flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
         >
-          <RefreshCw className={cn('h-4 w-4', (isLoading || isScheduledLoading) && 'animate-spin')} />
+          <RefreshCw className={cn('h-4 w-4', isScheduledLoading && 'animate-spin')} />
           刷新
         </button>
       </div>
 
-      <div className="inline-flex border-2 border-foreground bg-background shadow-hard self-start">
-        <button
-          type="button"
-          onClick={() => setActiveTab('scheduled')}
-          className={cn(
-            'px-6 py-2.5 text-sm font-black transition-colors',
-            activeTab === 'scheduled' ? 'bg-foreground text-background' : 'hover:bg-muted',
-          )}
-        >
-          计划任务
-        </button>
-        <div className="w-0.5 bg-foreground" />
-        <button
-          type="button"
-          onClick={() => setActiveTab('history')}
-          className={cn(
-            'px-6 py-2.5 text-sm font-black transition-colors',
-            activeTab === 'history' ? 'bg-foreground text-background' : 'hover:bg-muted',
-          )}
-        >
-          执行历史
-        </button>
-      </div>
-
-      {scheduledError && activeTab === 'scheduled' && (
+      {scheduledError && (
         <div className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{scheduledError}</div>
       )}
-      {error && activeTab === 'history' && (
-        <div className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{error}</div>
-      )}
 
-      {activeTab === 'scheduled' ? (
-        <ScheduledWorkflowTable
-          workflows={scheduledWorkflows}
-          workflowDefs={workflowDefs}
-          isLoading={isScheduledLoading}
-          runningId={runningId}
-          onCreate={openCreateModal}
-          onEdit={openEditModal}
-          onDelete={handleDeleteScheduledWorkflow}
-          onRunNow={handleRunNow}
-        />
-      ) : (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-xl font-black tracking-tight">执行历史</h2>
-            <p className="mt-1 text-sm font-medium text-muted-foreground">共 <span className="text-foreground font-bold">{total}</span> 条任务记录，可展开查看工作流运行与节点细节。</p>
-          </div>
-          <div className="overflow-hidden border-2 border-foreground bg-card shadow-hard">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b-2 border-foreground bg-muted/50">
-                  <th className="w-12 px-4 py-4" />
-                  <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">ID</th>
-                  <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">类型</th>
-                  <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">状态</th>
-                  <th className="w-48 px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">进度</th>
-                  <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">目录数</th>
-                  <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">创建时间</th>
-                  <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">耗时</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading && jobs.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-16 text-center font-bold text-muted-foreground">正在加载任务...</td>
-                  </tr>
-                ) : jobs.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-16 text-center font-bold text-muted-foreground border-2 border-dashed border-foreground m-4">暂无任务记录，执行计划任务后会显示在这里。</td>
-                  </tr>
-                ) : (
-                  jobs.map((job) => <JobRow key={job.id} job={job} />)
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      <ScheduledWorkflowTable
+        workflows={scheduledWorkflows}
+        workflowDefs={workflowDefs}
+        isLoading={isScheduledLoading}
+        runningId={runningId}
+        onCreate={openCreateModal}
+        onEdit={openEditModal}
+        onDelete={handleDeleteScheduledWorkflow}
+        onRunNow={handleRunNow}
+      />
 
       <ScheduledWorkflowModal
         modal={modal}
@@ -1118,7 +538,7 @@ export default function JobsPage() {
         isSaving={isSaving}
         onClose={closeModal}
         onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
-        onToggleFolder={toggleFolder}
+        onToggleSourceDir={toggleSourceDir}
         onSave={handleSaveScheduledWorkflow}
       />
     </div>

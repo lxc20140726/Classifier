@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
 import { useActivityStore } from '@/store/activityStore'
 import { useFolderStore } from '@/store/folderStore'
 import { useJobStore } from '@/store/jobStore'
-import type { Category, Folder, FolderStatus, Job } from '@/types'
+import type { Category, Folder, FolderStatus, Job, WorkflowStageStatus } from '@/types'
 
 const CATEGORY_LABEL: Record<Category | '', string> = {
   '': '全部分类',
@@ -65,6 +65,36 @@ const JOB_STATUS_COLOR: Record<string, string> = {
   failed: 'bg-red-300 text-red-900 border-2 border-foreground',
   partial: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
   cancelled: 'bg-gray-300 text-gray-900 border-2 border-foreground',
+}
+
+const WORKFLOW_STATUS_COLOR: Record<WorkflowStageStatus, string> = {
+  not_run: 'bg-gray-200 text-gray-900 border-2 border-foreground',
+  running: 'bg-blue-300 text-blue-900 border-2 border-foreground',
+  succeeded: 'bg-green-300 text-green-900 border-2 border-foreground',
+  failed: 'bg-red-300 text-red-900 border-2 border-foreground',
+  waiting_input: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
+  partial: 'bg-yellow-300 text-yellow-900 border-2 border-foreground',
+  rolled_back: 'bg-gray-300 text-gray-900 border-2 border-foreground',
+}
+
+const CLASSIFICATION_WORKFLOW_LABEL: Record<WorkflowStageStatus, string> = {
+  not_run: '未分类流程',
+  running: '分类中',
+  succeeded: '分类完成',
+  failed: '分类失败',
+  waiting_input: '待确认',
+  partial: '分类部分完成',
+  rolled_back: '分类已回退',
+}
+
+const PROCESSING_WORKFLOW_LABEL: Record<WorkflowStageStatus, string> = {
+  not_run: '未处理流程',
+  running: '处理中',
+  succeeded: '处理完成',
+  failed: '处理失败',
+  waiting_input: '待确认',
+  partial: '处理部分完成',
+  rolled_back: '已回退',
 }
 
 const ALL_CATEGORIES: Array<Category | ''> = ['', 'photo', 'video', 'mixed', 'manga', 'other']
@@ -230,6 +260,22 @@ function RecentLogsPanel() {
   )
 }
 
+function WorkflowSummaryBadges({ folder }: { folder: Folder }) {
+  const classificationStatus = folder.workflow_summary.classification.status
+  const processingStatus = folder.workflow_summary.processing.status
+
+  return (
+    <>
+      <span className={cn('px-2 py-0.5 text-xs font-bold', WORKFLOW_STATUS_COLOR[classificationStatus])}>
+        分类流程：{CLASSIFICATION_WORKFLOW_LABEL[classificationStatus]}
+      </span>
+      <span className={cn('px-2 py-0.5 text-xs font-bold', WORKFLOW_STATUS_COLOR[processingStatus])}>
+        处理流程：{PROCESSING_WORKFLOW_LABEL[processingStatus]}
+      </span>
+    </>
+  )
+}
+
 interface FolderActionProps {
   folder: Folder
   selected: boolean
@@ -286,6 +332,7 @@ function FolderCard({
         <span className={cn('px-2 py-0.5 text-xs font-bold', STATUS_COLOR[folder.status])}>
           {STATUS_LABEL[folder.status]}
         </span>
+        <WorkflowSummaryBadges folder={folder} />
         {folder.has_other_files === true && (
           <span className="border-2 border-amber-900 bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-900">含其他文件</span>
         )}
@@ -430,6 +477,7 @@ function FolderRow({
           <span className={cn('px-2 py-0.5 text-xs font-bold', STATUS_COLOR[folder.status])}>
             {STATUS_LABEL[folder.status]}
           </span>
+          <WorkflowSummaryBadges folder={folder} />
           {folder.has_other_files === true && (
             <span className="border-2 border-amber-900 bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-900">含其他文件</span>
           )}

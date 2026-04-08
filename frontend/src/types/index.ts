@@ -1,7 +1,20 @@
 export type Category = 'photo' | 'video' | 'mixed' | 'manga' | 'other'
 export type FolderStatus = 'pending' | 'done' | 'skip'
-export type CategorySource = 'auto' | 'manual'
+export type CategorySource = 'auto' | 'manual' | 'workflow'
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'partial' | 'cancelled' | 'waiting_input' | 'rolled_back'
+export type WorkflowStageStatus = 'not_run' | 'running' | 'succeeded' | 'failed' | 'waiting_input' | 'partial' | 'rolled_back'
+
+export interface WorkflowStageSummary {
+  status: WorkflowStageStatus
+  workflow_run_id?: string
+  job_id?: string
+  updated_at?: string
+}
+
+export interface FolderWorkflowSummary {
+  classification: WorkflowStageSummary
+  processing: WorkflowStageSummary
+}
 
 export interface Folder {
   id: string
@@ -23,6 +36,7 @@ export interface Folder {
   delete_staging_path?: string | null
   scanned_at: string
   updated_at: string
+  workflow_summary: FolderWorkflowSummary
 }
 
 export interface FileRecord {
@@ -138,6 +152,10 @@ export interface JobDoneEvent {
 export interface AuditLog {
   id: string
   job_id: string
+  workflow_run_id: string
+  node_run_id: string
+  node_id: string
+  node_type: string
   folder_id: string
   folder_path: string
   action: string
@@ -190,9 +208,14 @@ export interface WorkflowRun {
   id: string
   job_id: string
   folder_id: string
+  source_dir?: string
   workflow_def_id: string
   status: WorkflowRunStatus
   resume_node_id: string | null
+  last_node_id?: string | null
+  error: string
+  started_at?: string | null
+  finished_at?: string | null
   created_at: string
   updated_at: string
 }
