@@ -869,6 +869,9 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'compress-node':
       return (
         <div className="space-y-3">
+          <NodeUsageHint>
+            items 输出会透传原始处理项；archive_items 输出用于将生成的压缩包（.cbz/.zip）作为新处理项传给下游（如 move-node / collect-node）。
+          </NodeUsageHint>
           <ConfigField label="压缩范围" hint="all：所有文件夹；leaf：仅叶子节点（默认 all）">
             <select
               value={cfgStr(config, 'scope') || 'all'}
