@@ -420,6 +420,246 @@ func TestCompressNodeExecutorUnsupportedAndArchiveNaming(t *testing.T) {
 	})
 }
 
+func TestCompressNodeExecutorOutputsArchiveItemsAndCompatibility(t *testing.T) {
+	t.Parallel()
+
+	executor := newCompressNodeExecutor(fs.NewOSAdapter())
+
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source", "album")
+	archiveDir := filepath.Join(root, "archives")
+	mustMkdirAll(t, sourcePath)
+	if err := os.WriteFile(filepath.Join(sourcePath, "001.jpg"), []byte("img"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(source) error = %v", err)
+	}
+
+	output, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{
+			Type: "compress-node",
+			Config: map[string]any{
+				"target_dir": archiveDir,
+				"format":     "cbz",
+			},
+		},
+		Inputs: testInputs(map[string]any{
+			"items": []ProcessingItem{{
+				FolderID:   "folder-1",
+				SourcePath: sourcePath,
+				FolderName: "album",
+				TargetName: "album-final",
+				Category:   "manga",
+				Files:      []FileEntry{{Name: "001.jpg", Ext: "jpg", SizeBytes: 3}},
+				ParentPath: filepath.Dir(sourcePath),
+			}},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if output.Status != ExecutionSuccess {
+		t.Fatalf("status = %q, want %q", output.Status, ExecutionSuccess)
+	}
+
+	items, ok := output.Outputs["items"].Value.([]ProcessingItem)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items output type/len = %T/%d, want []ProcessingItem/1", output.Outputs["items"].Value, len(items))
+	}
+	if items[0].SourcePath != sourcePath {
+		t.Fatalf("items[0].SourcePath = %q, want %q", items[0].SourcePath, sourcePath)
+	}
+
+	archiveItems, ok := output.Outputs["archive_items"].Value.([]ProcessingItem)
+	if !ok || len(archiveItems) != 1 {
+		t.Fatalf("archive_items output type/len = %T/%d, want []ProcessingItem/1", output.Outputs["archive_items"].Value, len(archiveItems))
+	}
+	archiveItem := archiveItems[0]
+	if archiveItem.SourcePath == sourcePath {
+		t.Fatalf("archive_items[0].SourcePath should point to archive file, got source path %q", archiveItem.SourcePath)
+	}
+	if got, want := archiveItem.ParentPath, filepath.Dir(archiveItem.SourcePath); got != want {
+		t.Fatalf("archive_items[0].ParentPath = %q, want %q", got, want)
+	}
+	if got, want := archiveItem.FolderName, filepath.Base(archiveItem.SourcePath); got != want {
+		t.Fatalf("archive_items[0].FolderName = %q, want %q", got, want)
+	}
+	if got, want := archiveItem.TargetName, filepath.Base(archiveItem.SourcePath); got != want {
+		t.Fatalf("archive_items[0].TargetName = %q, want %q", got, want)
+	}
+	if archiveItem.FolderID != "folder-1" {
+		t.Fatalf("archive_items[0].FolderID = %q, want folder-1", archiveItem.FolderID)
+	}
+	if archiveItem.Category != "manga" {
+		t.Fatalf("archive_items[0].Category = %q, want manga", archiveItem.Category)
+	}
+	if archiveItem.Files != nil && len(archiveItem.Files) != 0 {
+		t.Fatalf("archive_items[0].Files should be nil or empty, got len=%d", len(archiveItem.Files))
+	}
+
+	stepResults, ok := output.Outputs["step_results"].Value.([]ProcessingStepResult)
+	if !ok || len(stepResults) != 1 {
+		t.Fatalf("step_results output type/len = %T/%d, want []ProcessingStepResult/1", output.Outputs["step_results"].Value, len(stepResults))
+	}
+	if got, want := stepResults[0].TargetPath, normalizeWorkflowPath(archiveItem.SourcePath); got != want {
+		t.Fatalf("step_results[0].TargetPath = %q, want %q", got, want)
+	}
+
+	compressSchema := executor.Schema()
+	moveSchema := newPhase4MoveNodeExecutor(fs.NewMockAdapter(), nil).Schema()
+	collectSchema := newCollectNodeExecutor().Schema()
+
+	archivePort := compressSchema.OutputPort("archive_items")
+	if archivePort == nil {
+		t.Fatalf("compress schema missing output port archive_items")
+	}
+	moveInputPort := moveSchema.InputPort("items")
+	if moveInputPort == nil {
+		t.Fatalf("move schema missing input port items")
+	}
+	if archivePort.Type != moveInputPort.Type {
+		t.Fatalf("compress archive_items type = %q, move items type = %q", archivePort.Type, moveInputPort.Type)
+	}
+	collectInputPort := collectSchema.InputPort("items_1")
+	if collectInputPort == nil {
+		t.Fatalf("collect schema missing input port items_1")
+	}
+	if archivePort.Type != collectInputPort.Type {
+		t.Fatalf("compress archive_items type = %q, collect items_1 type = %q", archivePort.Type, collectInputPort.Type)
+	}
+}
+
+func TestCompressNodeIntegrationArchiveItemsAndLegacyItems(t *testing.T) {
+	t.Parallel()
+
+	t.Run("archive_items_to_move_moves_archive_file", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		sourcePath := filepath.Join(root, "source", "album")
+		archiveDir := filepath.Join(root, "archives")
+		moveTargetDir := filepath.Join(root, "final")
+
+		mustMkdirAll(t, sourcePath)
+		if err := os.WriteFile(filepath.Join(sourcePath, "001.jpg"), []byte("img"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source) error = %v", err)
+		}
+
+		compressOut, err := newCompressNodeExecutor(fs.NewOSAdapter()).Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{
+				Type: "compress-node",
+				Config: map[string]any{
+					"target_dir": archiveDir,
+					"format":     "cbz",
+				},
+			},
+			Inputs: testInputs(map[string]any{
+				"items": []ProcessingItem{{SourcePath: sourcePath, FolderName: "album", TargetName: "album"}},
+			}),
+		})
+		if err != nil {
+			t.Fatalf("compress Execute() error = %v", err)
+		}
+
+		archiveItems := compressOut.Outputs["archive_items"].Value.([]ProcessingItem)
+		if len(archiveItems) != 1 {
+			t.Fatalf("len(archive_items) = %d, want 1", len(archiveItems))
+		}
+
+		moveOut, err := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil).Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{
+				Type:   "move-node",
+				Config: map[string]any{"target_dir": moveTargetDir},
+			},
+			Inputs: testInputs(map[string]any{
+				"items": archiveItems,
+			}),
+		})
+		if err != nil {
+			t.Fatalf("move Execute() error = %v", err)
+		}
+
+		movedItems := moveOut.Outputs["items"].Value.([]ProcessingItem)
+		if len(movedItems) != 1 {
+			t.Fatalf("len(movedItems) = %d, want 1", len(movedItems))
+		}
+		if filepath.Ext(movedItems[0].SourcePath) != ".cbz" {
+			t.Fatalf("moved archive extension = %q, want .cbz", filepath.Ext(movedItems[0].SourcePath))
+		}
+		if !pathExists(t, movedItems[0].SourcePath) {
+			t.Fatalf("moved archive %q should exist", movedItems[0].SourcePath)
+		}
+		if pathExists(t, archiveItems[0].SourcePath) {
+			t.Fatalf("original archive path %q should not exist after move", archiveItems[0].SourcePath)
+		}
+	})
+
+	t.Run("legacy_items_to_move_keeps_original_semantics", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		sourcePath := filepath.Join(root, "source", "album")
+		archiveDir := filepath.Join(root, "archives")
+		moveTargetDir := filepath.Join(root, "final")
+
+		mustMkdirAll(t, sourcePath)
+		if err := os.WriteFile(filepath.Join(sourcePath, "001.jpg"), []byte("img"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source) error = %v", err)
+		}
+
+		compressOut, err := newCompressNodeExecutor(fs.NewOSAdapter()).Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{
+				Type: "compress-node",
+				Config: map[string]any{
+					"target_dir": archiveDir,
+					"format":     "cbz",
+				},
+			},
+			Inputs: testInputs(map[string]any{
+				"items": []ProcessingItem{{SourcePath: sourcePath, FolderName: "album", TargetName: "album"}},
+			}),
+		})
+		if err != nil {
+			t.Fatalf("compress Execute() error = %v", err)
+		}
+
+		legacyItems := compressOut.Outputs["items"].Value.([]ProcessingItem)
+		if len(legacyItems) != 1 {
+			t.Fatalf("len(items) = %d, want 1", len(legacyItems))
+		}
+		if legacyItems[0].SourcePath != sourcePath {
+			t.Fatalf("items[0].SourcePath = %q, want %q", legacyItems[0].SourcePath, sourcePath)
+		}
+
+		moveOut, err := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil).Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{
+				Type:   "move-node",
+				Config: map[string]any{"target_dir": moveTargetDir},
+			},
+			Inputs: testInputs(map[string]any{
+				"items": legacyItems,
+			}),
+		})
+		if err != nil {
+			t.Fatalf("move Execute() error = %v", err)
+		}
+
+		movedItems := moveOut.Outputs["items"].Value.([]ProcessingItem)
+		if len(movedItems) != 1 {
+			t.Fatalf("len(movedItems) = %d, want 1", len(movedItems))
+		}
+		movedSourcePath := movedItems[0].SourcePath
+		if filepath.Base(movedSourcePath) != "album" {
+			t.Fatalf("moved folder name = %q, want album", filepath.Base(movedSourcePath))
+		}
+		if !pathExists(t, movedSourcePath) {
+			t.Fatalf("moved folder %q should exist", movedSourcePath)
+		}
+		if pathExists(t, sourcePath) {
+			t.Fatalf("source folder %q should not exist after move", sourcePath)
+		}
+	})
+}
+
 func TestCompressNodeExecutorRollbackRemovesGeneratedArchives(t *testing.T) {
 	t.Parallel()
 

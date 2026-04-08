@@ -39,6 +39,7 @@ func (e *compressNodeExecutor) Schema() NodeSchema {
 		},
 		Outputs: []PortDef{
 			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "已处理的处理项列表"},
+			{Name: "archive_items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "压缩产物处理项列表"},
 		},
 	}
 }
@@ -96,6 +97,7 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	excludePatterns := stringSliceConfig(input.Node.Config, "exclude_patterns", nil)
 
 	stepResults := make([]ProcessingStepResult, 0, len(items))
+	archiveItems := make([]ProcessingItem, 0, len(items))
 	archives := make([]string, 0, len(items))
 	for _, item := range items {
 		sourcePath := strings.TrimSpace(item.SourcePath)
@@ -125,6 +127,7 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: create archive for %q: %w", e.Type(), sourcePath, err)
 		}
 		archives = append(archives, archivePath)
+		archiveItems = append(archiveItems, compressNodeBuildArchiveItem(item, archivePath))
 		stepResults = append(stepResults, ProcessingStepResult{
 			SourcePath: sourcePath,
 			TargetPath: normalizeWorkflowPath(archivePath),
@@ -140,11 +143,22 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 
 	return NodeExecutionOutput{
 		Outputs: map[string]TypedValue{
-			"items":        {Type: PortTypeProcessingItemList, Value: items},
-			"step_results": {Type: PortTypeProcessingStepResultList, Value: stepResults},
+			"items":         {Type: PortTypeProcessingItemList, Value: items},
+			"archive_items": {Type: PortTypeProcessingItemList, Value: archiveItems},
+			"step_results":  {Type: PortTypeProcessingStepResultList, Value: stepResults},
 		},
 		Status: ExecutionSuccess,
 	}, nil
+}
+
+func compressNodeBuildArchiveItem(item ProcessingItem, archivePath string) ProcessingItem {
+	derived := item
+	derived.SourcePath = archivePath
+	derived.ParentPath = filepath.Dir(archivePath)
+	derived.FolderName = filepath.Base(archivePath)
+	derived.TargetName = filepath.Base(archivePath)
+	derived.Files = nil
+	return derived
 }
 
 func (e *compressNodeExecutor) Resume(_ context.Context, _ NodeExecutionInput, _ map[string]any) (NodeExecutionOutput, error) {
