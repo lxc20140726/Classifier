@@ -154,6 +154,117 @@ func TestFolderRepositoryList(t *testing.T) {
 	}
 }
 
+func TestFolderRepositoryListWorkflowSummariesByFolderIDs(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewFolderRepository(database)
+	workflowRunRepo := NewWorkflowRunRepository(database)
+	nodeRunRepo := NewNodeRunRepository(database)
+	ctx := context.Background()
+
+	folders := []*Folder{
+		{ID: "f-not-run", Path: "/media/not-run", Name: "not-run", Category: "other", CategorySource: "auto", Status: "pending"},
+		{ID: "f-classify", Path: "/media/classify", Name: "classify", Category: "other", CategorySource: "auto", Status: "pending"},
+		{ID: "f-process", Path: "/media/process", Name: "process", Category: "other", CategorySource: "auto", Status: "pending"},
+		{ID: "f-failed", Path: "/media/failed", Name: "failed", Category: "other", CategorySource: "auto", Status: "pending"},
+		{ID: "f-wait", Path: "/media/wait", Name: "wait", Category: "other", CategorySource: "auto", Status: "pending"},
+		{ID: "f-rolled", Path: "/media/rolled", Name: "rolled", Category: "other", CategorySource: "auto", Status: "pending"},
+	}
+	for _, folder := range folders {
+		if err := repo.Upsert(ctx, folder); err != nil {
+			t.Fatalf("Upsert(%s) error = %v", folder.ID, err)
+		}
+	}
+
+	mustCreateWorkflowRun := func(run *WorkflowRun) {
+		t.Helper()
+		if err := workflowRunRepo.Create(ctx, run); err != nil {
+			t.Fatalf("workflowRunRepo.Create(%s) error = %v", run.ID, err)
+		}
+	}
+	mustCreateNodeRun := func(run *NodeRun) {
+		t.Helper()
+		if err := nodeRunRepo.Create(ctx, run); err != nil {
+			t.Fatalf("nodeRunRepo.Create(%s) error = %v", run.ID, err)
+		}
+	}
+	mustSetWorkflowRunUpdatedAt := func(runID, at string) {
+		t.Helper()
+		if _, err := database.ExecContext(ctx, "UPDATE workflow_runs SET updated_at = ? WHERE id = ?", at, runID); err != nil {
+			t.Fatalf("update workflow_runs.updated_at(%s) error = %v", runID, err)
+		}
+	}
+
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-classify", JobID: "job-classify", FolderID: "f-classify", WorkflowDefID: "def", Status: "succeeded"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-classify-writer", WorkflowRunID: "wr-classify", NodeID: "writer", NodeType: "classification-writer", Sequence: 1, Status: "succeeded"})
+	mustSetWorkflowRunUpdatedAt("wr-classify", "2026-01-01 00:00:01")
+
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-process", JobID: "job-process", FolderID: "f-process", WorkflowDefID: "def", Status: "succeeded"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-process-move", WorkflowRunID: "wr-process", NodeID: "move", NodeType: "move-node", Sequence: 1, Status: "succeeded"})
+	mustSetWorkflowRunUpdatedAt("wr-process", "2026-01-01 00:00:02")
+
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-failed-old", JobID: "job-failed-old", FolderID: "f-failed", WorkflowDefID: "def", Status: "succeeded"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-failed-old-move", WorkflowRunID: "wr-failed-old", NodeID: "move", NodeType: "move-node", Sequence: 1, Status: "succeeded"})
+	mustSetWorkflowRunUpdatedAt("wr-failed-old", "2026-01-01 00:00:03")
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-failed-new", JobID: "job-failed-new", FolderID: "f-failed", WorkflowDefID: "def", Status: "failed"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-failed-new-move", WorkflowRunID: "wr-failed-new", NodeID: "move", NodeType: "move-node", Sequence: 1, Status: "failed"})
+	mustSetWorkflowRunUpdatedAt("wr-failed-new", "2026-01-01 00:00:04")
+
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-wait", JobID: "job-wait", FolderID: "f-wait", WorkflowDefID: "def", Status: "waiting_input"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-wait-keyword", WorkflowRunID: "wr-wait", NodeID: "kw", NodeType: "name-keyword-classifier", Sequence: 1, Status: "waiting_input"})
+	mustSetWorkflowRunUpdatedAt("wr-wait", "2026-01-01 00:00:05")
+
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-rolled", JobID: "job-rolled", FolderID: "f-rolled", WorkflowDefID: "def", Status: "rolled_back"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-rolled-move", WorkflowRunID: "wr-rolled", NodeID: "move", NodeType: "move-node", Sequence: 1, Status: "succeeded"})
+	mustSetWorkflowRunUpdatedAt("wr-rolled", "2026-01-01 00:00:06")
+
+	summaries, err := repo.ListWorkflowSummariesByFolderIDs(ctx, []string{
+		"f-not-run",
+		"f-classify",
+		"f-process",
+		"f-failed",
+		"f-wait",
+		"f-rolled",
+		"f-not-run",
+		"",
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowSummariesByFolderIDs() error = %v", err)
+	}
+
+	if got := summaries["f-not-run"].Classification.Status; got != "not_run" {
+		t.Fatalf("f-not-run classification = %q, want not_run", got)
+	}
+	if got := summaries["f-not-run"].Processing.Status; got != "not_run" {
+		t.Fatalf("f-not-run processing = %q, want not_run", got)
+	}
+
+	if got := summaries["f-classify"].Classification.Status; got != "succeeded" {
+		t.Fatalf("f-classify classification = %q, want succeeded", got)
+	}
+	if got := summaries["f-classify"].Processing.Status; got != "not_run" {
+		t.Fatalf("f-classify processing = %q, want not_run", got)
+	}
+
+	if got := summaries["f-process"].Processing.Status; got != "succeeded" {
+		t.Fatalf("f-process processing = %q, want succeeded", got)
+	}
+	if got := summaries["f-process"].Classification.Status; got != "not_run" {
+		t.Fatalf("f-process classification = %q, want not_run", got)
+	}
+
+	if got := summaries["f-failed"].Processing.Status; got != "failed" {
+		t.Fatalf("f-failed processing = %q, want failed", got)
+	}
+	if got := summaries["f-wait"].Classification.Status; got != "waiting_input" {
+		t.Fatalf("f-wait classification = %q, want waiting_input", got)
+	}
+	if got := summaries["f-rolled"].Processing.Status; got != "rolled_back" {
+		t.Fatalf("f-rolled processing = %q, want rolled_back", got)
+	}
+}
+
 func TestFolderRepositoryUpdatesAndDelete(t *testing.T) {
 	t.Parallel()
 

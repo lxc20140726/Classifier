@@ -286,19 +286,19 @@ func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID
 	}
 	if err := s.workflowRuns.Create(ctx, run); err != nil {
 		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", fmt.Sprintf("创建工作流运行失败: %v", err))
 		return
 	}
 	if err := s.executeWorkflowRun(ctx, run.ID, false); err != nil {
 		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", err.Error())
 		return
 	}
 
 	latestRun, err := s.workflowRuns.GetByID(ctx, run.ID)
 	if err != nil {
 		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", fmt.Sprintf("读取工作流运行结果失败: %v", err))
 		return
 	}
 
@@ -310,7 +310,11 @@ func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID
 		_ = s.jobs.UpdateStatus(ctx, jobID, latestRun.Status, "")
 	default:
 		_ = s.jobs.IncrementProgress(ctx, jobID, 0, 1)
-		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", "")
+		jobErr := strings.TrimSpace(latestRun.Error)
+		if jobErr == "" {
+			jobErr = "工作流运行失败"
+		}
+		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", jobErr)
 	}
 }
 
@@ -408,7 +412,11 @@ func (s *WorkflowRunnerService) ResumeWorkflowRunWithData(ctx context.Context, w
 			return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData increment job progress %q: %w", run.JobID, err)
 		}
 	}
-	if err := s.jobs.UpdateStatus(ctx, run.JobID, run.Status, ""); err != nil {
+	jobErr := ""
+	if run.Status == "failed" {
+		jobErr = strings.TrimSpace(run.Error)
+	}
+	if err := s.jobs.UpdateStatus(ctx, run.JobID, run.Status, jobErr); err != nil {
 		return fmt.Errorf("workflowRunner.ResumeWorkflowRunWithData update job %q status %q: %w", run.JobID, run.Status, err)
 	}
 
@@ -509,12 +517,24 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	}
 
 	runStartedAt := time.Now()
+	workflowFailureReason := ""
+	workflowFailureNodeID := ""
 	if !resume {
 		_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.start", "success", 0, nil)
 	}
 	defer func() {
 		if retErr != nil {
-			_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.failed", "failed", time.Since(runStartedAt).Milliseconds(), retErr)
+			reason := strings.TrimSpace(workflowFailureReason)
+			if reason == "" {
+				reason = strings.TrimSpace(retErr.Error())
+			}
+			if reason == "" {
+				reason = "workflow run failed"
+			}
+			run.Error = reason
+			run.LastNodeID = strings.TrimSpace(workflowFailureNodeID)
+			_ = s.markWorkflowRunFailed(ctx, run.ID, workflowFailureNodeID, reason)
+			_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.failed", "failed", time.Since(runStartedAt).Milliseconds(), fmt.Errorf("%s", reason))
 		}
 	}()
 
@@ -598,6 +618,8 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			}
 			if firstErr == nil && result.Err != nil {
 				firstErr = result.Err
+				workflowFailureReason = strings.TrimSpace(result.Reason)
+				workflowFailureNodeID = strings.TrimSpace(result.NodeID)
 			}
 		}
 		if firstErr != nil {
@@ -625,6 +647,8 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 type nodeExecutionResult struct {
 	Pending bool
 	Err     error
+	NodeID  string
+	Reason  string
 }
 
 func (s *WorkflowRunnerService) executeWorkflowNode(
@@ -661,8 +685,9 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		Status:        "pending",
 	}
 	if err := s.nodeRuns.Create(ctx, nodeRun); err != nil {
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun create node run for node %q: %w", node.ID, err)}
+		reason := fmt.Sprintf("create node run for node %q: %v", node.ID, err)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 	}
 
 	if skipNode {
@@ -671,8 +696,9 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			skipMessage = "skip_reason=" + strings.TrimSpace(skipReason)
 		}
 		if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "skipped", "{}", skipMessage); err != nil {
-			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-			return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun finish skipped node run %q: %w", node.ID, err)}
+			reason := fmt.Sprintf("finish skipped node run %q: %v", node.ID, err)
+			_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+			return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 		}
 		outputMu.Lock()
 		nodeStatusCache[node.ID] = "skipped"
@@ -682,7 +708,16 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	if failNode {
 		failureMessage := withErrorCode(errCode, errMsg)
 		_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", failureMessage)
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, failureMessage)
+		_ = s.writeNodeExecutionAudit(
+			ctx,
+			NodeExecutionInput{WorkflowRun: run, NodeRun: nodeRun, Node: node, Folder: folder, SourceDir: run.SourceDir, Inputs: inputs},
+			folder,
+			nil,
+			fmt.Errorf("%s", failureMessage),
+			time.Now(),
+			errCode,
+		)
 		s.publish("workflow_run.node_failed", map[string]any{
 			"job_id":          run.JobID,
 			"workflow_run_id": run.ID,
@@ -693,7 +728,11 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"error":           failureMessage,
 			"error_code":      errCode,
 		})
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun input validation node %q: %s", node.ID, failureMessage)}
+		return nodeExecutionResult{
+			Err:    fmt.Errorf("workflowRunner.executeWorkflowRun input validation node %q: %s", node.ID, failureMessage),
+			NodeID: node.ID,
+			Reason: failureMessage,
+		}
 	}
 
 	inputPayload := map[string]any{
@@ -708,18 +747,21 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	}
 	inputJSON, err := json.Marshal(inputPayload)
 	if err != nil {
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun marshal node input for node %q: %w", node.ID, err)}
+		reason := fmt.Sprintf("marshal node input for node %q: %v", node.ID, err)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 	}
 
 	if err := s.nodeRuns.UpdateStart(ctx, nodeRun.ID, string(inputJSON)); err != nil {
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun update start for node run %q: %w", nodeRun.ID, err)}
+		reason := fmt.Sprintf("update start for node run %q: %v", nodeRun.ID, err)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 	}
 
 	if err := s.createNodeSnapshot(ctx, run, nodeRun, "pre", folder, nil); err != nil {
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun create pre snapshot for node %q: %w", node.ID, err)}
+		reason := fmt.Sprintf("create pre snapshot for node %q: %v", node.ID, err)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 	}
 
 	s.publish("workflow_run.node_started", map[string]any{
@@ -737,7 +779,16 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		err := fmt.Errorf("workflowRunner.executeWorkflowRun: executor not found for node type %q", node.Type)
 		_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", err.Error())
 		_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]TypedValue{"error": {Type: PortTypeString, Value: err.Error()}})
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, err.Error())
+		_ = s.writeNodeExecutionAudit(
+			ctx,
+			NodeExecutionInput{WorkflowRun: run, NodeRun: nodeRun, Node: node, Folder: folder, SourceDir: run.SourceDir, Inputs: inputs},
+			folder,
+			nil,
+			err,
+			time.Now(),
+			"",
+		)
 		s.publish("workflow_run.node_failed", map[string]any{
 			"job_id":          run.JobID,
 			"workflow_run_id": run.ID,
@@ -747,7 +798,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"node_type":       node.Type,
 			"error":           err.Error(),
 		})
-		return nodeExecutionResult{Err: err}
+		return nodeExecutionResult{Err: err, NodeID: node.ID, Reason: err.Error()}
 	}
 
 	execInput := NodeExecutionInput{
@@ -782,8 +833,8 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	if execErr != nil {
 		_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", execErr.Error())
 		_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]TypedValue{"error": {Type: PortTypeString, Value: execErr.Error()}})
-		_ = s.writeNodeExecutionAudit(ctx, execInput, folder, nil, execErr, nodeStartedAt)
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+		_ = s.writeNodeExecutionAudit(ctx, execInput, folder, nil, execErr, nodeStartedAt, "")
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, execErr.Error())
 		s.publish("workflow_run.node_failed", map[string]any{
 			"job_id":          run.JobID,
 			"workflow_run_id": run.ID,
@@ -793,7 +844,11 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"node_type":       node.Type,
 			"error":           execErr.Error(),
 		})
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %w", node.ID, execErr)}
+		return nodeExecutionResult{
+			Err:    fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %w", node.ID, execErr),
+			NodeID: node.ID,
+			Reason: execErr.Error(),
+		}
 	}
 
 	if execOutput.Status == "" {
@@ -807,7 +862,8 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		if code, message := validateNodeOutputs(execOutput.Outputs, schema); code != "" {
 			finalMsg := withErrorCode(code, message)
 			_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", "", finalMsg)
-			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+			_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, finalMsg)
+			_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, fmt.Errorf("%s", finalMsg), nodeStartedAt, code)
 			s.publish("workflow_run.node_failed", map[string]any{
 				"job_id":          run.JobID,
 				"workflow_run_id": run.ID,
@@ -818,14 +874,19 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 				"error":           finalMsg,
 				"error_code":      code,
 			})
-			return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun output validation node %q: %s", node.ID, finalMsg)}
+			return nodeExecutionResult{
+				Err:    fmt.Errorf("workflowRunner.executeWorkflowRun output validation node %q: %s", node.ID, finalMsg),
+				NodeID: node.ID,
+				Reason: finalMsg,
+			}
 		}
 	}
 
 	outputJSON, marshalErr := s.marshalTypedValuesJSON(execOutput.Outputs)
 	if marshalErr != nil {
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun marshal node output for node %q: %w", node.ID, marshalErr)}
+		reason := fmt.Sprintf("marshal node output for node %q: %v", node.ID, marshalErr)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 	}
 
 	if execOutput.Status == ExecutionPending {
@@ -841,17 +902,20 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		if len(persistedResumeData) > 0 {
 			encodedResumeData, encodeErr := json.Marshal(persistedResumeData)
 			if encodeErr != nil {
-				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-				return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun marshal resume data for node %q: %w", node.ID, encodeErr)}
+				reason := fmt.Sprintf("marshal resume data for node %q: %v", node.ID, encodeErr)
+				_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+				return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 			}
 			if err := s.nodeRuns.UpdateResumeData(ctx, nodeRun.ID, string(encodedResumeData)); err != nil {
-				_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-				return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun persist resume data for node run %q: %w", nodeRun.ID, err)}
+				reason := fmt.Sprintf("persist resume data for node run %q: %v", nodeRun.ID, err)
+				_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+				return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 			}
 		}
 		if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "waiting_input", string(outputJSON), errMsg); err != nil {
-			_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-			return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun update waiting_input for node run %q: %w", nodeRun.ID, err)}
+			reason := fmt.Sprintf("update waiting_input for node run %q: %v", nodeRun.ID, err)
+			_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+			return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 		}
 
 		if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "waiting_input", node.ID); err != nil {
@@ -879,8 +943,8 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		errMsg = withErrorCode(execOutput.ErrorCode, errMsg)
 		_ = s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "failed", string(outputJSON), errMsg)
 		_ = s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, map[string]TypedValue{"error": {Type: PortTypeString, Value: errMsg}})
-		_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, fmt.Errorf("%s", errMsg), nodeStartedAt)
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
+		_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, fmt.Errorf("%s", errMsg), nodeStartedAt, execOutput.ErrorCode)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, errMsg)
 		s.publish("workflow_run.node_failed", map[string]any{
 			"job_id":          run.JobID,
 			"workflow_run_id": run.ID,
@@ -891,12 +955,17 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"error":           errMsg,
 			"error_code":      execOutput.ErrorCode,
 		})
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %s", node.ID, errMsg)}
+		return nodeExecutionResult{
+			Err:    fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %s", node.ID, errMsg),
+			NodeID: node.ID,
+			Reason: errMsg,
+		}
 	}
 
 	if err := s.nodeRuns.UpdateFinish(ctx, nodeRun.ID, "succeeded", string(outputJSON), ""); err != nil {
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun update finish for node run %q: %w", nodeRun.ID, err)}
+		reason := fmt.Sprintf("update finish for node run %q: %v", nodeRun.ID, err)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 	}
 
 	outputMu.Lock()
@@ -905,10 +974,11 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	outputMu.Unlock()
 
 	if err := s.createNodeSnapshot(ctx, run, nodeRun, "post", folder, execOutput.Outputs); err != nil {
-		_ = s.workflowRuns.UpdateStatus(ctx, run.ID, "failed", node.ID)
-		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun create post snapshot for node %q: %w", node.ID, err)}
+		reason := fmt.Sprintf("create post snapshot for node %q: %v", node.ID, err)
+		_ = s.markWorkflowRunFailed(ctx, run.ID, node.ID, reason)
+		return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun %s", reason), NodeID: node.ID, Reason: reason}
 	}
-	_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, nil, nodeStartedAt)
+	_ = s.writeNodeExecutionAudit(ctx, execInput, folder, execOutput.Outputs, nil, nodeStartedAt, "")
 
 	s.publish("workflow_run.node_done", map[string]any{
 		"job_id":          run.JobID,
@@ -933,7 +1003,76 @@ func withErrorCode(errorCode, message string) string {
 	return fmt.Sprintf("%s: %s", errorCode, message)
 }
 
-func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, input NodeExecutionInput, currentFolder *repository.Folder, outputs map[string]TypedValue, execErr error, startedAt time.Time) error {
+func (s *WorkflowRunnerService) markWorkflowRunFailed(ctx context.Context, runID, nodeID, reason string) error {
+	finalReason := strings.TrimSpace(reason)
+	if finalReason == "" {
+		finalReason = "workflow run failed"
+	}
+	if err := s.workflowRuns.UpdateFailure(ctx, runID, nodeID, finalReason); err != nil {
+		return fmt.Errorf("workflowRunner.markWorkflowRunFailed update workflow run %q: %w", runID, err)
+	}
+	return nil
+}
+
+func summarizeTypedValues(values map[string]*TypedValue) map[string]any {
+	if len(values) == 0 {
+		return map[string]any{
+			"keys":  []string{},
+			"count": 0,
+		}
+	}
+
+	keys := make([]string, 0, len(values))
+	types := make(map[string]string, len(values))
+	for key, value := range values {
+		keys = append(keys, key)
+		if value != nil {
+			types[key] = string(value.Type)
+		} else {
+			types[key] = ""
+		}
+	}
+	sort.Strings(keys)
+
+	return map[string]any{
+		"keys":  keys,
+		"count": len(keys),
+		"types": types,
+	}
+}
+
+func summarizeTypedValuesMap(values map[string]TypedValue) map[string]any {
+	if len(values) == 0 {
+		return map[string]any{
+			"keys":  []string{},
+			"count": 0,
+		}
+	}
+
+	keys := make([]string, 0, len(values))
+	types := make(map[string]string, len(values))
+	for key, value := range values {
+		keys = append(keys, key)
+		types[key] = string(value.Type)
+	}
+	sort.Strings(keys)
+
+	return map[string]any{
+		"keys":  keys,
+		"count": len(keys),
+		"types": types,
+	}
+}
+
+func (s *WorkflowRunnerService) writeNodeExecutionAudit(
+	ctx context.Context,
+	input NodeExecutionInput,
+	currentFolder *repository.Folder,
+	outputs map[string]TypedValue,
+	execErr error,
+	startedAt time.Time,
+	errorCode string,
+) error {
 	if s.auditSvc == nil {
 		return nil
 	}
@@ -943,6 +1082,8 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 		"node_run_id":     nodeRunIDFromInput(input.NodeRun),
 		"node_id":         input.Node.ID,
 		"node_type":       input.Node.Type,
+		"input_summary":   summarizeTypedValues(input.Inputs),
+		"output_summary":  summarizeTypedValuesMap(outputs),
 	}
 	action := "workflow." + input.Node.Type
 	folderPath := folderPathForAudit(input.Folder, currentFolder)
@@ -993,6 +1134,9 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 		result = "failed"
 		detail["error"] = execErr.Error()
 	}
+	if strings.TrimSpace(errorCode) != "" {
+		detail["error_code"] = strings.TrimSpace(errorCode)
+	}
 
 	detailJSON, err := json.Marshal(detail)
 	if err != nil {
@@ -1000,14 +1144,18 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(ctx context.Context, inp
 	}
 
 	auditLog := &repository.AuditLog{
-		JobID:      workflowJobIDFromInput(input.WorkflowRun),
-		FolderID:   folderIDForAudit(input.Folder, currentFolder),
-		FolderPath: folderPath,
-		Action:     action,
-		Result:     result,
-		Detail:     detailJSON,
-		DurationMs: time.Since(startedAt).Milliseconds(),
-		ErrorMsg:   errorString(execErr),
+		JobID:         workflowJobIDFromInput(input.WorkflowRun),
+		WorkflowRunID: workflowRunIDFromInput(input.WorkflowRun),
+		NodeRunID:     nodeRunIDFromInput(input.NodeRun),
+		NodeID:        strings.TrimSpace(input.Node.ID),
+		NodeType:      strings.TrimSpace(input.Node.Type),
+		FolderID:      folderIDForAudit(input.Folder, currentFolder),
+		FolderPath:    folderPath,
+		Action:        action,
+		Result:        result,
+		Detail:        detailJSON,
+		DurationMs:    time.Since(startedAt).Milliseconds(),
+		ErrorMsg:      errorString(execErr),
 	}
 	if input.Node.Type == subtreeAggregatorExecutorType && strings.TrimSpace(auditLog.FolderID) == "" {
 		entries := classifiedEntriesForAudit(outputs)
@@ -1040,12 +1188,16 @@ func (s *WorkflowRunnerService) writeNodeRollbackAudit(ctx context.Context, run 
 	}
 
 	return s.auditSvc.Write(ctx, &repository.AuditLog{
-		JobID:      workflowJobIDFromInput(run),
-		FolderID:   folderIDForAudit(folder, nil),
-		FolderPath: folderPathForAudit(folder, nil),
-		Action:     "workflow." + nodeRun.NodeType + ".rollback",
-		Result:     "success",
-		Detail:     detailJSON,
+		JobID:         workflowJobIDFromInput(run),
+		WorkflowRunID: workflowRunIDFromInput(run),
+		NodeRunID:     nodeRun.ID,
+		NodeID:        strings.TrimSpace(nodeRun.NodeID),
+		NodeType:      strings.TrimSpace(nodeRun.NodeType),
+		FolderID:      folderIDForAudit(folder, nil),
+		FolderPath:    folderPathForAudit(folder, nil),
+		Action:        "workflow." + nodeRun.NodeType + ".rollback",
+		Result:        "success",
+		Detail:        detailJSON,
 	})
 }
 
@@ -1057,6 +1209,7 @@ func (s *WorkflowRunnerService) writeWorkflowRunAudit(ctx context.Context, run *
 	detail := map[string]any{
 		"workflow_run_id": workflowRunIDFromInput(run),
 		"workflow_def_id": run.WorkflowDefID,
+		"last_node_id":    strings.TrimSpace(run.LastNodeID),
 	}
 	if auditErr != nil {
 		detail["error"] = auditErr.Error()
@@ -1068,14 +1221,15 @@ func (s *WorkflowRunnerService) writeWorkflowRunAudit(ctx context.Context, run *
 	}
 
 	return s.auditSvc.Write(ctx, &repository.AuditLog{
-		JobID:      workflowJobIDFromInput(run),
-		FolderID:   folderIDForAudit(folder, nil),
-		FolderPath: folderPathForAudit(folder, nil),
-		Action:     action,
-		Result:     result,
-		Detail:     detailJSON,
-		DurationMs: durationMs,
-		ErrorMsg:   errorString(auditErr),
+		JobID:         workflowJobIDFromInput(run),
+		WorkflowRunID: workflowRunIDFromInput(run),
+		FolderID:      folderIDForAudit(folder, nil),
+		FolderPath:    folderPathForAudit(folder, nil),
+		Action:        action,
+		Result:        result,
+		Detail:        detailJSON,
+		DurationMs:    durationMs,
+		ErrorMsg:      errorString(auditErr),
 	})
 }
 

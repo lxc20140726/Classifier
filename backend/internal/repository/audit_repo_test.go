@@ -17,26 +17,34 @@ func TestAuditRepositoryWriteGetAndList(t *testing.T) {
 
 	fixtures := []*AuditLog{
 		{
-			ID:         "a1",
-			JobID:      "job-1",
-			FolderID:   "folder-1",
-			FolderPath: "/media/a",
-			Action:     "rename",
-			Level:      "info",
-			Detail:     json.RawMessage(`{"old":"a","new":"b"}`),
-			Result:     "success",
-			DurationMs: 11,
+			ID:            "a1",
+			JobID:         "job-1",
+			WorkflowRunID: "wr-1",
+			NodeRunID:     "nr-1",
+			NodeID:        "node-1",
+			NodeType:      "move-node",
+			FolderID:      "folder-1",
+			FolderPath:    "/media/a",
+			Action:        "rename",
+			Level:         "info",
+			Detail:        json.RawMessage(`{"old":"a","new":"b"}`),
+			Result:        "success",
+			DurationMs:    11,
 		},
 		{
-			ID:         "a2",
-			JobID:      "job-2",
-			FolderID:   "folder-2",
-			FolderPath: "/media/b",
-			Action:     "move",
-			Level:      "error",
-			Result:     "failed",
-			ErrorMsg:   "permission denied",
-			DurationMs: 22,
+			ID:            "a2",
+			JobID:         "job-2",
+			WorkflowRunID: "wr-2",
+			NodeRunID:     "nr-2",
+			NodeID:        "node-2",
+			NodeType:      "compress-node",
+			FolderID:      "folder-2",
+			FolderPath:    "/media/b",
+			Action:        "move",
+			Level:         "error",
+			Result:        "failed",
+			ErrorMsg:      "permission denied",
+			DurationMs:    22,
 		},
 		{
 			ID:         "a3",
@@ -62,6 +70,9 @@ func TestAuditRepositoryWriteGetAndList(t *testing.T) {
 	if got.Action != "rename" || got.Result != "success" {
 		t.Fatalf("GetByID() action/result = %q/%q, want rename/success", got.Action, got.Result)
 	}
+	if got.WorkflowRunID != "wr-1" || got.NodeRunID != "nr-1" || got.NodeID != "node-1" || got.NodeType != "move-node" {
+		t.Fatalf("GetByID() refs = run:%q nodeRun:%q node:%q type:%q", got.WorkflowRunID, got.NodeRunID, got.NodeID, got.NodeType)
+	}
 
 	if string(got.Detail) != `{"old":"a","new":"b"}` {
 		t.Fatalf("GetByID() detail = %s, want expected JSON", string(got.Detail))
@@ -80,6 +91,10 @@ func TestAuditRepositoryWriteGetAndList(t *testing.T) {
 		{name: "all", filter: AuditListFilter{Page: 1, Limit: 10}, wantTotal: 3, wantLen: 3},
 		{name: "filter action", filter: AuditListFilter{Action: "rename", Page: 1, Limit: 10}, wantTotal: 2, wantLen: 2},
 		{name: "filter result", filter: AuditListFilter{Result: "failed", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
+		{name: "filter workflow run", filter: AuditListFilter{WorkflowRunID: "wr-1", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
+		{name: "filter node run", filter: AuditListFilter{NodeRunID: "nr-2", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
+		{name: "filter node id", filter: AuditListFilter{NodeID: "node-2", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
+		{name: "filter node type", filter: AuditListFilter{NodeType: "move-node", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
 		{name: "filter folder", filter: AuditListFilter{FolderID: "folder-1", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
 		{name: "filter folder path keyword", filter: AuditListFilter{FolderPathKeyword: "/media/b", Page: 1, Limit: 10}, wantTotal: 1, wantLen: 1},
 		{name: "pagination", filter: AuditListFilter{Page: 2, Limit: 2}, wantTotal: 3, wantLen: 1},

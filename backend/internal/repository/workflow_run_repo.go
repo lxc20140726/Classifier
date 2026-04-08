@@ -124,6 +124,7 @@ func (r *SQLiteWorkflowRunRepository) UpdateStatus(ctx context.Context, id, stat
 SET status = ?,
 	resume_node_id = ?,
 	last_node_id = ?,
+	error = CASE WHEN ? = 'failed' THEN error ELSE '' END,
 	started_at = CASE WHEN ? = 'running' THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
 	finished_at = CASE WHEN ? IN ('succeeded', 'failed', 'rolled_back') THEN CURRENT_TIMESTAMP ELSE finished_at END,
 	updated_at = CURRENT_TIMESTAMP
@@ -131,6 +132,7 @@ WHERE id = ?`,
 		status,
 		nullableString(resumeNodeID),
 		nullableString(resumeNodeID),
+		status,
 		status,
 		status,
 		id,
@@ -141,6 +143,33 @@ WHERE id = ?`,
 
 	if err := assertRowsAffected(res); err != nil {
 		return fmt.Errorf("workflowRunRepo.UpdateStatus: %w", err)
+	}
+
+	return nil
+}
+
+func (r *SQLiteWorkflowRunRepository) UpdateFailure(ctx context.Context, id, lastNodeID, errMsg string) error {
+	res, err := r.db.ExecContext(
+		ctx,
+		`UPDATE workflow_runs
+SET status = 'failed',
+	resume_node_id = ?,
+	last_node_id = ?,
+	error = ?,
+	finished_at = CURRENT_TIMESTAMP,
+	updated_at = CURRENT_TIMESTAMP
+WHERE id = ?`,
+		nullableString(lastNodeID),
+		nullableString(lastNodeID),
+		nullableString(errMsg),
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("workflowRunRepo.UpdateFailure: %w", err)
+	}
+
+	if err := assertRowsAffected(res); err != nil {
+		return fmt.Errorf("workflowRunRepo.UpdateFailure: %w", err)
 	}
 
 	return nil

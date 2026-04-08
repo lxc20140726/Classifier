@@ -41,7 +41,7 @@ func TestAuditHandlerListParsesFilters(t *testing.T) {
 	stubRepo := &stubAuditRepository{}
 	router := setupAuditRouter(stubRepo)
 
-	req := httptest.NewRequest(http.MethodGet, "/audit-logs?page=2&limit=30&job_id=j1&action=move&result=success&folder_id=f1&folder_path=movies&from=2026-03-20T09:10:11Z&to=2026-03-20T10:10:11Z", nil)
+	req := httptest.NewRequest(http.MethodGet, "/audit-logs?page=2&limit=30&job_id=j1&workflow_run_id=wr1&node_run_id=nr1&node_id=n1&node_type=move-node&action=move&result=success&folder_id=f1&folder_path=movies&from=2026-03-20T09:10:11Z&to=2026-03-20T10:10:11Z", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -59,6 +59,12 @@ func TestAuditHandlerListParsesFilters(t *testing.T) {
 	}
 	if stubRepo.lastFilter.From.IsZero() || stubRepo.lastFilter.To.IsZero() {
 		t.Fatalf("From/To should be parsed, got from=%v to=%v", stubRepo.lastFilter.From, stubRepo.lastFilter.To)
+	}
+	if stubRepo.lastFilter.WorkflowRunID != "wr1" || stubRepo.lastFilter.NodeRunID != "nr1" {
+		t.Fatalf("WorkflowRunID/NodeRunID = %q/%q, want wr1/nr1", stubRepo.lastFilter.WorkflowRunID, stubRepo.lastFilter.NodeRunID)
+	}
+	if stubRepo.lastFilter.NodeID != "n1" || stubRepo.lastFilter.NodeType != "move-node" {
+		t.Fatalf("NodeID/NodeType = %q/%q, want n1/move-node", stubRepo.lastFilter.NodeID, stubRepo.lastFilter.NodeType)
 	}
 }
 

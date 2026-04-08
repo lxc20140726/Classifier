@@ -21,10 +21,14 @@ func (r *SQLiteAuditRepository) Write(ctx context.Context, log *AuditLog) error 
 	_, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO audit_logs (
-	id, job_id, folder_id, folder_path, action, level, detail, result, error_msg, duration_ms, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+	id, job_id, workflow_run_id, node_run_id, node_id, node_type, folder_id, folder_path, action, level, detail, result, error_msg, duration_ms, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		log.ID,
 		nullableString(log.JobID),
+		nullableString(log.WorkflowRunID),
+		nullableString(log.NodeRunID),
+		nullableString(log.NodeID),
+		nullableString(log.NodeType),
 		nullableString(log.FolderID),
 		log.FolderPath,
 		log.Action,
@@ -42,8 +46,8 @@ func (r *SQLiteAuditRepository) Write(ctx context.Context, log *AuditLog) error 
 }
 
 func (r *SQLiteAuditRepository) List(ctx context.Context, filter AuditListFilter) ([]*AuditLog, int, error) {
-	where := make([]string, 0, 6)
-	args := make([]any, 0, 6)
+	where := make([]string, 0, 10)
+	args := make([]any, 0, 10)
 
 	if filter.Action != "" {
 		where = append(where, "action = ?")
@@ -53,6 +57,22 @@ func (r *SQLiteAuditRepository) List(ctx context.Context, filter AuditListFilter
 	if filter.JobID != "" {
 		where = append(where, "job_id = ?")
 		args = append(args, filter.JobID)
+	}
+	if filter.WorkflowRunID != "" {
+		where = append(where, "workflow_run_id = ?")
+		args = append(args, filter.WorkflowRunID)
+	}
+	if filter.NodeRunID != "" {
+		where = append(where, "node_run_id = ?")
+		args = append(args, filter.NodeRunID)
+	}
+	if filter.NodeID != "" {
+		where = append(where, "node_id = ?")
+		args = append(args, filter.NodeID)
+	}
+	if filter.NodeType != "" {
+		where = append(where, "node_type = ?")
+		args = append(args, filter.NodeType)
 	}
 
 	if filter.Result != "" {
@@ -106,7 +126,7 @@ func (r *SQLiteAuditRepository) List(ctx context.Context, filter AuditListFilter
 
 	rows, err := r.db.QueryContext(
 		ctx,
-		`SELECT id, job_id, folder_id, folder_path, action, level, detail, result, error_msg, duration_ms, created_at
+		`SELECT id, job_id, workflow_run_id, node_run_id, node_id, node_type, folder_id, folder_path, action, level, detail, result, error_msg, duration_ms, created_at
 FROM audit_logs`+whereClause+`
 ORDER BY created_at DESC
 LIMIT ? OFFSET ?`,
@@ -136,7 +156,7 @@ LIMIT ? OFFSET ?`,
 func (r *SQLiteAuditRepository) GetByID(ctx context.Context, id string) (*AuditLog, error) {
 	item, err := scanAuditLog(
 		r.db.QueryRowContext(ctx, `
-SELECT id, job_id, folder_id, folder_path, action, level, detail, result, error_msg, duration_ms, created_at
+SELECT id, job_id, workflow_run_id, node_run_id, node_id, node_type, folder_id, folder_path, action, level, detail, result, error_msg, duration_ms, created_at
 FROM audit_logs
 WHERE id = ?`, id),
 	)
@@ -150,6 +170,10 @@ WHERE id = ?`, id),
 func scanAuditLog(scanner interface{ Scan(dest ...any) error }) (*AuditLog, error) {
 	item := &AuditLog{}
 	var jobID sql.NullString
+	var workflowRunID sql.NullString
+	var nodeRunID sql.NullString
+	var nodeID sql.NullString
+	var nodeType sql.NullString
 	var folderID sql.NullString
 	var detail sql.NullString
 	var errorMsg sql.NullString
@@ -158,6 +182,10 @@ func scanAuditLog(scanner interface{ Scan(dest ...any) error }) (*AuditLog, erro
 	err := scanner.Scan(
 		&item.ID,
 		&jobID,
+		&workflowRunID,
+		&nodeRunID,
+		&nodeID,
+		&nodeType,
 		&folderID,
 		&item.FolderPath,
 		&item.Action,
@@ -177,6 +205,18 @@ func scanAuditLog(scanner interface{ Scan(dest ...any) error }) (*AuditLog, erro
 
 	if jobID.Valid {
 		item.JobID = jobID.String
+	}
+	if workflowRunID.Valid {
+		item.WorkflowRunID = workflowRunID.String
+	}
+	if nodeRunID.Valid {
+		item.NodeRunID = nodeRunID.String
+	}
+	if nodeID.Valid {
+		item.NodeID = nodeID.String
+	}
+	if nodeType.Valid {
+		item.NodeType = nodeType.String
 	}
 
 	if folderID.Valid {

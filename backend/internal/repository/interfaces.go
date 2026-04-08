@@ -12,6 +12,7 @@ type FolderRepository interface {
 	GetByPath(ctx context.Context, path string) (*Folder, error)
 	ListByPathPrefix(ctx context.Context, prefix string) ([]*Folder, error)
 	List(ctx context.Context, filter FolderListFilter) ([]*Folder, int, error)
+	ListWorkflowSummariesByFolderIDs(ctx context.Context, folderIDs []string) (map[string]FolderWorkflowSummary, error)
 	UpdateCategory(ctx context.Context, id, category, source string) error
 	UpdateStatus(ctx context.Context, id, status string) error
 	UpdatePath(ctx context.Context, id, newPath string) error
@@ -54,6 +55,7 @@ type WorkflowRunRepository interface {
 	GetByID(ctx context.Context, id string) (*WorkflowRun, error)
 	List(ctx context.Context, filter WorkflowRunListFilter) ([]*WorkflowRun, int, error)
 	UpdateStatus(ctx context.Context, id, status, resumeNodeID string) error
+	UpdateFailure(ctx context.Context, id, lastNodeID, errMsg string) error
 	UpdateBlocks(ctx context.Context, id string, delta int) error
 }
 

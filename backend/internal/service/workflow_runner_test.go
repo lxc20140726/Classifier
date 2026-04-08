@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1145,6 +1146,8 @@ func TestWorkflowRunnerServiceRejectsEmptyRequiredOutput(t *testing.T) {
 	workflowRunRepo := repository.NewWorkflowRunRepository(database)
 	nodeRunRepo := repository.NewNodeRunRepository(database)
 	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+	auditRepo := repository.NewAuditRepository(database)
+	auditSvc := NewAuditService(auditRepo)
 
 	graph := repository.WorkflowGraph{
 		Nodes: []repository.WorkflowGraphNode{
@@ -1160,7 +1163,7 @@ func TestWorkflowRunnerServiceRejectsEmptyRequiredOutput(t *testing.T) {
 		t.Fatalf("workflowDefRepo.Create() error = %v", err)
 	}
 
-	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, nil)
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), nil, auditSvc)
 	svc.RegisterExecutor(&emptyRequiredOutputExecutor{})
 
 	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
@@ -1172,8 +1175,17 @@ func TestWorkflowRunnerServiceRejectsEmptyRequiredOutput(t *testing.T) {
 	if job.Status != "failed" {
 		t.Fatalf("job status = %q, want failed", job.Status)
 	}
+	if strings.TrimSpace(job.Error) == "" {
+		t.Fatalf("job error is empty")
+	}
 
 	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	if run.Status != "failed" {
+		t.Fatalf("workflow run status = %q, want failed", run.Status)
+	}
+	if strings.TrimSpace(run.Error) == "" {
+		t.Fatalf("workflow run error is empty")
+	}
 	nodeRuns, _, err := nodeRunRepo.List(ctx, repository.NodeRunListFilter{WorkflowRunID: run.ID, Page: 1, Limit: 10})
 	if err != nil {
 		t.Fatalf("nodeRunRepo.List() error = %v", err)
@@ -1183,6 +1195,50 @@ func TestWorkflowRunnerServiceRejectsEmptyRequiredOutput(t *testing.T) {
 	}
 	if nodeRuns[0].Status != "failed" {
 		t.Fatalf("node status = %q, want failed", nodeRuns[0].Status)
+	}
+	if strings.TrimSpace(nodeRuns[0].Error) == "" {
+		t.Fatalf("node error is empty")
+	}
+
+	if nodeRuns[0].Error != run.Error {
+		t.Fatalf("node error = %q, want workflow run error %q", nodeRuns[0].Error, run.Error)
+	}
+	if !strings.Contains(job.Error, run.Error) {
+		t.Fatalf("job error = %q, want contain workflow run error %q", job.Error, run.Error)
+	}
+
+	failedNodeAudits, _, err := auditRepo.List(ctx, repository.AuditListFilter{
+		WorkflowRunID: run.ID,
+		NodeRunID:     nodeRuns[0].ID,
+		Result:        "failed",
+		Page:          1,
+		Limit:         20,
+	})
+	if err != nil {
+		t.Fatalf("auditRepo.List(node failed) error = %v", err)
+	}
+	if len(failedNodeAudits) == 0 {
+		t.Fatalf("node failed audit logs len = 0, want >= 1")
+	}
+	if failedNodeAudits[0].ErrorMsg != nodeRuns[0].Error {
+		t.Fatalf("node failed audit error = %q, want %q", failedNodeAudits[0].ErrorMsg, nodeRuns[0].Error)
+	}
+
+	workflowFailedAudits, _, err := auditRepo.List(ctx, repository.AuditListFilter{
+		WorkflowRunID: run.ID,
+		Action:        "workflow.run.failed",
+		Result:        "failed",
+		Page:          1,
+		Limit:         20,
+	})
+	if err != nil {
+		t.Fatalf("auditRepo.List(workflow failed) error = %v", err)
+	}
+	if len(workflowFailedAudits) == 0 {
+		t.Fatalf("workflow failed audit logs len = 0, want >= 1")
+	}
+	if workflowFailedAudits[0].ErrorMsg != run.Error {
+		t.Fatalf("workflow failed audit error = %q, want %q", workflowFailedAudits[0].ErrorMsg, run.Error)
 	}
 }
 

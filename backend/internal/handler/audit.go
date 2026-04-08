@@ -64,6 +64,10 @@ func (h *AuditHandler) List(c *gin.Context) {
 
 	items, total, err := h.audit.List(c.Request.Context(), repository.AuditListFilter{
 		JobID:             c.Query("job_id"),
+		WorkflowRunID:     c.Query("workflow_run_id"),
+		NodeRunID:         c.Query("node_run_id"),
+		NodeID:            c.Query("node_id"),
+		NodeType:          c.Query("node_type"),
 		Action:            c.Query("action"),
 		Result:            c.Query("result"),
 		FolderID:          c.Query("folder_id"),

@@ -6,26 +6,39 @@ import (
 )
 
 type Folder struct {
-	ID                string     `db:"id"`
-	Path              string     `db:"path"`
-	SourceDir         string     `db:"source_dir"`
-	RelativePath      string     `db:"relative_path"`
-	Name              string     `db:"name"`
-	Category          string     `db:"category"`
-	CategorySource    string     `db:"category_source"`
-	Status            string     `db:"status"`
-	ImageCount        int        `db:"image_count"`
-	VideoCount        int        `db:"video_count"`
-	OtherFileCount    int        `db:"other_file_count"`
-	HasOtherFiles     bool       `db:"has_other_files"`
-	TotalFiles        int        `db:"total_files"`
-	TotalSize         int64      `db:"total_size"`
-	MarkedForMove     bool       `db:"marked_for_move"`
-	DeletedAt         *time.Time `db:"deleted_at"`
-	DeleteStagingPath string     `db:"delete_staging_path"`
-	CoverImagePath    string     `db:"cover_image_path"`
-	ScannedAt         time.Time  `db:"scanned_at"`
-	UpdatedAt         time.Time  `db:"updated_at"`
+	ID                string                `db:"id"`
+	Path              string                `db:"path"`
+	SourceDir         string                `db:"source_dir"`
+	RelativePath      string                `db:"relative_path"`
+	Name              string                `db:"name"`
+	Category          string                `db:"category"`
+	CategorySource    string                `db:"category_source"`
+	Status            string                `db:"status"`
+	ImageCount        int                   `db:"image_count"`
+	VideoCount        int                   `db:"video_count"`
+	OtherFileCount    int                   `db:"other_file_count"`
+	HasOtherFiles     bool                  `db:"has_other_files"`
+	TotalFiles        int                   `db:"total_files"`
+	TotalSize         int64                 `db:"total_size"`
+	MarkedForMove     bool                  `db:"marked_for_move"`
+	DeletedAt         *time.Time            `db:"deleted_at"`
+	DeleteStagingPath string                `db:"delete_staging_path"`
+	CoverImagePath    string                `db:"cover_image_path"`
+	ScannedAt         time.Time             `db:"scanned_at"`
+	UpdatedAt         time.Time             `db:"updated_at"`
+	WorkflowSummary   FolderWorkflowSummary `json:"workflow_summary"`
+}
+
+type WorkflowStageSummary struct {
+	Status        string     `json:"status"`
+	WorkflowRunID string     `json:"workflow_run_id,omitempty"`
+	JobID         string     `json:"job_id,omitempty"`
+	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+}
+
+type FolderWorkflowSummary struct {
+	Classification WorkflowStageSummary `json:"classification"`
+	Processing     WorkflowStageSummary `json:"processing"`
 }
 
 type Job struct {
@@ -72,17 +85,21 @@ type Snapshot struct {
 }
 
 type AuditLog struct {
-	ID         string          `db:"id"          json:"id"`
-	JobID      string          `db:"job_id"       json:"job_id"`
-	FolderID   string          `db:"folder_id"    json:"folder_id"`
-	FolderPath string          `db:"folder_path"  json:"folder_path"`
-	Action     string          `db:"action"       json:"action"`
-	Level      string          `db:"level"        json:"level"`
-	Detail     json.RawMessage `db:"detail"       json:"detail"`
-	Result     string          `db:"result"       json:"result"`
-	ErrorMsg   string          `db:"error_msg"    json:"error_msg"`
-	DurationMs int64           `db:"duration_ms"  json:"duration_ms"`
-	CreatedAt  time.Time       `db:"created_at"   json:"created_at"`
+	ID            string          `db:"id"              json:"id"`
+	JobID         string          `db:"job_id"          json:"job_id"`
+	WorkflowRunID string          `db:"workflow_run_id" json:"workflow_run_id"`
+	NodeRunID     string          `db:"node_run_id"     json:"node_run_id"`
+	NodeID        string          `db:"node_id"         json:"node_id"`
+	NodeType      string          `db:"node_type"       json:"node_type"`
+	FolderID      string          `db:"folder_id"       json:"folder_id"`
+	FolderPath    string          `db:"folder_path"     json:"folder_path"`
+	Action        string          `db:"action"          json:"action"`
+	Level         string          `db:"level"           json:"level"`
+	Detail        json.RawMessage `db:"detail"          json:"detail"`
+	Result        string          `db:"result"          json:"result"`
+	ErrorMsg      string          `db:"error_msg"       json:"error_msg"`
+	DurationMs    int64           `db:"duration_ms"     json:"duration_ms"`
+	CreatedAt     time.Time       `db:"created_at"      json:"created_at"`
 }
 
 type FolderListFilter struct {
@@ -109,6 +126,10 @@ type ScheduledWorkflowListFilter struct {
 
 type AuditListFilter struct {
 	JobID             string
+	WorkflowRunID     string
+	NodeRunID         string
+	NodeID            string
+	NodeType          string
 	Action            string
 	Result            string
 	FolderID          string

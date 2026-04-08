@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,10 @@ func TestOpenRunsMigrations(t *testing.T) {
 		"idx_audit_folder",
 		"idx_audit_action",
 		"idx_audit_created",
+		"idx_audit_workflow_run_id",
+		"idx_audit_node_run_id",
+		"idx_audit_node_id",
+		"idx_audit_node_type",
 	}
 
 	for _, index := range indexes {
@@ -71,6 +76,49 @@ func TestOpenEnablesPragmas(t *testing.T) {
 
 	if journalMode != "wal" {
 		t.Fatalf("journal_mode = %q, want %q", journalMode, "wal")
+	}
+}
+
+func TestOpenAddsAuditReferenceColumns(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "classifier_audit_columns.db")
+	database, err := Open(dsn)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer database.Close()
+
+	rows, err := database.Query("PRAGMA table_info(audit_logs)")
+	if err != nil {
+		t.Fatalf("PRAGMA table_info(audit_logs) error = %v", err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			colType    string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultVal, &primaryKey); err != nil {
+			t.Fatalf("scan table_info row error = %v", err)
+		}
+		columns[strings.TrimSpace(name)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("table_info rows error = %v", err)
+	}
+
+	required := []string{"workflow_run_id", "node_run_id", "node_id", "node_type"}
+	for _, column := range required {
+		if _, ok := columns[column]; !ok {
+			t.Fatalf("missing audit_logs column %q", column)
+		}
 	}
 }
 

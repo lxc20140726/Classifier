@@ -47,6 +47,10 @@ func (r *subtreeAggregatorFakeFolderRepo) List(_ context.Context, _ repository.F
 	return nil, 0, nil
 }
 
+func (r *subtreeAggregatorFakeFolderRepo) ListWorkflowSummariesByFolderIDs(_ context.Context, _ []string) (map[string]repository.FolderWorkflowSummary, error) {
+	return map[string]repository.FolderWorkflowSummary{}, nil
+}
+
 func (r *subtreeAggregatorFakeFolderRepo) ListByPathPrefix(_ context.Context, _ string) ([]*repository.Folder, error) {
 	return nil, nil
 }

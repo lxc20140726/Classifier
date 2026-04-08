@@ -6,11 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type SQLiteFolderRepository struct {
 	db *sql.DB
 }
+
+const (
+	workflowStageStatusNotRun       = "not_run"
+	workflowStageStatusRunning      = "running"
+	workflowStageStatusSucceeded    = "succeeded"
+	workflowStageStatusFailed       = "failed"
+	workflowStageStatusWaitingInput = "waiting_input"
+	workflowStageStatusPartial      = "partial"
+	workflowStageStatusRolledBack   = "rolled_back"
+)
 
 func NewFolderRepository(db *sql.DB) FolderRepository {
 	return &SQLiteFolderRepository{db: db}
@@ -191,6 +202,129 @@ LIMIT ? OFFSET ?`,
 	return folders, total, nil
 }
 
+func (r *SQLiteFolderRepository) ListWorkflowSummariesByFolderIDs(ctx context.Context, folderIDs []string) (map[string]FolderWorkflowSummary, error) {
+	summaries := make(map[string]FolderWorkflowSummary, len(folderIDs))
+	if len(folderIDs) == 0 {
+		return summaries, nil
+	}
+
+	uniqueFolderIDs := make([]string, 0, len(folderIDs))
+	seen := make(map[string]struct{}, len(folderIDs))
+	for _, folderID := range folderIDs {
+		trimmed := strings.TrimSpace(folderID)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		uniqueFolderIDs = append(uniqueFolderIDs, trimmed)
+		summaries[trimmed] = defaultFolderWorkflowSummary()
+	}
+	if len(uniqueFolderIDs) == 0 {
+		return summaries, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(uniqueFolderIDs)), ",")
+	args := make([]any, 0, len(uniqueFolderIDs))
+	for _, folderID := range uniqueFolderIDs {
+		args = append(args, folderID)
+	}
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT
+	wr.id,
+	wr.folder_id,
+	wr.job_id,
+	wr.status,
+	wr.updated_at,
+	MAX(CASE WHEN nr.node_type IN (
+		'ext-ratio-classifier',
+		'name-keyword-classifier',
+		'file-tree-classifier',
+		'confidence-check',
+		'subtree-aggregator',
+		'classification-reader',
+		'db-subtree-reader',
+		'classification-db-result-preview',
+		'classification-writer',
+		'category-router'
+	) THEN 1 ELSE 0 END) AS has_classification,
+	MAX(CASE WHEN nr.node_type = 'classification-writer' AND nr.status = 'succeeded' THEN 1 ELSE 0 END) AS classification_writer_succeeded,
+	MAX(CASE WHEN nr.node_type IN (
+		'rename-node',
+		'move-node',
+		'compress-node',
+		'thumbnail-node'
+	) THEN 1 ELSE 0 END) AS has_processing
+FROM workflow_runs wr
+LEFT JOIN node_runs nr ON nr.workflow_run_id = wr.id
+WHERE wr.folder_id IN (`+placeholders+`)
+GROUP BY wr.id, wr.folder_id, wr.job_id, wr.status, wr.updated_at, wr.created_at
+ORDER BY wr.updated_at DESC, wr.created_at DESC`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs query: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var workflowRunID string
+		var folderID string
+		var jobID string
+		var runStatus string
+		var updatedAtRaw any
+		var hasClassification int
+		var classificationWriterSucceeded int
+		var hasProcessing int
+
+		if scanErr := rows.Scan(
+			&workflowRunID,
+			&folderID,
+			&jobID,
+			&runStatus,
+			&updatedAtRaw,
+			&hasClassification,
+			&classificationWriterSucceeded,
+			&hasProcessing,
+		); scanErr != nil {
+			return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs scan: %w", scanErr)
+		}
+
+		summary, ok := summaries[folderID]
+		if !ok {
+			continue
+		}
+
+		updatedAt, parseErr := parseDBTime(updatedAtRaw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs parse updated_at: %w", parseErr)
+		}
+
+		if hasClassification == 1 && summary.Classification.Status == workflowStageStatusNotRun {
+			classification := buildWorkflowStageSummary(workflowRunID, jobID, runStatus, updatedAt)
+			if classificationWriterSucceeded == 1 {
+				classification.Status = workflowStageStatusSucceeded
+			}
+			summary.Classification = classification
+		}
+
+		if hasProcessing == 1 && summary.Processing.Status == workflowStageStatusNotRun {
+			summary.Processing = buildWorkflowStageSummary(workflowRunID, jobID, runStatus, updatedAt)
+		}
+
+		summaries[folderID] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs rows: %w", err)
+	}
+
+	return summaries, nil
+}
+
 func (r *SQLiteFolderRepository) ListByPathPrefix(ctx context.Context, prefix string) ([]*Folder, error) {
 	trimmedPrefix := strings.TrimSpace(prefix)
 	if trimmedPrefix == "" {
@@ -368,6 +502,7 @@ func (r *SQLiteFolderRepository) Delete(ctx context.Context, id string) error {
 
 func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	folder := &Folder{}
+	folder.WorkflowSummary = defaultFolderWorkflowSummary()
 	var markedForMove int
 	var hasOtherFiles int
 	var deletedAt any
@@ -428,6 +563,41 @@ func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
 	}
 
 	return folder, nil
+}
+
+func defaultFolderWorkflowSummary() FolderWorkflowSummary {
+	return FolderWorkflowSummary{
+		Classification: WorkflowStageSummary{Status: workflowStageStatusNotRun},
+		Processing:     WorkflowStageSummary{Status: workflowStageStatusNotRun},
+	}
+}
+
+func buildWorkflowStageSummary(workflowRunID, jobID, runStatus string, updatedAt time.Time) WorkflowStageSummary {
+	return WorkflowStageSummary{
+		Status:        mapWorkflowRunStatusToStageStatus(runStatus),
+		WorkflowRunID: workflowRunID,
+		JobID:         jobID,
+		UpdatedAt:     &updatedAt,
+	}
+}
+
+func mapWorkflowRunStatusToStageStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "succeeded":
+		return workflowStageStatusSucceeded
+	case "failed":
+		return workflowStageStatusFailed
+	case "waiting_input":
+		return workflowStageStatusWaitingInput
+	case "partial":
+		return workflowStageStatusPartial
+	case "rolled_back":
+		return workflowStageStatusRolledBack
+	case "running", "pending":
+		return workflowStageStatusRunning
+	default:
+		return workflowStageStatusRunning
+	}
 }
 
 func assertRowsAffected(res sql.Result) error {

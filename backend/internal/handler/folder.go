@@ -89,6 +89,7 @@ func (h *FolderHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list folders"})
 		return
 	}
+	h.attachWorkflowSummaries(c.Request.Context(), items)
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":  items,
@@ -111,6 +112,7 @@ func (h *FolderHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get folder"})
 		return
 	}
+	h.attachWorkflowSummary(c.Request.Context(), folder)
 
 	c.JSON(http.StatusOK, gin.H{"data": folder})
 }
@@ -212,6 +214,7 @@ func (h *FolderHandler) UpdateCategory(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get folder"})
 		return
 	}
+	h.attachWorkflowSummary(c.Request.Context(), folder)
 
 	c.JSON(http.StatusOK, gin.H{"data": folder})
 }
@@ -254,6 +257,7 @@ func (h *FolderHandler) UpdateStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get folder"})
 		return
 	}
+	h.attachWorkflowSummary(c.Request.Context(), folder)
 
 	c.JSON(http.StatusOK, gin.H{"data": folder})
 }
@@ -314,5 +318,46 @@ func (h *FolderHandler) Restore(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get folder"})
 		return
 	}
+	h.attachWorkflowSummary(c.Request.Context(), restored)
 	c.JSON(http.StatusOK, gin.H{"data": restored})
+}
+
+func (h *FolderHandler) attachWorkflowSummary(ctx context.Context, folder *repository.Folder) {
+	if folder == nil {
+		return
+	}
+	h.attachWorkflowSummaries(ctx, []*repository.Folder{folder})
+}
+
+func (h *FolderHandler) attachWorkflowSummaries(ctx context.Context, folders []*repository.Folder) {
+	if len(folders) == 0 {
+		return
+	}
+
+	folderIDs := make([]string, 0, len(folders))
+	for _, folder := range folders {
+		if folder == nil {
+			continue
+		}
+		folderIDs = append(folderIDs, folder.ID)
+	}
+	if len(folderIDs) == 0 {
+		return
+	}
+
+	summaries, err := h.folders.ListWorkflowSummariesByFolderIDs(ctx, folderIDs)
+	if err != nil {
+		return
+	}
+
+	for _, folder := range folders {
+		if folder == nil {
+			continue
+		}
+		summary, ok := summaries[folder.ID]
+		if !ok {
+			continue
+		}
+		folder.WorkflowSummary = summary
+	}
 }

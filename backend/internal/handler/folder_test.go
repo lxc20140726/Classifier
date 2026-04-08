@@ -78,6 +78,8 @@ func TestFolderHandler(t *testing.T) {
 
 	database := newHandlerTestDB(t)
 	repo := repository.NewFolderRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
 	configRepo := repository.NewConfigRepository(database)
 	scheduledRepo := repository.NewScheduledWorkflowRepository(database)
 	starter := &stubScanStarter{called: make(chan scannerCall, 1)}
@@ -92,6 +94,45 @@ func TestFolderHandler(t *testing.T) {
 		CategorySource: "auto",
 		Status:         "pending",
 	})
+
+	if err := workflowRunRepo.Create(context.Background(), &repository.WorkflowRun{
+		ID:            "wr-f1-classification",
+		JobID:         "job-f1-classification",
+		FolderID:      "f1",
+		WorkflowDefID: "def-classification",
+		Status:        "succeeded",
+	}); err != nil {
+		t.Fatalf("workflowRunRepo.Create(f1 classification) error = %v", err)
+	}
+	if err := nodeRunRepo.Create(context.Background(), &repository.NodeRun{
+		ID:            "nr-f1-writer",
+		WorkflowRunID: "wr-f1-classification",
+		NodeID:        "writer",
+		NodeType:      "classification-writer",
+		Sequence:      1,
+		Status:        "succeeded",
+	}); err != nil {
+		t.Fatalf("nodeRunRepo.Create(f1 writer) error = %v", err)
+	}
+	if err := workflowRunRepo.Create(context.Background(), &repository.WorkflowRun{
+		ID:            "wr-f2-processing",
+		JobID:         "job-f2-processing",
+		FolderID:      "f2",
+		WorkflowDefID: "def-processing",
+		Status:        "failed",
+	}); err != nil {
+		t.Fatalf("workflowRunRepo.Create(f2 processing) error = %v", err)
+	}
+	if err := nodeRunRepo.Create(context.Background(), &repository.NodeRun{
+		ID:            "nr-f2-move",
+		WorkflowRunID: "wr-f2-processing",
+		NodeID:        "move",
+		NodeType:      "move-node",
+		Sequence:      1,
+		Status:        "failed",
+	}); err != nil {
+		t.Fatalf("nodeRunRepo.Create(f2 move) error = %v", err)
+	}
 	seedFolder(t, repo, &repository.Folder{
 		ID:             "f2",
 		Path:           "/media/f2",
@@ -130,6 +171,31 @@ func TestFolderHandler(t *testing.T) {
 		if len(payload.Data) != 2 {
 			t.Fatalf("len(data) = %d, want 2", len(payload.Data))
 		}
+		var gotF1 *repository.Folder
+		var gotF2 *repository.Folder
+		for i := range payload.Data {
+			if payload.Data[i].ID == "f1" {
+				gotF1 = &payload.Data[i]
+			}
+			if payload.Data[i].ID == "f2" {
+				gotF2 = &payload.Data[i]
+			}
+		}
+		if gotF1 == nil || gotF2 == nil {
+			t.Fatalf("list result missing f1 or f2")
+		}
+		if gotF1.WorkflowSummary.Classification.Status != "succeeded" {
+			t.Fatalf("f1 classification status = %q, want succeeded", gotF1.WorkflowSummary.Classification.Status)
+		}
+		if gotF1.WorkflowSummary.Processing.Status != "not_run" {
+			t.Fatalf("f1 processing status = %q, want not_run", gotF1.WorkflowSummary.Processing.Status)
+		}
+		if gotF2.WorkflowSummary.Classification.Status != "not_run" {
+			t.Fatalf("f2 classification status = %q, want not_run", gotF2.WorkflowSummary.Classification.Status)
+		}
+		if gotF2.WorkflowSummary.Processing.Status != "failed" {
+			t.Fatalf("f2 processing status = %q, want failed", gotF2.WorkflowSummary.Processing.Status)
+		}
 
 		if payload.Page != 1 || payload.Limit != 10 {
 			t.Fatalf("page/limit = %d/%d, want 1/10", payload.Page, payload.Limit)
@@ -156,6 +222,12 @@ func TestFolderHandler(t *testing.T) {
 
 		if payload.Data.ID != "f1" {
 			t.Fatalf("id = %q, want f1", payload.Data.ID)
+		}
+		if payload.Data.WorkflowSummary.Classification.Status != "succeeded" {
+			t.Fatalf("classification status = %q, want succeeded", payload.Data.WorkflowSummary.Classification.Status)
+		}
+		if payload.Data.WorkflowSummary.Processing.Status != "not_run" {
+			t.Fatalf("processing status = %q, want not_run", payload.Data.WorkflowSummary.Processing.Status)
 		}
 	})
 
