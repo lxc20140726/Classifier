@@ -1,43 +1,24 @@
 {
   "nodes": [
     {
-      "id": "g-reader",
-      "type": "classification-reader",
-      "label": "分类读取器",
-      "config": {},
-      "inputs": {
-        "entry": {
-          "link_source": {
-            "source_node_id": "db-subtree-reader-12",
-            "source_port": "entry"
-          }
-        }
-      },
-      "ui_position": {
-        "x": -1884,
-        "y": 955
-      },
-      "enabled": true
-    },
-    {
       "id": "g-split",
       "type": "folder-splitter",
       "label": "文件夹拆分器",
       "config": {
-        "split_depth": 1,
-        "split_mixed": true
+        "split_mixed": true,
+        "split_depth": 1
       },
       "inputs": {
         "entry": {
           "link_source": {
-            "source_node_id": "g-reader",
+            "source_node_id": "db-subtree-reader-11",
             "source_port": "entry"
           }
         }
       },
       "ui_position": {
-        "x": -852,
-        "y": 925
+        "x": -1445,
+        "y": 364
       },
       "enabled": true
     },
@@ -55,18 +36,83 @@
         }
       },
       "ui_position": {
-        "x": 151,
-        "y": 894
+        "x": -563,
+        "y": 372
       },
       "enabled": true
     },
     {
-      "id": "g-rename-video",
-      "type": "rename-node",
-      "label": "重命名节点",
+      "id": "folder-picker-11",
+      "type": "folder-picker",
+      "label": "文件夹选择器",
       "config": {
-        "strategy": "template",
-        "template": "{name}"
+        "source_mode": "folders",
+        "saved_folder_ids": [
+          "ffa2434cce3f403714599cf84b6ff886ec80597e"
+        ],
+        "folder_ids": [
+          "ffa2434cce3f403714599cf84b6ff886ec80597e"
+        ],
+        "paths": []
+      },
+      "inputs": {},
+      "ui_position": {
+        "x": -3193,
+        "y": 221
+      },
+      "enabled": true
+    },
+    {
+      "id": "db-subtree-reader-11",
+      "type": "db-subtree-reader",
+      "label": "子树读取器",
+      "config": {},
+      "inputs": {
+        "path": {
+          "link_source": {
+            "source_node_id": "folder-picker-11",
+            "source_port": "path"
+          }
+        }
+      },
+      "ui_position": {
+        "x": -2300,
+        "y": 319
+      },
+      "enabled": true
+    },
+    {
+      "id": "thumbnail-node-12",
+      "type": "thumbnail-node",
+      "label": "缩略图节点",
+      "config": {
+        "output_dir": "",
+        "output_dir_source": "custom",
+        "output_dir_option_id": "",
+        "offset_seconds": 2
+      },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "move-node-13",
+            "source_port": "items"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 805,
+        "y": -737
+      },
+      "enabled": true
+    },
+    {
+      "id": "move-node-13",
+      "type": "move-node",
+      "label": "移动节点",
+      "config": {
+        "target_dir": "F:\\p\\4K",
+        "target_dir_source": "custom",
+        "target_dir_option_id": ""
       },
       "inputs": {
         "items": {
@@ -77,19 +123,16 @@
         }
       },
       "ui_position": {
-        "x": 1438,
-        "y": -12
+        "x": 303,
+        "y": -720
       },
       "enabled": true
     },
     {
-      "id": "g-rename-manga",
-      "type": "rename-node",
-      "label": "重命名节点",
-      "config": {
-        "strategy": "template",
-        "template": "{name}"
-      },
+      "id": "compress-node-12",
+      "type": "compress-node",
+      "label": "压缩节点",
+      "config": {},
       "inputs": {
         "items": {
           "link_source": {
@@ -99,19 +142,39 @@
         }
       },
       "ui_position": {
-        "x": 1482,
-        "y": 2626
+        "x": 436,
+        "y": -143
       },
       "enabled": true
     },
     {
-      "id": "g-rename-photo",
-      "type": "rename-node",
-      "label": "重命名节点",
+      "id": "move-node-12",
+      "type": "move-node",
+      "label": "移动节点",
       "config": {
-        "strategy": "template",
-        "template": "{name}"
+        "target_dir": "",
+        "target_dir_source": "preset",
+        "target_dir_option_id": ""
       },
+      "inputs": {
+        "items": {
+          "link_source": {
+            "source_node_id": "compress-node-12",
+            "source_port": "archive_items"
+          }
+        }
+      },
+      "ui_position": {
+        "x": 1293,
+        "y": -118
+      },
+      "enabled": true
+    },
+    {
+      "id": "compress-node-13",
+      "type": "compress-node",
+      "label": "压缩节点",
+      "config": {},
       "inputs": {
         "items": {
           "link_source": {
@@ -121,287 +184,94 @@
         }
       },
       "ui_position": {
-        "x": 1460,
-        "y": 1941
-      },
-      "enabled": true
-    },
-    {
-      "id": "g-rename-other",
-      "type": "rename-node",
-      "label": "重命名节点",
-      "config": {
-        "strategy": "template",
-        "template": "{name}"
-      },
-      "inputs": {
-        "items": {
-          "link_source": {
-            "source_node_id": "g-router",
-            "source_port": "other"
-          }
-        }
-      },
-      "ui_position": {
-        "x": 1428,
-        "y": 1296
-      },
-      "enabled": true
-    },
-    {
-      "id": "g-rename-mixed",
-      "type": "rename-node",
-      "label": "重命名节点",
-      "config": {
-        "strategy": "template",
-        "template": "{name}"
-      },
-      "inputs": {
-        "items": {
-          "link_source": {
-            "source_node_id": "g-router",
-            "source_port": "mixed_leaf"
-          }
-        }
-      },
-      "ui_position": {
-        "x": 1396,
-        "y": 648
-      },
-      "enabled": true
-    },
-    {
-      "id": "g-collect",
-      "type": "collect-node",
-      "label": "收集节点",
-      "config": {},
-      "inputs": {
-        "items_1": {
-          "link_source": {
-            "source_node_id": "g-rename-video",
-            "source_port": "items"
-          }
-        },
-        "items_2": {
-          "link_source": {
-            "source_node_id": "g-rename-manga",
-            "source_port": "items"
-          }
-        },
-        "items_3": {
-          "link_source": {
-            "source_node_id": "g-rename-photo",
-            "source_port": "items"
-          }
-        },
-        "items_4": {
-          "link_source": {
-            "source_node_id": "g-rename-other",
-            "source_port": "items"
-          }
-        },
-        "items_5": {
-          "link_source": {
-            "source_node_id": "g-rename-mixed",
-            "source_port": "items"
-          }
-        }
-      },
-      "ui_position": {
-        "x": 2648,
-        "y": 1171
-      },
-      "enabled": true
-    },
-    {
-      "id": "g-move",
-      "type": "move-node",
-      "label": "移动节点",
-      "config": {
-        "conflict_policy": "auto_rename",
-        "move_unit": "folder",
-        "target_dir": ".processed"
-      },
-      "inputs": {
-        "items": {
-          "link_source": {
-            "source_node_id": "g-collect",
-            "source_port": "items"
-          }
-        }
-      },
-      "ui_position": {
-        "x": 3952,
-        "y": 693
-      },
-      "enabled": true
-    },
-    {
-      "id": "g-audit",
-      "type": "audit-log",
-      "label": "审计日志",
-      "config": {
-        "action": "phase4.processing.generic",
-        "level": "info"
-      },
-      "inputs": {
-        "items": {
-          "link_source": {
-            "source_node_id": "g-move",
-            "source_port": "items"
-          }
-        }
-      },
-      "ui_position": {
-        "x": 4421,
+        "x": 422,
         "y": 585
       },
       "enabled": true
     },
     {
-      "id": "db-subtree-reader-12",
-      "type": "db-subtree-reader",
-      "label": "子树读取器",
+      "id": "move-node-10",
+      "type": "move-node",
+      "label": "移动节点",
       "config": {},
       "inputs": {
-        "path": {
+        "items": {
           "link_source": {
-            "source_node_id": "folder-picker-13",
-            "source_port": "path"
+            "source_node_id": "compress-node-13",
+            "source_port": "archive_items"
           }
         }
       },
       "ui_position": {
-        "x": -2715,
-        "y": 934
-      },
-      "enabled": true
-    },
-    {
-      "id": "folder-picker-13",
-      "type": "folder-picker",
-      "label": "文件夹选择器",
-      "config": {},
-      "inputs": {},
-      "ui_position": {
-        "x": -3546,
-        "y": 880
+        "x": 1327,
+        "y": 619
       },
       "enabled": true
     }
   ],
   "edges": [
     {
-      "id": "e-reader-split",
-      "source": "g-reader",
-      "source_port": "entry",
-      "target": "g-split",
-      "target_port": "entry"
-    },
-    {
-      "id": "e-split-router",
+      "id": "g-e2",
       "source": "g-split",
       "source_port": "items",
       "target": "g-router",
       "target_port": "items"
     },
     {
-      "id": "e-router-rename-video",
-      "source": "g-router",
-      "source_port": "video",
-      "target": "g-rename-video",
-      "target_port": "items"
-    },
-    {
-      "id": "e-router-rename-manga",
-      "source": "g-router",
-      "source_port": "manga",
-      "target": "g-rename-manga",
-      "target_port": "items"
-    },
-    {
-      "id": "e-router-rename-photo",
-      "source": "g-router",
-      "source_port": "photo",
-      "target": "g-rename-photo",
-      "target_port": "items"
-    },
-    {
-      "id": "e-router-rename-other",
-      "source": "g-router",
-      "source_port": "other",
-      "target": "g-rename-other",
-      "target_port": "items"
-    },
-    {
-      "id": "e-router-rename-mixed",
-      "source": "g-router",
-      "source_port": "mixed_leaf",
-      "target": "g-rename-mixed",
-      "target_port": "items"
-    },
-    {
-      "id": "e-rename-video-collect",
-      "source": "g-rename-video",
-      "source_port": "items",
-      "target": "g-collect",
-      "target_port": "items_1"
-    },
-    {
-      "id": "e-rename-manga-collect",
-      "source": "g-rename-manga",
-      "source_port": "items",
-      "target": "g-collect",
-      "target_port": "items_2"
-    },
-    {
-      "id": "e-rename-photo-collect",
-      "source": "g-rename-photo",
-      "source_port": "items",
-      "target": "g-collect",
-      "target_port": "items_3"
-    },
-    {
-      "id": "e-rename-other-collect",
-      "source": "g-rename-other",
-      "source_port": "items",
-      "target": "g-collect",
-      "target_port": "items_4"
-    },
-    {
-      "id": "e-rename-mixed-collect",
-      "source": "g-rename-mixed",
-      "source_port": "items",
-      "target": "g-collect",
-      "target_port": "items_5"
-    },
-    {
-      "id": "e-collect-move",
-      "source": "g-collect",
-      "source_port": "items",
-      "target": "g-move",
-      "target_port": "items"
-    },
-    {
-      "id": "e-move-audit-items",
-      "source": "g-move",
-      "source_port": "items",
-      "target": "g-audit",
-      "target_port": "items"
-    },
-    {
-      "id": "xy-edge__folder-picker-13out-1-db-subtree-reader-12in-0",
-      "source": "folder-picker-13",
+      "id": "xy-edge__folder-picker-11out-1-db-subtree-reader-11in-0",
+      "source": "folder-picker-11",
       "source_port": "path",
-      "target": "db-subtree-reader-12",
+      "target": "db-subtree-reader-11",
       "target_port": "path"
     },
     {
-      "id": "xy-edge__db-subtree-reader-12out-0-g-readerin-0",
-      "source": "db-subtree-reader-12",
+      "id": "xy-edge__db-subtree-reader-11out-0-g-splitin-0",
+      "source": "db-subtree-reader-11",
       "source_port": "entry",
-      "target": "g-reader",
+      "target": "g-split",
       "target_port": "entry"
+    },
+    {
+      "id": "xy-edge__g-routerout-0-move-node-13in-0",
+      "source": "g-router",
+      "source_port": "video",
+      "target": "move-node-13",
+      "target_port": "items"
+    },
+    {
+      "id": "xy-edge__move-node-13out-0-thumbnail-node-12in-0",
+      "source": "move-node-13",
+      "source_port": "items",
+      "target": "thumbnail-node-12",
+      "target_port": "items"
+    },
+    {
+      "id": "xy-edge__g-routerout-1-compress-node-12in-0",
+      "source": "g-router",
+      "source_port": "manga",
+      "target": "compress-node-12",
+      "target_port": "items"
+    },
+    {
+      "id": "xy-edge__compress-node-12out-1-move-node-12in-0",
+      "source": "compress-node-12",
+      "source_port": "archive_items",
+      "target": "move-node-12",
+      "target_port": "items"
+    },
+    {
+      "id": "xy-edge__g-routerout-2-compress-node-13in-0",
+      "source": "g-router",
+      "source_port": "photo",
+      "target": "compress-node-13",
+      "target_port": "items"
+    },
+    {
+      "id": "xy-edge__compress-node-13out-1-move-node-10in-0",
+      "source": "compress-node-13",
+      "source_port": "archive_items",
+      "target": "move-node-10",
+      "target_port": "items"
     }
   ]
 }
