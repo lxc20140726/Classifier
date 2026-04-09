@@ -28,13 +28,14 @@ type appConfigOutputDirsPatch struct {
 }
 
 type appConfigPatchRequest struct {
-	Version       *int                      `json:"version"`
-	ScanInputDirs *[]string                 `json:"scan_input_dirs"`
-	ScanCron      *string                   `json:"scan_cron"`
-	SourceDir     *string                   `json:"source_dir"`
-	TargetDir     *string                   `json:"target_dir"`
-	TargetDirs    *[]string                 `json:"target_dirs"`
-	OutputDirs    *appConfigOutputDirsPatch `json:"output_dirs"`
+	Version       *int                              `json:"version"`
+	ScanInputDirs *[]string                         `json:"scan_input_dirs"`
+	ScanCron      *string                           `json:"scan_cron"`
+	SourceDir     *string                           `json:"source_dir"`
+	TargetDir     *string                           `json:"target_dir"`
+	TargetDirs    *[]string                         `json:"target_dirs"`
+	OutputDirs    *appConfigOutputDirsPatch         `json:"output_dirs"`
+	PathOptions   *[]repository.AppConfigPathOption `json:"path_options"`
 }
 
 func NewConfigHandler(configRepo repository.ConfigRepository, syncer ConfigSyncer) *ConfigHandler {
@@ -137,5 +138,8 @@ func applyAppConfigPatch(target *repository.AppConfig, patch appConfigPatchReque
 		if patch.OutputDirs.Mixed != nil {
 			target.OutputDirs.Mixed = *patch.OutputDirs.Mixed
 		}
+	}
+	if patch.PathOptions != nil {
+		target.PathOptions = *patch.PathOptions
 	}
 }

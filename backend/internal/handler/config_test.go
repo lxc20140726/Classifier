@@ -261,6 +261,9 @@ func TestConfigHandler(t *testing.T) {
 			ScanCron:      "0 * * * *",
 			SourceDir:     "/seed/source",
 			TargetDir:     "/seed/target",
+			PathOptions: []repository.AppConfigPathOption{
+				{ID: "seed-scan", Name: "扫描目录", Path: "/seed/source", Category: "scan"},
+			},
 		})
 		if err != nil {
 			t.Fatalf("repo.SaveAppConfig() error = %v", err)
@@ -290,6 +293,68 @@ func TestConfigHandler(t *testing.T) {
 		}
 		if !reflect.DeepEqual(storedConfig.ScanInputDirs, []string{"/seed/source"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/seed/source]", storedConfig.ScanInputDirs)
+		}
+		if !reflect.DeepEqual(storedConfig.PathOptions, []repository.AppConfigPathOption{
+			{ID: "seed-scan", Name: "扫描目录", Path: "/seed/source", Category: "scan"},
+		}) {
+			t.Fatalf("path_options = %#v, want seed options", storedConfig.PathOptions)
+		}
+	})
+
+	t.Run("put supports path_options patch and keeps scan/output fields", func(t *testing.T) {
+		err := repo.SaveAppConfig(context.Background(), &repository.AppConfig{
+			ScanInputDirs: []string{"/seed/source", "/seed/source-2"},
+			SourceDir:     "/seed/source",
+			OutputDirs: repository.AppConfigOutputDirs{
+				Video: "/seed/out/video",
+			},
+		})
+		if err != nil {
+			t.Fatalf("repo.SaveAppConfig() error = %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
+			"path_options": [
+				{"id":"scan-1","name":"扫描目录A","path":"/seed/source","category":"scan"},
+				{"id":"general-1","name":"通用目录","path":"/seed/general","category":"general"}
+			]
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+		}
+
+		storedConfig, getErr := repo.GetAppConfig(context.Background())
+		if getErr != nil {
+			t.Fatalf("repo.GetAppConfig() error = %v", getErr)
+		}
+		if !reflect.DeepEqual(storedConfig.ScanInputDirs, []string{"/seed/source", "/seed/source-2"}) {
+			t.Fatalf("scan_input_dirs = %#v, want unchanged", storedConfig.ScanInputDirs)
+		}
+		if storedConfig.OutputDirs.Video != "/seed/out/video" {
+			t.Fatalf("output_dirs.video = %q, want /seed/out/video", storedConfig.OutputDirs.Video)
+		}
+		if !reflect.DeepEqual(storedConfig.PathOptions, []repository.AppConfigPathOption{
+			{ID: "scan-1", Name: "扫描目录A", Path: "/seed/source", Category: "scan"},
+			{ID: "general-1", Name: "通用目录", Path: "/seed/general", Category: "general"},
+		}) {
+			t.Fatalf("path_options = %#v, want patched options", storedConfig.PathOptions)
+		}
+	})
+
+	t.Run("put legacy payload without path_options remains compatible", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
+			"scan_input_dirs":["/compat/source"]
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
 		}
 	})
 }

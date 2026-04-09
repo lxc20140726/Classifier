@@ -191,7 +191,8 @@ function ScheduledWorkflowModal({
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
   const overlayRef = useRef<HTMLDivElement | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
-  const { sourceDir, load: loadConfig } = useConfigStore()
+  const { sourceDir, pathOptions, load: loadConfig } = useConfigStore()
+  const scanPathOptions = pathOptions.filter((option) => option.category === 'scan' || option.category === 'general')
 
   useEffect(() => {
     if (modal && overlayRef.current && modalRef.current) {
@@ -293,6 +294,24 @@ function ScheduledWorkflowModal({
                     <p className="text-sm font-black">已选择 {form.sourceDirs.length} 个扫描输入目录</p>
                     <p className="text-xs font-medium text-muted-foreground mt-1">每个扫描任务维护自己的目录列表。</p>
                   </div>
+                  {scanPathOptions.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-black tracking-widest">从路径选项添加</p>
+                      <div className="max-h-28 space-y-1 overflow-auto">
+                        {scanPathOptions.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => onToggleSourceDir(option.path)}
+                            className="w-full border-2 border-foreground bg-background px-3 py-2 text-left text-xs font-bold transition-all hover:bg-foreground hover:text-background"
+                          >
+                            <span className="block truncate">{option.name}</span>
+                            <span className="block truncate font-mono text-[10px] opacity-70">{option.path}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => setDirPickerOpen(true)}

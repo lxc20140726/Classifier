@@ -99,6 +99,20 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 		ScanCron:      "0 * * * *",
 		SourceDir:     "/mnt/source",
 		TargetDir:     "/mnt/target",
+		PathOptions: []AppConfigPathOption{
+			{
+				ID:       "scan-default",
+				Name:     "默认扫描目录",
+				Path:     "/mnt/source",
+				Category: "scan",
+			},
+			{
+				ID:       "target-default",
+				Name:     "默认整理目录",
+				Path:     "/mnt/target",
+				Category: "target",
+			},
+		},
 		OutputDirs: AppConfigOutputDirs{
 			Video: "/mnt/out/video",
 			Manga: "/mnt/out/manga",
@@ -124,6 +138,12 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 	}
 	if got.ScanCron != "0 * * * *" {
 		t.Fatalf("ScanCron = %q, want 0 * * * *", got.ScanCron)
+	}
+	if !reflect.DeepEqual(got.PathOptions, []AppConfigPathOption{
+		{ID: "scan-default", Name: "默认扫描目录", Path: "/mnt/source", Category: "scan"},
+		{ID: "target-default", Name: "默认整理目录", Path: "/mnt/target", Category: "target"},
+	}) {
+		t.Fatalf("PathOptions = %#v, want configured options", got.PathOptions)
 	}
 
 	rawScanInputDirs, err := repo.Get(ctx, "scan_input_dirs")
@@ -178,6 +198,9 @@ func TestConfigRepositoryGetAppConfigFallsBackToLegacyKV(t *testing.T) {
 	if !reflect.DeepEqual(got.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 		t.Fatalf("ScanInputDirs = %#v, want [/legacy/source /legacy/source-2]", got.ScanInputDirs)
 	}
+	if len(got.PathOptions) != 0 {
+		t.Fatalf("PathOptions = %#v, want empty list", got.PathOptions)
+	}
 }
 
 func TestConfigRepositorySaveAppConfigRejectsRelativePath(t *testing.T) {
@@ -192,6 +215,58 @@ func TestConfigRepositorySaveAppConfigRejectsRelativePath(t *testing.T) {
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
 	}
+}
+
+func TestConfigRepositorySaveAppConfigRejectsInvalidPathOption(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewConfigRepository(database)
+
+	t.Run("duplicate id", func(t *testing.T) {
+		err := repo.SaveAppConfig(context.Background(), &AppConfig{
+			PathOptions: []AppConfigPathOption{
+				{ID: "dup", Name: "A", Path: "/tmp/a", Category: "general"},
+				{ID: "dup", Name: "B", Path: "/tmp/b", Category: "scan"},
+			},
+		})
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("empty name", func(t *testing.T) {
+		err := repo.SaveAppConfig(context.Background(), &AppConfig{
+			PathOptions: []AppConfigPathOption{
+				{ID: "x", Name: "", Path: "/tmp/a", Category: "general"},
+			},
+		})
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("empty path", func(t *testing.T) {
+		err := repo.SaveAppConfig(context.Background(), &AppConfig{
+			PathOptions: []AppConfigPathOption{
+				{ID: "x", Name: "A", Path: "", Category: "general"},
+			},
+		})
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("invalid category", func(t *testing.T) {
+		err := repo.SaveAppConfig(context.Background(), &AppConfig{
+			PathOptions: []AppConfigPathOption{
+				{ID: "x", Name: "A", Path: "/tmp/a", Category: "invalid"},
+			},
+		})
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
+		}
+	})
 }
 
 func TestConfigRepositoryEnsureAppConfig(t *testing.T) {

@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -147,30 +149,61 @@ func (h *FolderHandler) resolveScanSourceDirs(ctx context.Context) ([]string, er
 		return nil, errors.New("config repository is required")
 	}
 
+	sourceDirs := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	appendUnique := func(items []string) {
+		for _, dir := range items {
+			trimmed := strings.TrimSpace(dir)
+			if trimmed == "" {
+				continue
+			}
+			if _, ok := seen[trimmed]; ok {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			sourceDirs = append(sourceDirs, trimmed)
+		}
+	}
+
+	if h.scheduledJobs != nil {
+		enabledItems, err := h.scheduledJobs.ListEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range enabledItems {
+			if item == nil || strings.TrimSpace(item.JobType) != "scan" {
+				continue
+			}
+			if strings.TrimSpace(item.SourceDirs) == "" {
+				continue
+			}
+			var scheduledSourceDirs []string
+			if err := json.Unmarshal([]byte(item.SourceDirs), &scheduledSourceDirs); err != nil {
+				return nil, fmt.Errorf("parse scheduled scan source_dirs: %w", err)
+			}
+			appendUnique(scheduledSourceDirs)
+		}
+		if len(sourceDirs) > 0 {
+			return sourceDirs, nil
+		}
+	}
+
 	appConfig, err := h.config.GetAppConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	sourceDirs := make([]string, 0, len(appConfig.TargetDirs))
-	seen := make(map[string]struct{}, len(appConfig.TargetDirs))
-	for _, dir := range appConfig.TargetDirs {
-		trimmed := strings.TrimSpace(dir)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		sourceDirs = append(sourceDirs, trimmed)
+	appendUnique(appConfig.ScanInputDirs)
+	if len(sourceDirs) > 0 {
+		return sourceDirs, nil
 	}
 
-	if len(sourceDirs) == 0 {
-		trimmedTargetDir := strings.TrimSpace(appConfig.TargetDir)
-		if trimmedTargetDir != "" {
-			sourceDirs = append(sourceDirs, trimmedTargetDir)
-		}
+	if trimmedSourceDir := strings.TrimSpace(appConfig.SourceDir); trimmedSourceDir != "" {
+		return []string{trimmedSourceDir}, nil
+	}
+
+	if trimmedDefaultSourceDir := strings.TrimSpace(h.defaultSourceDir); trimmedDefaultSourceDir != "" {
+		return []string{trimmedDefaultSourceDir}, nil
 	}
 
 	return sourceDirs, nil

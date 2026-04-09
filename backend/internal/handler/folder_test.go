@@ -231,13 +231,44 @@ func TestFolderHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("scan returns 202 from app_config target_dirs", func(t *testing.T) {
+	t.Run("scan prefers enabled scan schedules source_dirs", func(t *testing.T) {
+		if err := scheduledRepo.Create(context.Background(), &repository.ScheduledWorkflow{
+			ID:         "scan-enabled-1",
+			Name:       "scan-1",
+			JobType:    "scan",
+			SourceDirs: `["/cron/source","/cron/source-2","/cron/source"]`,
+			CronSpec:   "0 * * * *",
+			Enabled:    true,
+		}); err != nil {
+			t.Fatalf("scheduledRepo.Create() error = %v", err)
+		}
+		if err := scheduledRepo.Create(context.Background(), &repository.ScheduledWorkflow{
+			ID:         "scan-disabled-1",
+			Name:       "scan-disabled",
+			JobType:    "scan",
+			SourceDirs: `["/cron/disabled"]`,
+			CronSpec:   "0 * * * *",
+			Enabled:    false,
+		}); err != nil {
+			t.Fatalf("scheduledRepo.Create() error = %v", err)
+		}
+		if err := scheduledRepo.Create(context.Background(), &repository.ScheduledWorkflow{
+			ID:         "workflow-enabled-1",
+			Name:       "workflow",
+			JobType:    "workflow",
+			SourceDirs: `["/cron/workflow"]`,
+			CronSpec:   "0 * * * *",
+			Enabled:    true,
+		}); err != nil {
+			t.Fatalf("scheduledRepo.Create() error = %v", err)
+		}
+
 		appConfig, err := configRepo.GetAppConfig(context.Background())
 		if err != nil {
 			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
 		}
-		appConfig.TargetDirs = []string{"/task/source", "/task/other"}
-		appConfig.TargetDir = "/task/source"
+		appConfig.ScanInputDirs = []string{"/task/source"}
+		appConfig.SourceDir = "/task/source"
 		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
 			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
 		}
@@ -252,18 +283,25 @@ func TestFolderHandler(t *testing.T) {
 		}
 
 		call := <-starter.called
-		if len(call.sourceDirs) != 2 || call.sourceDirs[0] != "/task/source" || call.sourceDirs[1] != "/task/other" {
-			t.Fatalf("sourceDirs = %#v, want target_dirs", call.sourceDirs)
+		if len(call.sourceDirs) != 2 || call.sourceDirs[0] != "/cron/source" || call.sourceDirs[1] != "/cron/source-2" {
+			t.Fatalf("sourceDirs = %#v, want schedule source_dirs", call.sourceDirs)
 		}
 	})
 
-	t.Run("scan falls back to target_dir when target_dirs empty", func(t *testing.T) {
+	t.Run("scan falls back to scan_input_dirs when no scan schedule", func(t *testing.T) {
+		if err := scheduledRepo.Delete(context.Background(), "scan-enabled-1"); err != nil {
+			t.Fatalf("scheduledRepo.Delete(scan-enabled-1) error = %v", err)
+		}
+		if err := scheduledRepo.Delete(context.Background(), "workflow-enabled-1"); err != nil {
+			t.Fatalf("scheduledRepo.Delete(workflow-enabled-1) error = %v", err)
+		}
+
 		appConfig, err := configRepo.GetAppConfig(context.Background())
 		if err != nil {
 			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
 		}
-		appConfig.TargetDirs = []string{}
-		appConfig.TargetDir = "/test/source"
+		appConfig.ScanInputDirs = []string{"/scan/a", "/scan/b"}
+		appConfig.SourceDir = "/test/source"
 		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
 			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
 		}
@@ -278,8 +316,33 @@ func TestFolderHandler(t *testing.T) {
 		}
 
 		call := <-starter.called
-		if len(call.sourceDirs) != 1 || call.sourceDirs[0] != "/test/source" {
-			t.Fatalf("sourceDirs = %#v, want target_dir fallback", call.sourceDirs)
+		if len(call.sourceDirs) != 2 || call.sourceDirs[0] != "/scan/a" || call.sourceDirs[1] != "/scan/b" {
+			t.Fatalf("sourceDirs = %#v, want scan_input_dirs", call.sourceDirs)
+		}
+	})
+
+	t.Run("scan falls back to source_dir when scan_input_dirs empty", func(t *testing.T) {
+		appConfig, err := configRepo.GetAppConfig(context.Background())
+		if err != nil {
+			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
+		}
+		appConfig.ScanInputDirs = []string{}
+		appConfig.SourceDir = "/legacy/source"
+		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
+			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/folders/scan", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+		}
+
+		call := <-starter.called
+		if len(call.sourceDirs) != 1 || call.sourceDirs[0] != "/legacy/source" {
+			t.Fatalf("sourceDirs = %#v, want source_dir fallback", call.sourceDirs)
 		}
 	})
 

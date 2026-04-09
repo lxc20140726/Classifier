@@ -17,6 +17,13 @@ type SQLiteConfigRepository struct {
 	db *sql.DB
 }
 
+var validPathOptionCategories = map[string]struct{}{
+	"scan":    {},
+	"target":  {},
+	"output":  {},
+	"general": {},
+}
+
 func NewConfigRepository(db *sql.DB) ConfigRepository {
 	return &SQLiteConfigRepository{db: db}
 }
@@ -233,6 +240,7 @@ func defaultAppConfig() AppConfig {
 		SourceDir:     "",
 		TargetDir:     "",
 		TargetDirs:    []string{},
+		PathOptions:   []AppConfigPathOption{},
 		OutputDirs: AppConfigOutputDirs{
 			Video: "",
 			Manga: "",
@@ -272,12 +280,14 @@ func normalizeAppConfig(value AppConfig) AppConfig {
 		Other: strings.TrimSpace(value.OutputDirs.Other),
 		Mixed: strings.TrimSpace(value.OutputDirs.Mixed),
 	}
+	normalized.PathOptions = normalizePathOptions(value.PathOptions)
 	normalized.OutputDirs = fillDefaultOutputDirs(normalized.OutputDirs, normalized.TargetDir)
 
 	return normalized
 }
 
 func normalizeAppConfigForSave(value AppConfig) (AppConfig, error) {
+	rawPathOptions := value.PathOptions
 	normalized := normalizeAppConfig(value)
 	var err error
 
@@ -333,6 +343,10 @@ func normalizeAppConfigForSave(value AppConfig) (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, fmt.Errorf("%w: output_dirs.mixed: %v", ErrInvalidConfig, err)
 	}
+	normalized.PathOptions, err = normalizePathOptionsForSave(rawPathOptions)
+	if err != nil {
+		return AppConfig{}, err
+	}
 
 	normalized.OutputDirs = fillDefaultOutputDirs(normalized.OutputDirs, normalized.TargetDir)
 	return normalized, nil
@@ -383,6 +397,78 @@ func cleanPathList(raw []string) []string {
 	}
 
 	return cleaned
+}
+
+func normalizePathOptions(raw []AppConfigPathOption) []AppConfigPathOption {
+	if len(raw) == 0 {
+		return []AppConfigPathOption{}
+	}
+
+	cleaned := make([]AppConfigPathOption, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, item := range raw {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		cleaned = append(cleaned, AppConfigPathOption{
+			ID:       id,
+			Name:     strings.TrimSpace(item.Name),
+			Path:     strings.TrimSpace(item.Path),
+			Category: strings.TrimSpace(item.Category),
+		})
+	}
+
+	return cleaned
+}
+
+func normalizePathOptionsForSave(raw []AppConfigPathOption) ([]AppConfigPathOption, error) {
+	if len(raw) == 0 {
+		return []AppConfigPathOption{}, nil
+	}
+
+	normalized := make([]AppConfigPathOption, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for index, item := range raw {
+		normalizedItem := AppConfigPathOption{
+			ID:       strings.TrimSpace(item.ID),
+			Name:     strings.TrimSpace(item.Name),
+			Path:     strings.TrimSpace(item.Path),
+			Category: strings.TrimSpace(item.Category),
+		}
+
+		if normalizedItem.ID == "" {
+			return nil, fmt.Errorf("%w: path_options[%d].id is required", ErrInvalidConfig, index)
+		}
+		if _, ok := seen[normalizedItem.ID]; ok {
+			return nil, fmt.Errorf("%w: path_options[%d].id duplicated", ErrInvalidConfig, index)
+		}
+		seen[normalizedItem.ID] = struct{}{}
+		if normalizedItem.Name == "" {
+			return nil, fmt.Errorf("%w: path_options[%d].name is required", ErrInvalidConfig, index)
+		}
+		if normalizedItem.Category == "" {
+			return nil, fmt.Errorf("%w: path_options[%d].category is required", ErrInvalidConfig, index)
+		}
+		if _, ok := validPathOptionCategories[normalizedItem.Category]; !ok {
+			return nil, fmt.Errorf("%w: path_options[%d].category is invalid", ErrInvalidConfig, index)
+		}
+		normalizedPath, err := normalizeOptionalAbsPath(normalizedItem.Path)
+		if err != nil || normalizedPath == "" {
+			if err != nil {
+				return nil, fmt.Errorf("%w: path_options[%d].path: %v", ErrInvalidConfig, index, err)
+			}
+			return nil, fmt.Errorf("%w: path_options[%d].path is required", ErrInvalidConfig, index)
+		}
+		normalizedItem.Path = normalizedPath
+		normalized = append(normalized, normalizedItem)
+	}
+
+	return normalized, nil
 }
 
 func normalizeOptionalAbsPath(raw string) (string, error) {
