@@ -158,6 +158,10 @@ func compressNodeBuildArchiveItem(item ProcessingItem, archivePath string) Proce
 	derived.FolderName = filepath.Base(archivePath)
 	derived.TargetName = filepath.Base(archivePath)
 	derived.Files = nil
+	derived.SourceKind = ProcessingItemSourceKindArchive
+	if strings.TrimSpace(derived.OriginalSourcePath) == "" {
+		derived.OriginalSourcePath = normalizeWorkflowPath(item.SourcePath)
+	}
 	return derived
 }
 

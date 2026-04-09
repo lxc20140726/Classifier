@@ -147,12 +147,16 @@ func categoryRouterToItem(raw any) (ProcessingItem, bool) {
 		return *value, true
 	case map[string]any:
 		item := ProcessingItem{
-			SourcePath: anyString(value["source_path"]),
-			FolderID:   anyString(value["folder_id"]),
-			FolderName: anyString(value["folder_name"]),
-			TargetName: anyString(value["target_name"]),
-			Category:   anyString(value["category"]),
-			ParentPath: anyString(value["parent_path"]),
+			SourcePath:         anyString(value["source_path"]),
+			FolderID:           anyString(value["folder_id"]),
+			FolderName:         anyString(value["folder_name"]),
+			TargetName:         anyString(value["target_name"]),
+			Category:           anyString(value["category"]),
+			ParentPath:         anyString(value["parent_path"]),
+			RootPath:           anyString(value["root_path"]),
+			RelativePath:       anyString(value["relative_path"]),
+			SourceKind:         anyString(value["source_kind"]),
+			OriginalSourcePath: anyString(value["original_source_path"]),
 		}
 		return item, true
 	default:

@@ -78,11 +78,21 @@ func (m *MockAdapter) Stat(ctx context.Context, path string) (FileInfo, error) {
 	defer m.mu.RUnlock()
 
 	info, ok := m.files[normalizePath(path)]
-	if !ok {
-		return FileInfo{}, fmt.Errorf("MockAdapter.Stat: %w", os.ErrNotExist)
+	if ok {
+		return info, nil
 	}
 
-	return info, nil
+	normalizedPath := normalizePath(path)
+	if _, ok := m.dirs[normalizedPath]; ok {
+		return FileInfo{
+			Name:    filepath.Base(normalizedPath),
+			IsDir:   true,
+			Size:    0,
+			ModTime: time.Now().UTC(),
+		}, nil
+	}
+
+	return FileInfo{}, fmt.Errorf("MockAdapter.Stat: %w", os.ErrNotExist)
 }
 
 func (m *MockAdapter) MoveDir(ctx context.Context, src, dst string) error {
@@ -104,6 +114,33 @@ func (m *MockAdapter) MoveDir(ctx context.Context, src, dst string) error {
 	copy(cloned, entries)
 	m.dirs[normalizedDst] = cloned
 	delete(m.dirs, normalizedSrc)
+	return nil
+}
+
+func (m *MockAdapter) MoveFile(ctx context.Context, src, dst string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	normalizedSrc := normalizePath(src)
+	normalizedDst := normalizePath(dst)
+	info, ok := m.files[normalizedSrc]
+	if !ok {
+		return fmt.Errorf("MockAdapter.MoveFile: %w", os.ErrNotExist)
+	}
+	if info.IsDir {
+		return fmt.Errorf("MockAdapter.MoveFile: source %q is a directory", normalizedSrc)
+	}
+
+	content := append([]byte(nil), m.fileContents[normalizedSrc]...)
+	info.Name = filepath.Base(normalizedDst)
+	m.files[normalizedDst] = info
+	m.fileContents[normalizedDst] = content
+	delete(m.files, normalizedSrc)
+	delete(m.fileContents, normalizedSrc)
 	return nil
 }
 

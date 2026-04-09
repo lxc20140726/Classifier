@@ -54,11 +54,12 @@ func (e *folderSplitterNodeExecutor) Execute(_ context.Context, input NodeExecut
 		splitDepth = math.MaxInt32
 	}
 
-	items := []ProcessingItem{folderSplitterBuildSelfItem(entry)}
+	rootPath := normalizeWorkflowPath(entry.Path)
+	items := []ProcessingItem{folderSplitterBuildSelfItem(entry, rootPath)}
 	shouldSplit := (splitWithSubdirs && len(entry.Subtree) > 0) ||
 		(strings.EqualFold(entry.Category, "mixed") && splitMixed && splitDepth > 0)
 	if shouldSplit {
-		splitItems := folderSplitterBuildRecursiveItems(entry, splitDepth, splitWithSubdirs)
+		splitItems := folderSplitterBuildRecursiveItems(entry, rootPath, splitDepth, splitWithSubdirs)
 		if len(splitItems) > 0 {
 			items = splitItems
 		}
@@ -101,25 +102,32 @@ func folderSplitterBoolConfig(config map[string]any, key string, fallback bool) 
 	return fallback
 }
 
-func folderSplitterBuildSelfItem(entry ClassifiedEntry) ProcessingItem {
+func folderSplitterBuildSelfItem(entry ClassifiedEntry, rootPath string) ProcessingItem {
+	normalizedPath := normalizeWorkflowPath(entry.Path)
+	normalizedRoot := normalizeWorkflowPath(rootPath)
+	relativePath := folderSplitterRelativePath(normalizedRoot, normalizedPath)
 	return ProcessingItem{
-		SourcePath: entry.Path,
-		FolderID:   entry.FolderID,
-		FolderName: entry.Name,
-		TargetName: entry.Name,
-		Category:   entry.Category,
-		Files:      append([]FileEntry(nil), entry.Files...),
-		ParentPath: filepath.Dir(entry.Path),
+		SourcePath:         normalizedPath,
+		FolderID:           entry.FolderID,
+		FolderName:         entry.Name,
+		TargetName:         entry.Name,
+		Category:           entry.Category,
+		Files:              append([]FileEntry(nil), entry.Files...),
+		ParentPath:         normalizeWorkflowPath(filepath.Dir(normalizedPath)),
+		RootPath:           normalizedRoot,
+		RelativePath:       relativePath,
+		SourceKind:         ProcessingItemSourceKindDirectory,
+		OriginalSourcePath: normalizedPath,
 	}
 }
 
-func folderSplitterBuildRecursiveItems(entry ClassifiedEntry, splitDepth int, splitWithSubdirs bool) []ProcessingItem {
+func folderSplitterBuildRecursiveItems(entry ClassifiedEntry, rootPath string, splitDepth int, splitWithSubdirs bool) []ProcessingItem {
 	if len(entry.Subtree) == 0 || splitDepth <= 0 {
 		return nil
 	}
 
 	collected := make([]ProcessingItem, 0)
-	folderSplitterCollectItems(entry, splitDepth, splitWithSubdirs, &collected)
+	folderSplitterCollectItems(entry, rootPath, splitDepth, splitWithSubdirs, &collected)
 	sort.Slice(collected, func(i, j int) bool {
 		if collected[i].SourcePath == collected[j].SourcePath {
 			return collected[i].FolderName < collected[j].FolderName
@@ -130,9 +138,9 @@ func folderSplitterBuildRecursiveItems(entry ClassifiedEntry, splitDepth int, sp
 	return collected
 }
 
-func folderSplitterCollectItems(entry ClassifiedEntry, depth int, splitWithSubdirs bool, out *[]ProcessingItem) {
+func folderSplitterCollectItems(entry ClassifiedEntry, rootPath string, depth int, splitWithSubdirs bool, out *[]ProcessingItem) {
 	if depth <= 0 || len(entry.Subtree) == 0 {
-		*out = append(*out, folderSplitterBuildSelfItem(entry))
+		*out = append(*out, folderSplitterBuildSelfItem(entry, rootPath))
 		return
 	}
 
@@ -141,15 +149,28 @@ func folderSplitterCollectItems(entry ClassifiedEntry, depth int, splitWithSubdi
 			continue
 		}
 		if splitWithSubdirs && len(child.Subtree) > 0 {
-			folderSplitterCollectItems(child, depth-1, splitWithSubdirs, out)
+			folderSplitterCollectItems(child, rootPath, depth-1, splitWithSubdirs, out)
 			continue
 		}
 		if !splitWithSubdirs && len(child.Subtree) > 0 && depth-1 > 0 {
-			folderSplitterCollectItems(child, depth-1, splitWithSubdirs, out)
+			folderSplitterCollectItems(child, rootPath, depth-1, splitWithSubdirs, out)
 			continue
 		}
-		*out = append(*out, folderSplitterBuildSelfItem(child))
+		*out = append(*out, folderSplitterBuildSelfItem(child, rootPath))
 	}
+}
+
+func folderSplitterRelativePath(rootPath, sourcePath string) string {
+	normalizedRoot := normalizeWorkflowPath(rootPath)
+	normalizedSource := normalizeWorkflowPath(sourcePath)
+	if normalizedRoot == "" || normalizedSource == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(normalizedRoot, normalizedSource)
+	if err != nil || rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	return normalizeWorkflowPath(rel)
 }
 
 func folderSplitterIsDirectChild(entry ClassifiedEntry, child ClassifiedEntry) bool {

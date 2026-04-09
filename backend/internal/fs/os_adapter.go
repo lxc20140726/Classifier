@@ -94,6 +94,41 @@ func (a *OSAdapter) MoveDir(ctx context.Context, src, dst string) error {
 	return nil
 }
 
+func (a *OSAdapter) MoveFile(ctx context.Context, src, dst string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("OSAdapter.MoveFile: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("OSAdapter.MoveFile: %w", err)
+	}
+
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, syscall.EXDEV) {
+		return fmt.Errorf("OSAdapter.MoveFile: %w", err)
+	}
+
+	info, statErr := os.Stat(src)
+	if statErr != nil {
+		return fmt.Errorf("OSAdapter.MoveFile: %w", statErr)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("OSAdapter.MoveFile: source %q is a directory", src)
+	}
+	if copyErr := copyFile(src, dst, info.Mode()); copyErr != nil {
+		return fmt.Errorf("OSAdapter.MoveFile: %w", copyErr)
+	}
+	if removeErr := os.Remove(src); removeErr != nil {
+		return fmt.Errorf("OSAdapter.MoveFile: %w", removeErr)
+	}
+
+	return nil
+}
+
 func (a *OSAdapter) MkdirAll(ctx context.Context, path string, perm os.FileMode) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("OSAdapter.MkdirAll: %w", err)

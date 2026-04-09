@@ -70,8 +70,14 @@ func TestFolderSplitterExecutorMixedSplitFirstLevel(t *testing.T) {
 	if items[0].SourcePath != "/root/mixed/child-a" || items[0].Category != "video" {
 		t.Fatalf("items[0] = %#v, want child-a video", items[0])
 	}
+	if items[0].RootPath != "/root/mixed" || items[0].RelativePath != "child-a" || items[0].SourceKind != ProcessingItemSourceKindDirectory {
+		t.Fatalf("items[0] root/relative/source_kind = %q/%q/%q, want /root/mixed/child-a/directory", items[0].RootPath, items[0].RelativePath, items[0].SourceKind)
+	}
 	if items[1].SourcePath != "/root/mixed/child-b" || items[1].Category != "photo" {
 		t.Fatalf("items[1] = %#v, want child-b photo", items[1])
+	}
+	if items[1].RootPath != "/root/mixed" || items[1].RelativePath != "child-b" || items[1].SourceKind != ProcessingItemSourceKindDirectory {
+		t.Fatalf("items[1] root/relative/source_kind = %q/%q/%q, want /root/mixed/child-b/directory", items[1].RootPath, items[1].RelativePath, items[1].SourceKind)
 	}
 }
 
@@ -242,19 +248,26 @@ func TestRenameNodeExecutorTemplateRegexAndConditionalDefault(t *testing.T) {
 	})
 }
 
-func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
+func TestMoveNodeExecutorMergeConflictPolicies(t *testing.T) {
 	t.Parallel()
 
-	t.Run("skip_when_target_exists", func(t *testing.T) {
+	t.Run("skip_when_target_file_exists", func(t *testing.T) {
 		t.Parallel()
 
 		root := t.TempDir()
-		sourcePath := filepath.Join(root, "source", "album")
+		rootPath := filepath.Join(root, "source", "a")
+		sourcePath := filepath.Join(rootPath, "b")
 		targetDir := filepath.Join(root, "target")
-		dstExisting := filepath.Join(targetDir, "album")
+		dstExisting := filepath.Join(targetDir, "a", "001.mp4")
 
 		mustMkdirAll(t, sourcePath)
-		mustMkdirAll(t, dstExisting)
+		mustMkdirAll(t, filepath.Dir(dstExisting))
+		if err := os.WriteFile(filepath.Join(sourcePath, "001.mp4"), []byte("video"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source) error = %v", err)
+		}
+		if err := os.WriteFile(dstExisting, []byte("seed"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(target) error = %v", err)
+		}
 
 		executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil)
 		out, err := executor.Execute(context.Background(), NodeExecutionInput{
@@ -264,7 +277,12 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 				"move_unit":             "folder",
 				"preserve_substructure": true,
 			}},
-			Inputs: testInputs(map[string]any{"item": ProcessingItem{SourcePath: sourcePath, FolderName: "album", TargetName: "album"}}),
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{
+				SourcePath:   sourcePath,
+				RootPath:     rootPath,
+				RelativePath: "b",
+				SourceKind:   ProcessingItemSourceKindDirectory,
+			}}),
 		})
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
@@ -277,23 +295,40 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 		if results[0].Status != "skipped" {
 			t.Fatalf("result status = %q, want skipped", results[0].Status)
 		}
+		if results[0].TargetPath != dstExisting {
+			t.Fatalf("target path = %q, want %q", results[0].TargetPath, dstExisting)
+		}
 
-		if !pathExists(t, sourcePath) {
-			t.Fatalf("source path %q should still exist after skip", sourcePath)
+		if !pathExists(t, filepath.Join(sourcePath, "001.mp4")) {
+			t.Fatalf("source file should still exist after skip")
 		}
 	})
 
-	t.Run("auto_rename_when_target_exists", func(t *testing.T) {
+	t.Run("auto_rename_uses_relative_prefix_and_numeric_suffix", func(t *testing.T) {
 		t.Parallel()
 
 		root := t.TempDir()
-		sourcePath := filepath.Join(root, "source", "album")
+		rootPath := filepath.Join(root, "source", "a")
+		sourcePathA := filepath.Join(rootPath, "b")
+		sourcePathB := filepath.Join(rootPath, "aa", "c")
 		targetDir := filepath.Join(root, "target")
-		dstExisting := filepath.Join(targetDir, "album")
-		dstRenamed := filepath.Join(targetDir, "album (1)")
+		dstRoot := filepath.Join(targetDir, "a")
+		dstFirst := filepath.Join(dstRoot, "dup.txt")
+		dstPrefixed := filepath.Join(dstRoot, "aa-c-dup.txt")
+		dstRenamed := filepath.Join(dstRoot, "aa-c-dup-1.txt")
 
-		mustMkdirAll(t, sourcePath)
-		mustMkdirAll(t, dstExisting)
+		mustMkdirAll(t, sourcePathA)
+		mustMkdirAll(t, sourcePathB)
+		mustMkdirAll(t, dstRoot)
+		if err := os.WriteFile(filepath.Join(sourcePathA, "dup.txt"), []byte("a"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source A) error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(sourcePathB, "dup.txt"), []byte("b"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source B) error = %v", err)
+		}
+		if err := os.WriteFile(dstPrefixed, []byte("seed"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(prefixed) error = %v", err)
+		}
 
 		executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil)
 		out, err := executor.Execute(context.Background(), NodeExecutionInput{
@@ -301,65 +336,81 @@ func TestMoveNodeExecutorConflictPolicySkipAndAutoRename(t *testing.T) {
 				"target_dir":      targetDir,
 				"conflict_policy": "auto_rename",
 			}},
-			Inputs: testInputs(map[string]any{"item": ProcessingItem{SourcePath: sourcePath, FolderName: "album"}}),
+			Inputs: testInputs(map[string]any{"items": []ProcessingItem{
+				{
+					SourcePath:   sourcePathA,
+					RootPath:     rootPath,
+					RelativePath: "b",
+					SourceKind:   ProcessingItemSourceKindDirectory,
+				},
+				{
+					SourcePath:   sourcePathB,
+					RootPath:     rootPath,
+					RelativePath: "aa/c",
+					SourceKind:   ProcessingItemSourceKindDirectory,
+				},
+			}}),
 		})
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
 
 		results, ok := out.Outputs["step_results"].Value.([]ProcessingStepResult)
-		if !ok || len(results) != 1 {
-			t.Fatalf("step_results output = %T/%d, want []ProcessingStepResult/1", out.Outputs["step_results"].Value, len(results))
+		if !ok || len(results) != 2 {
+			t.Fatalf("step_results output = %T/%d, want []ProcessingStepResult/2", out.Outputs["step_results"].Value, len(results))
 		}
-		if results[0].TargetPath != dstRenamed {
-			t.Fatalf("target path = %q, want %q", results[0].TargetPath, dstRenamed)
+		targets := map[string]string{}
+		for _, result := range results {
+			targets[result.SourcePath] = result.TargetPath
+			if result.Status != "moved" {
+				t.Fatalf("result status = %q, want moved", result.Status)
+			}
 		}
-		if results[0].Status != "moved" {
-			t.Fatalf("result status = %q, want moved", results[0].Status)
+		if targets[filepath.Join(sourcePathA, "dup.txt")] != dstFirst {
+			t.Fatalf("first target = %q, want %q", targets[filepath.Join(sourcePathA, "dup.txt")], dstFirst)
 		}
-
-		if pathExists(t, sourcePath) {
-			t.Fatalf("source path %q should not exist after move", sourcePath)
+		if targets[filepath.Join(sourcePathB, "dup.txt")] != dstRenamed {
+			t.Fatalf("second target = %q, want %q", targets[filepath.Join(sourcePathB, "dup.txt")], dstRenamed)
 		}
-		if !pathExists(t, dstRenamed) {
-			t.Fatalf("renamed destination %q should exist", dstRenamed)
+		if !pathExists(t, dstFirst) || !pathExists(t, dstRenamed) {
+			t.Fatalf("expected merged files should exist in target root")
+		}
+		if pathExists(t, filepath.Join(sourcePathA, "dup.txt")) || pathExists(t, filepath.Join(sourcePathB, "dup.txt")) {
+			t.Fatalf("source files should be moved out")
 		}
 	})
 }
 
-func TestPhase4MoveNodeExecutorRollbackMovesFolderBackAndRestoresFolderPath(t *testing.T) {
+func TestPhase4MoveNodeExecutorRollbackMovesArtifactsBackAndCleansTargetRoot(t *testing.T) {
 	t.Parallel()
-
-	database := newServiceTestDB(t)
-	folderRepo := repository.NewFolderRepository(database)
 
 	ctx := context.Background()
 	root := t.TempDir()
-	sourcePath := filepath.Join(root, "source", "album")
-	targetPath := filepath.Join(root, "target", "album")
+	sourcePath := filepath.Join(root, "source", "a", "b", "001.jpg")
+	targetPath := filepath.Join(root, "target", "a", "001.jpg")
 	mustMkdirAll(t, filepath.Dir(sourcePath))
-	mustMkdirAll(t, targetPath)
-	if err := os.WriteFile(filepath.Join(targetPath, "001.jpg"), []byte("img"), 0o644); err != nil {
+	mustMkdirAll(t, filepath.Dir(targetPath))
+	if err := os.WriteFile(targetPath, []byte("img"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile(target) error = %v", err)
 	}
 
-	folder := &repository.Folder{ID: "folder-move-rb-1", Path: targetPath, Name: "album", Category: "photo", CategorySource: "workflow", Status: "pending"}
-	if err := folderRepo.Upsert(ctx, folder); err != nil {
-		t.Fatalf("folderRepo.Upsert() error = %v", err)
-	}
-
 	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
-		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: targetPath, FolderName: "album", TargetName: "album"}}},
+		"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{
+			FolderID:     "folder-move-rb-1",
+			SourcePath:   filepath.Join(root, "source", "a", "b"),
+			RootPath:     filepath.Join(root, "source", "a"),
+			RelativePath: "b",
+			SourceKind:   ProcessingItemSourceKindDirectory,
+		}}},
 		"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: sourcePath, TargetPath: targetPath, NodeType: "move-node", Status: "moved"}}},
 	}, NewTypeRegistry())
 	if err != nil {
 		t.Fatalf("typedValueMapToJSON() error = %v", err)
 	}
 
-	executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), folderRepo)
+	executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil)
 	err = executor.Rollback(ctx, NodeRollbackInput{
 		NodeRun: &repository.NodeRun{ID: "node-run-move-rb-1", OutputJSON: mustJSONMarshal(t, map[string]any{"outputs": encodedOutputs})},
-		Folder:  folder,
 	})
 	if err != nil {
 		t.Fatalf("Rollback() error = %v", err)
@@ -371,14 +422,116 @@ func TestPhase4MoveNodeExecutorRollbackMovesFolderBackAndRestoresFolderPath(t *t
 	if pathExists(t, targetPath) {
 		t.Fatalf("target path %q should not exist after rollback", targetPath)
 	}
+	targetRoot := filepath.Join(root, "target", "a")
+	if pathExists(t, targetRoot) {
+		t.Fatalf("target root %q should be removed when empty", targetRoot)
+	}
+}
 
-	updated, err := folderRepo.GetByID(ctx, folder.ID)
-	if err != nil {
-		t.Fatalf("folderRepo.GetByID() error = %v", err)
-	}
-	if updated.Path != sourcePath {
-		t.Fatalf("folder path = %q, want %q", updated.Path, sourcePath)
-	}
+func TestMoveNodeExecutorMergeValidationAndArchiveFlatten(t *testing.T) {
+	t.Parallel()
+
+	t.Run("multiple_root_path_returns_error", func(t *testing.T) {
+		t.Parallel()
+
+		executor := newPhase4MoveNodeExecutor(fs.NewMockAdapter(), nil)
+		_, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{Config: map[string]any{"target_dir": "/target"}},
+			Inputs: testInputs(map[string]any{"items": []ProcessingItem{
+				{SourcePath: "/source/a/b", RootPath: "/source/a", SourceKind: ProcessingItemSourceKindDirectory},
+				{SourcePath: "/source/x/y", RootPath: "/source/x", SourceKind: ProcessingItemSourceKindDirectory},
+			}}),
+		})
+		if err == nil {
+			t.Fatalf("Execute() error = nil, want multiple root_path error")
+		}
+		if !stringsContains(err.Error(), "multiple root_path") {
+			t.Fatalf("error = %q, want multiple root_path", err.Error())
+		}
+	})
+
+	t.Run("directory_contains_subdirectory_returns_error", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		rootPath := filepath.Join(root, "source", "a")
+		sourcePath := filepath.Join(rootPath, "b")
+		subdir := filepath.Join(sourcePath, "nested")
+		targetDir := filepath.Join(root, "target")
+		mustMkdirAll(t, subdir)
+		if err := os.WriteFile(filepath.Join(sourcePath, "001.mp4"), []byte("video"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source) error = %v", err)
+		}
+
+		executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil)
+		_, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{Config: map[string]any{"target_dir": targetDir}},
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{
+				SourcePath:   sourcePath,
+				RootPath:     rootPath,
+				RelativePath: "b",
+				SourceKind:   ProcessingItemSourceKindDirectory,
+			}}),
+		})
+		if err == nil {
+			t.Fatalf("Execute() error = nil, want subdirectory validation error")
+		}
+		if !stringsContains(err.Error(), "contains subdirectory") {
+			t.Fatalf("error = %q, want subdirectory message", err.Error())
+		}
+	})
+
+	t.Run("archive_items_flatten_relative_path_to_filename", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		rootPath := filepath.Join(root, "source", "a")
+		archivePathA := filepath.Join(root, "archives", "c.cbz")
+		archivePathB := filepath.Join(root, "archives", "b.cbz")
+		targetDir := filepath.Join(root, "target")
+		mustMkdirAll(t, filepath.Dir(archivePathA))
+		if err := os.WriteFile(archivePathA, []byte("a"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(archive A) error = %v", err)
+		}
+		if err := os.WriteFile(archivePathB, []byte("b"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(archive B) error = %v", err)
+		}
+
+		executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil)
+		out, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{Config: map[string]any{"target_dir": targetDir}},
+			Inputs: testInputs(map[string]any{"items": []ProcessingItem{
+				{
+					SourcePath:         archivePathA,
+					RootPath:           rootPath,
+					RelativePath:       "aa/c",
+					SourceKind:         ProcessingItemSourceKindArchive,
+					OriginalSourcePath: filepath.Join(rootPath, "aa", "c"),
+				},
+				{
+					SourcePath:         archivePathB,
+					RootPath:           rootPath,
+					RelativePath:       "b",
+					SourceKind:         ProcessingItemSourceKindArchive,
+					OriginalSourcePath: filepath.Join(rootPath, "b"),
+				},
+			}}),
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+
+		results := out.Outputs["step_results"].Value.([]ProcessingStepResult)
+		if len(results) != 2 {
+			t.Fatalf("len(step_results) = %d, want 2", len(results))
+		}
+
+		targetA := filepath.Join(targetDir, "a", "aa-c.cbz")
+		targetB := filepath.Join(targetDir, "a", "b.cbz")
+		if !pathExists(t, targetA) || !pathExists(t, targetB) {
+			t.Fatalf("flattened archive targets should exist: %q, %q", targetA, targetB)
+		}
+	})
 }
 
 func TestCompressNodeExecutorUnsupportedAndArchiveNaming(t *testing.T) {
@@ -450,6 +603,8 @@ func TestCompressNodeExecutorOutputsArchiveItemsAndCompatibility(t *testing.T) {
 				Category:   "manga",
 				Files:      []FileEntry{{Name: "001.jpg", Ext: "jpg", SizeBytes: 3}},
 				ParentPath: filepath.Dir(sourcePath),
+				RootPath:   sourcePath,
+				SourceKind: ProcessingItemSourceKindDirectory,
 			}},
 		}),
 	})
@@ -491,6 +646,15 @@ func TestCompressNodeExecutorOutputsArchiveItemsAndCompatibility(t *testing.T) {
 	}
 	if archiveItem.Category != "manga" {
 		t.Fatalf("archive_items[0].Category = %q, want manga", archiveItem.Category)
+	}
+	if archiveItem.RootPath != sourcePath {
+		t.Fatalf("archive_items[0].RootPath = %q, want %q", archiveItem.RootPath, sourcePath)
+	}
+	if archiveItem.SourceKind != ProcessingItemSourceKindArchive {
+		t.Fatalf("archive_items[0].SourceKind = %q, want %q", archiveItem.SourceKind, ProcessingItemSourceKindArchive)
+	}
+	if archiveItem.OriginalSourcePath != sourcePath {
+		t.Fatalf("archive_items[0].OriginalSourcePath = %q, want %q", archiveItem.OriginalSourcePath, sourcePath)
 	}
 	if archiveItem.Files != nil && len(archiveItem.Files) != 0 {
 		t.Fatalf("archive_items[0].Files should be nil or empty, got len=%d", len(archiveItem.Files))
@@ -582,18 +746,23 @@ func TestCompressNodeIntegrationArchiveItemsAndLegacyItems(t *testing.T) {
 		if len(movedItems) != 1 {
 			t.Fatalf("len(movedItems) = %d, want 1", len(movedItems))
 		}
-		if filepath.Ext(movedItems[0].SourcePath) != ".cbz" {
-			t.Fatalf("moved archive extension = %q, want .cbz", filepath.Ext(movedItems[0].SourcePath))
+		moveSteps := moveOut.Outputs["step_results"].Value.([]ProcessingStepResult)
+		if len(moveSteps) != 1 {
+			t.Fatalf("len(step_results) = %d, want 1", len(moveSteps))
 		}
-		if !pathExists(t, movedItems[0].SourcePath) {
-			t.Fatalf("moved archive %q should exist", movedItems[0].SourcePath)
+		movedPath := moveSteps[0].TargetPath
+		if filepath.Ext(movedPath) != ".cbz" {
+			t.Fatalf("moved archive extension = %q, want .cbz", filepath.Ext(movedPath))
+		}
+		if !pathExists(t, movedPath) {
+			t.Fatalf("moved archive %q should exist", movedPath)
 		}
 		if pathExists(t, archiveItems[0].SourcePath) {
 			t.Fatalf("original archive path %q should not exist after move", archiveItems[0].SourcePath)
 		}
 	})
 
-	t.Run("legacy_items_to_move_keeps_original_semantics", func(t *testing.T) {
+	t.Run("legacy_items_to_move_keeps_legacy_semantics", func(t *testing.T) {
 		t.Parallel()
 
 		root := t.TempDir()

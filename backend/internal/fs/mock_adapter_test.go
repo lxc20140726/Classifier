@@ -80,6 +80,14 @@ func TestMockAdapterStat(t *testing.T) {
 			want: info,
 		},
 		{
+			name: "existing dir returns dir info",
+			setup: func(m *MockAdapter) {
+				m.AddDir("/data/dir", nil)
+			},
+			path: "/data/dir",
+			want: FileInfo{Name: "dir", IsDir: true, Size: 0},
+		},
+		{
 			name:    "missing path returns error",
 			setup:   func(*MockAdapter) {},
 			path:    "/missing",
@@ -103,7 +111,7 @@ func TestMockAdapterStat(t *testing.T) {
 				return
 			}
 
-			if !reflect.DeepEqual(got, tc.want) {
+			if got.Name != tc.want.Name || got.IsDir != tc.want.IsDir || got.Size != tc.want.Size {
 				t.Fatalf("Stat() = %#v, want %#v", got, tc.want)
 			}
 		})
@@ -132,6 +140,33 @@ func TestMockAdapterMoveDir(t *testing.T) {
 
 	if _, err := adapter.ReadDir(context.Background(), "/src"); err == nil {
 		t.Fatalf("expected /src to be removed after MoveDir")
+	}
+}
+
+func TestMockAdapterMoveFile(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewMockAdapter()
+	adapter.AddFile("/src/file.txt", []byte("hello"))
+
+	if err := adapter.MoveFile(context.Background(), "/src/file.txt", "/dst/file.txt"); err != nil {
+		t.Fatalf("MoveFile() error = %v", err)
+	}
+
+	existsSrc, err := adapter.Exists(context.Background(), "/src/file.txt")
+	if err != nil {
+		t.Fatalf("Exists(/src/file.txt) error = %v", err)
+	}
+	if existsSrc {
+		t.Fatalf("source file should be removed after MoveFile")
+	}
+
+	existsDst, err := adapter.Exists(context.Background(), "/dst/file.txt")
+	if err != nil {
+		t.Fatalf("Exists(/dst/file.txt) error = %v", err)
+	}
+	if !existsDst {
+		t.Fatalf("destination file should exist after MoveFile")
 	}
 }
 

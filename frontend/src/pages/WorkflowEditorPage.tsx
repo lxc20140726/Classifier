@@ -21,20 +21,19 @@ import {
   type OnConnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { ArrowLeft, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FolderOpen, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2 } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2 } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import gsap from 'gsap'
 
 import { ApiRequestError } from '@/api/client'
+import { ConfiguredPathField } from '@/components/ConfiguredPathField'
 import { listFolders } from '@/api/folders'
-import { DirPicker } from '@/components/DirPicker'
 import { Modal } from '@/components/Modal'
 import { startWorkflowJob } from '@/api/workflowRuns'
 import type { Folder, NodeRun, NodeRunStatus } from '@/types'
 import { listNodeTypes } from '@/api/nodeTypes'
 import { getWorkflowDef, updateWorkflowDef } from '@/api/workflowDefs'
 import { cn } from '@/lib/utils'
-import { useConfigStore } from '@/store/configStore'
 import { useThemeStore } from '@/store/themeStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import { ClassificationPreviewInline } from '@/components/workflow-preview/ClassificationPreviewInline'
@@ -580,6 +579,16 @@ function cfgJson(config: Record<string, unknown>, key: string): string {
   return JSON.stringify(v, null, 2)
 }
 
+function cfgPathSource(config: Record<string, unknown>, key: string): 'preset' | 'custom' {
+  const value = config[key]
+  return value === 'preset' ? 'preset' : 'custom'
+}
+
+function cfgPathOptionID(config: Record<string, unknown>, key: string): string {
+  const value = config[key]
+  return typeof value === 'string' ? value : ''
+}
+
 const FIELD_CLS =
   'w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1'
 const TEXTAREA_FIELD_CLS =
@@ -611,52 +620,22 @@ function NodeUsageHint({ children }: { children: ReactNode }) {
   )
 }
 
-interface DirPickerFieldProps {
-  value: string
-  onChange: (val: string) => void
-  placeholder?: string
-  title?: string
-}
-
-function DirPickerField({ value, onChange, placeholder, title }: DirPickerFieldProps) {
-  const [open, setOpen] = useState(false)
-  const { sourceDir, load } = useConfigStore()
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  return (
-    <>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? '/data/path'}
-          className={FIELD_CLS}
-        />
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="shrink-0 border-2 border-foreground bg-background px-3 py-2 text-foreground transition-all hover:bg-foreground hover:text-background hover:-translate-y-0.5"
-        >
-          <FolderOpen className="h-4 w-4" />
-        </button>
-      </div>
-      <DirPicker
-        open={open}
-        initialPath={value || sourceDir}
-        title={title}
-        onConfirm={(path) => { onChange(path); setOpen(false) }}
-        onCancel={() => setOpen(false)}
-      />
-    </>
-  )
-}
-
 function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeConfigPanelProps) {
   const set = (key: string, val: string) => updateNodeConfig(nodeId, key, val)
+  const setPathWithMeta = (
+    pathKey: string,
+    sourceKey: string,
+    optionIDKey: string,
+    next: { path: string; source: 'preset' | 'custom'; optionId: string },
+  ) => {
+    set(pathKey, next.path)
+    set(sourceKey, next.source)
+    if (next.optionId === '') {
+      set(optionIDKey, '')
+      return
+    }
+    set(optionIDKey, next.optionId)
+  }
   const strategy = cfgStr(config, 'strategy') || 'simple'
 
   switch (nodeType) {
@@ -845,11 +824,16 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
       return (
         <div className="space-y-3">
           <ConfigField label="目标目录" hint="移动后文件夹的存放路径">
-            <DirPickerField
-              value={cfgStr(config, 'target_dir')}
-              onChange={(v) => set('target_dir', v)}
+            <ConfiguredPathField
+              value={{
+                path: cfgStr(config, 'target_dir'),
+                source: cfgPathSource(config, 'target_dir_source'),
+                optionId: cfgPathOptionID(config, 'target_dir_option_id'),
+              }}
+              onChange={(next) => setPathWithMeta('target_dir', 'target_dir_source', 'target_dir_option_id', next)}
+              allowedCategories={['target', 'output', 'general']}
               placeholder="/data/target"
-              title="选择目标目录"
+              pickerTitle="选择目标目录"
             />
           </ConfigField>
           <ConfigField label="冲突策略" hint="目标路径已存在时的处理方式（默认自动重命名）">
@@ -893,11 +877,16 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
             </select>
           </ConfigField>
           <ConfigField label="输出目录" hint="压缩文件的存放路径，留空则放在原文件夹旁">
-            <DirPickerField
-              value={cfgStr(config, 'target_dir')}
-              onChange={(v) => set('target_dir', v)}
+            <ConfiguredPathField
+              value={{
+                path: cfgStr(config, 'target_dir'),
+                source: cfgPathSource(config, 'target_dir_source'),
+                optionId: cfgPathOptionID(config, 'target_dir_option_id'),
+              }}
+              onChange={(next) => setPathWithMeta('target_dir', 'target_dir_source', 'target_dir_option_id', next)}
+              allowedCategories={['target', 'output', 'general']}
               placeholder="/data/archive"
-              title="选择输出目录"
+              pickerTitle="选择输出目录"
             />
           </ConfigField>
         </div>
@@ -907,11 +896,16 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
       return (
         <div className="space-y-3">
           <ConfigField label="输出目录" hint="缩略图的存放路径，留空则与视频文件同目录">
-            <DirPickerField
-              value={cfgStr(config, 'output_dir')}
-              onChange={(v) => set('output_dir', v)}
+            <ConfiguredPathField
+              value={{
+                path: cfgStr(config, 'output_dir'),
+                source: cfgPathSource(config, 'output_dir_source'),
+                optionId: cfgPathOptionID(config, 'output_dir_option_id'),
+              }}
+              onChange={(next) => setPathWithMeta('output_dir', 'output_dir_source', 'output_dir_option_id', next)}
+              allowedCategories={['target', 'output', 'general']}
               placeholder="/data/thumbnails"
-              title="选择缩略图输出目录"
+              pickerTitle="选择缩略图输出目录"
             />
           </ConfigField>
           <ConfigField label="截图偏移（秒）" hint="从视频第几秒截取缩略图（默认 8）">
@@ -972,6 +966,14 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
   const paths: string[] = Array.isArray(rawPaths)
     ? rawPaths.filter((p): p is string => typeof p === 'string')
     : []
+  const rawPathSources = config['paths_sources']
+  const pathSources: Array<'preset' | 'custom'> = Array.isArray(rawPathSources)
+    ? rawPathSources.map((item) => (item === 'preset' ? 'preset' : 'custom'))
+    : []
+  const rawPathOptionIDs = config['paths_option_ids']
+  const pathOptionIDs: string[] = Array.isArray(rawPathOptionIDs)
+    ? rawPathOptionIDs.filter((item): item is string => typeof item === 'string')
+    : []
   const rawFolderIDs = config['folder_ids']
   const folderIDsCompat: string[] = Array.isArray(rawFolderIDs)
     ? rawFolderIDs.filter((item): item is string => typeof item === 'string')
@@ -1010,10 +1012,20 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
       return
     }
     updateNodeConfig(nodeId, 'paths', '[]')
+    updateNodeConfig(nodeId, 'paths_sources', '[]')
+    updateNodeConfig(nodeId, 'paths_option_ids', '[]')
   }
 
   function setPaths(next: string[]) {
     updateNodeConfig(nodeId, 'paths', JSON.stringify(next))
+  }
+
+  function setPathSources(next: Array<'preset' | 'custom'>) {
+    updateNodeConfig(nodeId, 'paths_sources', JSON.stringify(next))
+  }
+
+  function setPathOptionIDs(next: string[]) {
+    updateNodeConfig(nodeId, 'paths_option_ids', JSON.stringify(next))
   }
 
   function setSavedFolderIDs(next: string[]) {
@@ -1024,15 +1036,20 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
 
   function addPath() {
     setPaths([...paths, ''])
+    setPathSources([...pathSources, 'custom'])
+    setPathOptionIDs([...pathOptionIDs, ''])
   }
 
-  function updatePath(index: number, value: string) {
-    const next = paths.map((p, i) => (i === index ? value : p))
-    setPaths(next)
+  function updatePath(index: number, nextValue: { path: string; source: 'preset' | 'custom'; optionId: string }) {
+    setPaths(paths.map((item, i) => (i === index ? nextValue.path : item)))
+    setPathSources(paths.map((_, i) => (i === index ? nextValue.source : (pathSources[i] ?? 'custom'))))
+    setPathOptionIDs(paths.map((_, i) => (i === index ? nextValue.optionId : (pathOptionIDs[i] ?? ''))))
   }
 
   function removePath(index: number) {
     setPaths(paths.filter((_, i) => i !== index))
+    setPathSources(pathSources.filter((_, i) => i !== index))
+    setPathOptionIDs(pathOptionIDs.filter((_, i) => i !== index))
   }
 
   function toggleFolderRecord(id: string) {
@@ -1081,11 +1098,16 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
             {paths.map((p, i) => (
               <div key={i} className="flex gap-2">
                 <div className="flex-1">
-                  <DirPickerField
-                    value={p}
-                    onChange={(v) => updatePath(i, v)}
+                  <ConfiguredPathField
+                    value={{
+                      path: p,
+                      source: pathSources[i] ?? 'custom',
+                      optionId: pathOptionIDs[i] ?? '',
+                    }}
+                    onChange={(next) => updatePath(i, next)}
+                    allowedCategories={['target', 'output', 'general']}
                     placeholder="/data/folder"
-                    title="选择文件夹"
+                    pickerTitle="选择文件夹"
                   />
                 </div>
                 <button

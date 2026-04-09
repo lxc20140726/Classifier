@@ -13,6 +13,7 @@ type FSAdapter interface {
 	ReadDir(ctx context.Context, path string) ([]DirEntry, error)
 	Stat(ctx context.Context, path string) (FileInfo, error)
 	MoveDir(ctx context.Context, src, dst string) error
+	MoveFile(ctx context.Context, src, dst string) error
 	MkdirAll(ctx context.Context, path string, perm os.FileMode) error
 	Remove(ctx context.Context, path string) error
 	Exists(ctx context.Context, path string) (bool, error)

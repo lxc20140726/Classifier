@@ -36,13 +36,17 @@ type ClassifiedEntry struct {
 }
 
 type ProcessingItem struct {
-	SourcePath string      `json:"source_path"`
-	FolderID   string      `json:"folder_id"`
-	FolderName string      `json:"folder_name"`
-	TargetName string      `json:"target_name"`
-	Category   string      `json:"category"`
-	Files      []FileEntry `json:"files"`
-	ParentPath string      `json:"parent_path"`
+	SourcePath         string      `json:"source_path"`
+	FolderID           string      `json:"folder_id"`
+	FolderName         string      `json:"folder_name"`
+	TargetName         string      `json:"target_name"`
+	Category           string      `json:"category"`
+	Files              []FileEntry `json:"files"`
+	ParentPath         string      `json:"parent_path"`
+	RootPath           string      `json:"root_path"`
+	RelativePath       string      `json:"relative_path"`
+	SourceKind         string      `json:"source_kind"`
+	OriginalSourcePath string      `json:"original_source_path"`
 }
 
 type MoveResult struct {
@@ -60,3 +64,8 @@ type ProcessingStepResult struct {
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 }
+
+const (
+	ProcessingItemSourceKindDirectory = "directory"
+	ProcessingItemSourceKindArchive   = "archive"
+)

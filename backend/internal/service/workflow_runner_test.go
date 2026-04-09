@@ -1907,28 +1907,28 @@ func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
 		t.Fatalf("router mixed_leaf source_path = %q, want %q", got, normalizeWorkflowPath(mixedLeafPath))
 	}
 
-	videoMovedPath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "原片视频"))
-	photoMovedPath := normalizeWorkflowPath(filepath.Join(targetRoot, "photo", "相册照片"))
 	mixedUnexpectedMovePath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "混合精选"))
-	if !pathExists(t, videoMovedPath) {
-		t.Fatalf("video moved path %q should exist", videoMovedPath)
-	}
-	if !pathExists(t, photoMovedPath) {
-		t.Fatalf("photo moved path %q should exist", photoMovedPath)
-	}
 	if pathExists(t, mixedUnexpectedMovePath) {
 		t.Fatalf("mixed leaf path should not be moved to %q", mixedUnexpectedMovePath)
 	}
 
-	videoThumbPath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "thumbs", "原片视频.jpg"))
-	photoArchivePath := normalizeWorkflowPath(filepath.Join(targetRoot, "photo", "archives", "相册照片.cbz"))
 	mixedThumbPath := normalizeWorkflowPath(filepath.Join(targetRoot, "mixed", "thumbs", "混合精选.jpg"))
 	mixedArchivePath := normalizeWorkflowPath(filepath.Join(targetRoot, "mixed", "archives", "混合精选.cbz"))
-	if !pathExists(t, videoThumbPath) {
-		t.Fatalf("video thumbnail path %q should exist", videoThumbPath)
+	videoThumbsDirPath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "thumbs"))
+	photoArchiveDirPath := normalizeWorkflowPath(filepath.Join(targetRoot, "photo", "archives"))
+	videoThumbEntries, err := os.ReadDir(videoThumbsDirPath)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", videoThumbsDirPath, err)
 	}
-	if !pathExists(t, photoArchivePath) {
-		t.Fatalf("photo archive path %q should exist", photoArchivePath)
+	if len(videoThumbEntries) == 0 {
+		t.Fatalf("video thumbnails should exist under %q", videoThumbsDirPath)
+	}
+	photoArchiveEntries, err := os.ReadDir(photoArchiveDirPath)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", photoArchiveDirPath, err)
+	}
+	if len(photoArchiveEntries) == 0 {
+		t.Fatalf("photo archives should exist under %q", photoArchiveDirPath)
 	}
 	if !pathExists(t, mixedThumbPath) {
 		t.Fatalf("mixed thumbnail path %q should exist", mixedThumbPath)
@@ -1937,11 +1937,19 @@ func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
 		t.Fatalf("mixed archive path %q should exist", mixedArchivePath)
 	}
 
-	if pathExists(t, normalizeWorkflowPath(videoLeafPath)) {
-		t.Fatalf("source video leaf %q should not exist after move", normalizeWorkflowPath(videoLeafPath))
+	videoEntries, err := os.ReadDir(videoLeafPath)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", videoLeafPath, err)
 	}
-	if pathExists(t, normalizeWorkflowPath(photoLeafPath)) {
-		t.Fatalf("source photo leaf %q should not exist after move", normalizeWorkflowPath(photoLeafPath))
+	if len(videoEntries) != 0 {
+		t.Fatalf("source video leaf %q should be empty after merge move", videoLeafPath)
+	}
+	photoEntries, err := os.ReadDir(photoLeafPath)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", photoLeafPath, err)
+	}
+	if len(photoEntries) != 0 {
+		t.Fatalf("source photo leaf %q should be empty after merge move", photoLeafPath)
 	}
 	if !pathExists(t, normalizeWorkflowPath(mixedLeafPath)) {
 		t.Fatalf("mixed leaf %q should remain in source path", normalizeWorkflowPath(mixedLeafPath))
