@@ -182,6 +182,7 @@ export type NodeType =
   | 'processing-result-preview'
   | 'folder-splitter'
   | 'category-router'
+  | 'mixed-leaf-router'
   | 'rename-node'
   | 'compress-node'
   | 'thumbnail-node'

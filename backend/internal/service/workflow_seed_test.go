@@ -267,6 +267,8 @@ func TestSeedGenericProcessingWorkflow_CreatesExpectedGraphAndIsIdempotent(t *te
 		"rename-node",
 		"rename-node",
 		"rename-node",
+		"mixed-leaf-router",
+		"rename-node",
 		"rename-node",
 		"collect-node",
 		"move-node",

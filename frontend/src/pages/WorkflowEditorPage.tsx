@@ -165,7 +165,7 @@ const NODE_CATEGORIES: NodeCategory[] = [
     iconColor: 'text-amber-600 dark:text-amber-400',
     accentClass: 'from-amber-500/20 to-orange-500/10 border-amber-200 dark:from-amber-500/25 dark:to-orange-500/15 dark:border-amber-700',
     borderHoverClass: 'hover:border-amber-300 dark:hover:border-amber-500',
-    types: new Set(['confidence-check', 'folder-splitter', 'category-router', 'subtree-aggregator']),
+    types: new Set(['confidence-check', 'folder-splitter', 'category-router', 'mixed-leaf-router', 'subtree-aggregator']),
   },
   {
     label: '执行操作',
@@ -721,6 +721,13 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
         </NodeUsageHint>
       )
 
+    case 'mixed-leaf-router':
+      return (
+        <NodeUsageHint>
+          专用于消费 `mixed_leaf` 最小叶子目录。节点会在原目录内原地物理拆分为 `__video` / `__photo` / `__unsupported` 并输出 video / photo / unsupported 三路目录处理项。无需配置参数。
+        </NodeUsageHint>
+      )
+
     case 'subtree-aggregator':
       return (
         <NodeUsageHint>
@@ -1264,7 +1271,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
 
   // 差异化节点样式逻辑
   const isTrigger = category.types.has('trigger')
-  const isRouter = category.types.has('category-router') || category.types.has('folder-splitter') || category.types.has('confidence-check')
+  const isRouter = category.types.has('category-router') || category.types.has('folder-splitter') || category.types.has('confidence-check') || category.types.has('mixed-leaf-router')
   
   let nodeStyleClass = 'bg-card border-2 border-foreground rounded-none'
   let headerStyleClass = 'bg-foreground text-background px-3 py-1.5 flex items-center justify-between'

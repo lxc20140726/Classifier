@@ -214,6 +214,7 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newDBSubtreeReaderExecutor(folderRepo))
 	svc.RegisterExecutor(newFolderSplitterExecutor())
 	svc.RegisterExecutor(newCategoryRouterExecutor())
+	svc.RegisterExecutor(newMixedLeafRouterExecutor(fsAdapter))
 	svc.RegisterExecutor(newCollectNodeExecutor())
 	svc.RegisterExecutor(newRenameNodeExecutor())
 	svc.RegisterExecutor(newPhase4MoveNodeExecutor(fsAdapter, folderRepo))

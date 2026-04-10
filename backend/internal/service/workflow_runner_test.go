@@ -1733,6 +1733,9 @@ func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
 			{ID: "router", Type: categoryRouterExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
 				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "split", SourcePort: "items"}},
 			}},
+			{ID: "mixed-router", Type: mixedLeafRouterExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "mixed_leaf"}},
+			}},
 			{ID: "rename-video", Type: renameNodeExecutorType, Enabled: true, Config: map[string]any{
 				"strategy": "template",
 				"template": "{name}",
@@ -1768,12 +1771,12 @@ func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
 			{ID: "thumbnail-mixed", Type: thumbnailNodeExecutorType, Enabled: true, Config: map[string]any{
 				"output_dir": mixedThumbDir,
 			}, Inputs: map[string]repository.NodeInputSpec{
-				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "mixed_leaf"}},
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "mixed-router", SourcePort: "video"}},
 			}},
 			{ID: "compress-mixed", Type: compressNodeExecutorType, Enabled: true, Config: map[string]any{
 				"target_dir": mixedArchiveDir,
 			}, Inputs: map[string]repository.NodeInputSpec{
-				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "mixed_leaf"}},
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "mixed-router", SourcePort: "photo"}},
 			}},
 			{ID: "mixed-collect", Type: collectNodeExecutorType, Enabled: true, Inputs: map[string]repository.NodeInputSpec{
 				"items_1": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "thumbnail-mixed", SourcePort: "items"}},
@@ -1784,14 +1787,15 @@ func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
 			{ID: "e-src-reader", Source: "src", SourcePort: "entry", Target: "reader", TargetPort: "entry"},
 			{ID: "e-reader-split", Source: "reader", SourcePort: "entry", Target: "split", TargetPort: "entry"},
 			{ID: "e-split-router", Source: "split", SourcePort: "items", Target: "router", TargetPort: "items"},
+			{ID: "e-router-mixed-router", Source: "router", SourcePort: "mixed_leaf", Target: "mixed-router", TargetPort: "items"},
 			{ID: "e-router-rename-video", Source: "router", SourcePort: "video", Target: "rename-video", TargetPort: "items"},
 			{ID: "e-rename-video-move", Source: "rename-video", SourcePort: "items", Target: "move-video", TargetPort: "items"},
 			{ID: "e-move-video-thumb", Source: "move-video", SourcePort: "items", Target: "thumbnail-video", TargetPort: "items"},
 			{ID: "e-router-rename-photo", Source: "router", SourcePort: "photo", Target: "rename-photo", TargetPort: "items"},
 			{ID: "e-rename-photo-move", Source: "rename-photo", SourcePort: "items", Target: "move-photo", TargetPort: "items"},
 			{ID: "e-move-photo-compress", Source: "move-photo", SourcePort: "items", Target: "compress-photo", TargetPort: "items"},
-			{ID: "e-router-mixed-thumb", Source: "router", SourcePort: "mixed_leaf", Target: "thumbnail-mixed", TargetPort: "items"},
-			{ID: "e-router-mixed-compress", Source: "router", SourcePort: "mixed_leaf", Target: "compress-mixed", TargetPort: "items"},
+			{ID: "e-mixed-router-thumb", Source: "mixed-router", SourcePort: "video", Target: "thumbnail-mixed", TargetPort: "items"},
+			{ID: "e-mixed-router-compress", Source: "mixed-router", SourcePort: "photo", Target: "compress-mixed", TargetPort: "items"},
 			{ID: "e-mixed-thumb-collect", Source: "thumbnail-mixed", SourcePort: "items", Target: "mixed-collect", TargetPort: "items_1"},
 			{ID: "e-mixed-compress-collect", Source: "compress-mixed", SourcePort: "items", Target: "mixed-collect", TargetPort: "items_2"},
 		},
@@ -1854,7 +1858,7 @@ func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
 		t.Fatalf("nodeRunRepo.List() error = %v", err)
 	}
 
-	for _, nodeID := range []string{"split", "router", "rename-video", "move-video", "thumbnail-video", "rename-photo", "move-photo", "compress-photo", "thumbnail-mixed", "compress-mixed", "mixed-collect"} {
+	for _, nodeID := range []string{"split", "router", "mixed-router", "rename-video", "move-video", "thumbnail-video", "rename-photo", "move-photo", "compress-photo", "thumbnail-mixed", "compress-mixed", "mixed-collect"} {
 		if got := nodeRunStatusByID(nodeRuns, nodeID); got != "succeeded" {
 			t.Fatalf("%s status = %q, want succeeded", nodeID, got)
 		}
@@ -1911,6 +1915,26 @@ func TestWorkflowRunnerServiceComplexMixedLeafFanOutWithoutMove(t *testing.T) {
 	}
 	if got := normalizeWorkflowPath(mixedLeafItems[0].SourcePath); got != normalizeWorkflowPath(mixedLeafPath) {
 		t.Fatalf("router mixed_leaf source_path = %q, want %q", got, normalizeWorkflowPath(mixedLeafPath))
+	}
+
+	mixedRouterRun := nodeRunByID(nodeRuns, "mixed-router")
+	if mixedRouterRun == nil {
+		t.Fatalf("mixed-router node run not found")
+	}
+	mixedRouterOutputs, typed, err := parseTypedNodeOutputs(mixedRouterRun.OutputJSON)
+	if err != nil {
+		t.Fatalf("parse mixed-router output error = %v", err)
+	}
+	if !typed {
+		t.Fatalf("mixed-router output is not typed")
+	}
+	mixedVideoItems, ok := categoryRouterToItems(mixedRouterOutputs["video"].Value)
+	if !ok || len(mixedVideoItems) != 1 {
+		t.Fatalf("mixed-router video output type/len = %T/%d, want []ProcessingItem/1", mixedRouterOutputs["video"].Value, len(mixedVideoItems))
+	}
+	mixedPhotoItems, ok := categoryRouterToItems(mixedRouterOutputs["photo"].Value)
+	if !ok || len(mixedPhotoItems) != 1 {
+		t.Fatalf("mixed-router photo output type/len = %T/%d, want []ProcessingItem/1", mixedRouterOutputs["photo"].Value, len(mixedPhotoItems))
 	}
 
 	mixedUnexpectedMovePath := normalizeWorkflowPath(filepath.Join(targetRoot, "video", "混合精选"))
