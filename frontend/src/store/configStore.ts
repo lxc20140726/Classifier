@@ -13,11 +13,11 @@ interface ConfigState {
 export const useConfigStore = create<ConfigState>((set, get) => ({
   scanInputDirs: [],
   outputDirs: {
-    video: '',
-    manga: '',
-    photo: '',
-    other: '',
-    mixed: '',
+    video: [],
+    manga: [],
+    photo: [],
+    other: [],
+    mixed: [],
   },
   loaded: false,
   load: async (force = false) => {
@@ -27,11 +27,11 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       set({
         scanInputDirs: res.data.scan_input_dirs ?? [],
         outputDirs: {
-          video: res.data.output_dirs?.video ?? '',
-          manga: res.data.output_dirs?.manga ?? '',
-          photo: res.data.output_dirs?.photo ?? '',
-          other: res.data.output_dirs?.other ?? '',
-          mixed: res.data.output_dirs?.mixed ?? '',
+          video: res.data.output_dirs?.video ?? [],
+          manga: res.data.output_dirs?.manga ?? [],
+          photo: res.data.output_dirs?.photo ?? [],
+          other: res.data.output_dirs?.other ?? [],
+          mixed: res.data.output_dirs?.mixed ?? [],
         },
         loaded: true,
       })

@@ -61,11 +61,11 @@ export interface AppConfig {
   scan_cron?: string
   scan_input_dirs?: string[]
   output_dirs?: {
-    video?: string
-    manga?: string
-    photo?: string
-    other?: string
-    mixed?: string
+    video?: string[]
+    manga?: string[]
+    photo?: string[]
+    other?: string[]
+    mixed?: string[]
   }
 }
 

@@ -219,8 +219,8 @@ func mapLegacyConfig(values map[string]string) AppConfig {
 		legacyTargetDir = strings.TrimSpace(value)
 	}
 	if rawOutputDirs, ok := values["output_dirs"]; ok && strings.TrimSpace(rawOutputDirs) != "" {
-		var outputDirs AppConfigOutputDirs
-		if err := json.Unmarshal([]byte(rawOutputDirs), &outputDirs); err == nil {
+		outputDirs, err := parseOutputDirsJSON([]byte(rawOutputDirs))
+		if err == nil {
 			cfg.OutputDirs = outputDirs
 		}
 	}
@@ -236,11 +236,11 @@ func defaultAppConfig() AppConfig {
 		ScanInputDirs: []string{},
 		ScanCron:      "",
 		OutputDirs: AppConfigOutputDirs{
-			Video: "",
-			Manga: "",
-			Photo: "",
-			Other: "",
-			Mixed: "",
+			Video: []string{},
+			Manga: []string{},
+			Photo: []string{},
+			Other: []string{},
+			Mixed: []string{},
 		},
 	}
 }
@@ -256,11 +256,11 @@ func normalizeAppConfig(value AppConfig) AppConfig {
 	normalized.ScanInputDirs = cleanPathList(value.ScanInputDirs)
 
 	normalized.OutputDirs = AppConfigOutputDirs{
-		Video: strings.TrimSpace(value.OutputDirs.Video),
-		Manga: strings.TrimSpace(value.OutputDirs.Manga),
-		Photo: strings.TrimSpace(value.OutputDirs.Photo),
-		Other: strings.TrimSpace(value.OutputDirs.Other),
-		Mixed: strings.TrimSpace(value.OutputDirs.Mixed),
+		Video: cleanPathList(value.OutputDirs.Video),
+		Manga: cleanPathList(value.OutputDirs.Manga),
+		Photo: cleanPathList(value.OutputDirs.Photo),
+		Other: cleanPathList(value.OutputDirs.Other),
+		Mixed: cleanPathList(value.OutputDirs.Mixed),
 	}
 
 	return normalized
@@ -279,25 +279,25 @@ func normalizeAppConfigForSave(value AppConfig) (AppConfig, error) {
 		normalized.ScanInputDirs[index] = normalizedItem
 	}
 
-	normalized.OutputDirs.Video, err = normalizeOptionalAbsPath(normalized.OutputDirs.Video)
+	normalized.OutputDirs.Video, err = normalizeOutputDirList(normalized.OutputDirs.Video, "output_dirs.video")
 	if err != nil {
-		return AppConfig{}, fmt.Errorf("%w: output_dirs.video: %v", ErrInvalidConfig, err)
+		return AppConfig{}, err
 	}
-	normalized.OutputDirs.Manga, err = normalizeOptionalAbsPath(normalized.OutputDirs.Manga)
+	normalized.OutputDirs.Manga, err = normalizeOutputDirList(normalized.OutputDirs.Manga, "output_dirs.manga")
 	if err != nil {
-		return AppConfig{}, fmt.Errorf("%w: output_dirs.manga: %v", ErrInvalidConfig, err)
+		return AppConfig{}, err
 	}
-	normalized.OutputDirs.Photo, err = normalizeOptionalAbsPath(normalized.OutputDirs.Photo)
+	normalized.OutputDirs.Photo, err = normalizeOutputDirList(normalized.OutputDirs.Photo, "output_dirs.photo")
 	if err != nil {
-		return AppConfig{}, fmt.Errorf("%w: output_dirs.photo: %v", ErrInvalidConfig, err)
+		return AppConfig{}, err
 	}
-	normalized.OutputDirs.Other, err = normalizeOptionalAbsPath(normalized.OutputDirs.Other)
+	normalized.OutputDirs.Other, err = normalizeOutputDirList(normalized.OutputDirs.Other, "output_dirs.other")
 	if err != nil {
-		return AppConfig{}, fmt.Errorf("%w: output_dirs.other: %v", ErrInvalidConfig, err)
+		return AppConfig{}, err
 	}
-	normalized.OutputDirs.Mixed, err = normalizeOptionalAbsPath(normalized.OutputDirs.Mixed)
+	normalized.OutputDirs.Mixed, err = normalizeOutputDirList(normalized.OutputDirs.Mixed, "output_dirs.mixed")
 	if err != nil {
-		return AppConfig{}, fmt.Errorf("%w: output_dirs.mixed: %v", ErrInvalidConfig, err)
+		return AppConfig{}, err
 	}
 
 	return normalized, nil
@@ -309,20 +309,20 @@ func fillDefaultOutputDirs(dirs AppConfigOutputDirs, targetDir string) AppConfig
 		return dirs
 	}
 
-	if dirs.Video == "" {
-		dirs.Video = filepath.Join(baseDir, "video")
+	if len(dirs.Video) == 0 {
+		dirs.Video = []string{filepath.Join(baseDir, "video")}
 	}
-	if dirs.Manga == "" {
-		dirs.Manga = filepath.Join(baseDir, "manga")
+	if len(dirs.Manga) == 0 {
+		dirs.Manga = []string{filepath.Join(baseDir, "manga")}
 	}
-	if dirs.Photo == "" {
-		dirs.Photo = filepath.Join(baseDir, "photo")
+	if len(dirs.Photo) == 0 {
+		dirs.Photo = []string{filepath.Join(baseDir, "photo")}
 	}
-	if dirs.Other == "" {
-		dirs.Other = filepath.Join(baseDir, "other")
+	if len(dirs.Other) == 0 {
+		dirs.Other = []string{filepath.Join(baseDir, "other")}
 	}
-	if dirs.Mixed == "" {
-		dirs.Mixed = filepath.Join(baseDir, "mixed")
+	if len(dirs.Mixed) == 0 {
+		dirs.Mixed = []string{filepath.Join(baseDir, "mixed")}
 	}
 
 	return dirs
@@ -351,25 +351,30 @@ func cleanPathList(raw []string) []string {
 }
 
 func mapLegacyAppConfigJSON(raw []byte) (AppConfig, error) {
-	type legacyAppConfig struct {
-		Version       int                 `json:"version"`
-		ScanInputDirs []string            `json:"scan_input_dirs"`
-		ScanCron      string              `json:"scan_cron"`
-		OutputDirs    AppConfigOutputDirs `json:"output_dirs"`
-		SourceDir     string              `json:"source_dir"`
-		TargetDir     string              `json:"target_dir"`
+	type rawLegacyAppConfig struct {
+		Version       int             `json:"version"`
+		ScanInputDirs []string        `json:"scan_input_dirs"`
+		ScanCron      string          `json:"scan_cron"`
+		OutputDirsRaw json.RawMessage `json:"output_dirs"`
+		SourceDir     string          `json:"source_dir"`
+		TargetDir     string          `json:"target_dir"`
 	}
 
-	var payload legacyAppConfig
+	var payload rawLegacyAppConfig
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return AppConfig{}, err
+	}
+
+	outputDirs, err := parseOutputDirsJSON(payload.OutputDirsRaw)
+	if err != nil {
+		outputDirs = defaultAppConfig().OutputDirs
 	}
 
 	cfg := AppConfig{
 		Version:       payload.Version,
 		ScanInputDirs: payload.ScanInputDirs,
 		ScanCron:      payload.ScanCron,
-		OutputDirs:    payload.OutputDirs,
+		OutputDirs:    outputDirs,
 	}
 	cfg = normalizeAppConfig(cfg)
 	if len(cfg.ScanInputDirs) == 0 && strings.TrimSpace(payload.SourceDir) != "" {
@@ -377,6 +382,84 @@ func mapLegacyAppConfigJSON(raw []byte) (AppConfig, error) {
 	}
 	cfg.OutputDirs = fillDefaultOutputDirs(cfg.OutputDirs, payload.TargetDir)
 	return cfg, nil
+}
+
+func normalizeOutputDirList(values []string, fieldName string) ([]string, error) {
+	cleaned := cleanPathList(values)
+	for index, item := range cleaned {
+		normalizedItem, err := normalizeOptionalAbsPath(item)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s[%d]: %v", ErrInvalidConfig, fieldName, index, err)
+		}
+		cleaned[index] = normalizedItem
+	}
+	return cleaned, nil
+}
+
+func parseOutputDirsJSON(raw []byte) (AppConfigOutputDirs, error) {
+	dirs := defaultAppConfig().OutputDirs
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "" || strings.TrimSpace(string(raw)) == "null" {
+		return dirs, nil
+	}
+
+	type rawOutputDirs struct {
+		Video json.RawMessage `json:"video"`
+		Manga json.RawMessage `json:"manga"`
+		Photo json.RawMessage `json:"photo"`
+		Other json.RawMessage `json:"other"`
+		Mixed json.RawMessage `json:"mixed"`
+	}
+
+	var payload rawOutputDirs
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return dirs, err
+	}
+
+	var err error
+	dirs.Video, err = parseOutputDirField(payload.Video)
+	if err != nil {
+		return AppConfigOutputDirs{}, fmt.Errorf("video: %w", err)
+	}
+	dirs.Manga, err = parseOutputDirField(payload.Manga)
+	if err != nil {
+		return AppConfigOutputDirs{}, fmt.Errorf("manga: %w", err)
+	}
+	dirs.Photo, err = parseOutputDirField(payload.Photo)
+	if err != nil {
+		return AppConfigOutputDirs{}, fmt.Errorf("photo: %w", err)
+	}
+	dirs.Other, err = parseOutputDirField(payload.Other)
+	if err != nil {
+		return AppConfigOutputDirs{}, fmt.Errorf("other: %w", err)
+	}
+	dirs.Mixed, err = parseOutputDirField(payload.Mixed)
+	if err != nil {
+		return AppConfigOutputDirs{}, fmt.Errorf("mixed: %w", err)
+	}
+
+	return dirs, nil
+}
+
+func parseOutputDirField(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "" || strings.TrimSpace(string(raw)) == "null" {
+		return []string{}, nil
+	}
+
+	var list []string
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return cleanPathList(list), nil
+	}
+
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		trimmed := strings.TrimSpace(single)
+		if trimmed == "" {
+			return []string{}, nil
+		}
+		return []string{trimmed}, nil
+	}
+
+	return nil, fmt.Errorf("must be string or string array")
 }
 
 func normalizeOptionalAbsPath(raw string) (string, error) {

@@ -77,6 +77,8 @@ const RECENT_LAUNCH_STORAGE_KEY = 'classifier-workflow-recent-launch-v1'
 const RUN_REFRESH_DEBOUNCE_MS = 350
 
 const TERMINAL_NODE_STATUSES = new Set<NodeRunStatus>(['succeeded', 'failed', 'skipped', 'waiting_input'])
+const ACTIVE_WORKFLOW_RUN_STATUSES = new Set<WorkflowRunStatus>(['pending', 'running', 'waiting_input'])
+const RECENT_BINDING_MAX_AGE_MS = 30 * 1000
 
 const refreshTimers = new Map<string, number>()
 
@@ -182,6 +184,12 @@ function scheduleRunRefresh(runId: string, runFetch: (runID: string) => Promise<
     void runFetch(runId)
   }, RUN_REFRESH_DEBOUNCE_MS)
   refreshTimers.set(runId, timer)
+}
+
+function isRecentBindingRecord(record: RecentLaunchRecord) {
+  const updatedAtTs = Date.parse(record.updatedAt)
+  if (Number.isNaN(updatedAtTs)) return false
+  return Date.now() - updatedAtTs <= RECENT_BINDING_MAX_AGE_MS
 }
 
 const initialRecentLaunches = loadRecentLaunches()
@@ -552,6 +560,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
     const run = fromRunID ?? fromJobRuns ?? null
 
     if (!run) {
+      if (!isRecentBindingRecord(record)) return null
       return {
         workflowDefId,
         jobId: record.jobId,
@@ -567,10 +576,23 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
       }
     }
 
+    if (!ACTIVE_WORKFLOW_RUN_STATUSES.has(run.status)) {
+      return null
+    }
+
     const nodeRuns = get().nodesByRunId[run.id] ?? []
+    const latestNodeRunsByID: Record<string, NodeRun> = {}
+    nodeRuns.forEach((nodeRun) => {
+      const prev = latestNodeRunsByID[nodeRun.node_id]
+      if (!prev || nodeRun.sequence > prev.sequence) {
+        latestNodeRunsByID[nodeRun.node_id] = nodeRun
+      }
+    })
+    const latestNodeRuns = Object.values(latestNodeRunsByID)
     const currentNode = chooseCurrentNode(run, nodeRuns)
-    const completedNodes = nodeRuns.filter((nodeRun) => TERMINAL_NODE_STATUSES.has(nodeRun.status)).length
-    const normalizedTotalNodes = totalNodes > 0 ? totalNodes : Math.max(nodeRuns.length, completedNodes)
+    const completedNodesRaw = latestNodeRuns.filter((nodeRun) => TERMINAL_NODE_STATUSES.has(nodeRun.status)).length
+    const normalizedTotalNodes = totalNodes > 0 ? totalNodes : Math.max(latestNodeRuns.length, completedNodesRaw)
+    const completedNodes = normalizedTotalNodes > 0 ? Math.min(completedNodesRaw, normalizedTotalNodes) : completedNodesRaw
 
     const reviewSummary = get().reviewSummaryByRunId[run.id]
     const reviewProgressText = reviewSummary

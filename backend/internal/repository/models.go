@@ -161,11 +161,11 @@ type AuditListFilter struct {
 }
 
 type AppConfigOutputDirs struct {
-	Video string `json:"video"`
-	Manga string `json:"manga"`
-	Photo string `json:"photo"`
-	Other string `json:"other"`
-	Mixed string `json:"mixed"`
+	Video []string `json:"video"`
+	Manga []string `json:"manga"`
+	Photo []string `json:"photo"`
+	Other []string `json:"other"`
+	Mixed []string `json:"mixed"`
 }
 
 type AppConfig struct {

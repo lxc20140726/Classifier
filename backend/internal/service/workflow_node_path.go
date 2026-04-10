@@ -80,20 +80,52 @@ func resolveOutputDirByKey(appConfig *repository.AppConfig, key string) string {
 	if appConfig == nil {
 		return ""
 	}
-	switch strings.ToLower(strings.TrimSpace(key)) {
+	category, index := parseOutputDirRef(key)
+	if category == "" || index < 0 {
+		return ""
+	}
+
+	var dirs []string
+	switch category {
 	case "video":
-		return normalizeWorkflowPath(appConfig.OutputDirs.Video)
+		dirs = appConfig.OutputDirs.Video
 	case "manga":
-		return normalizeWorkflowPath(appConfig.OutputDirs.Manga)
+		dirs = appConfig.OutputDirs.Manga
 	case "photo":
-		return normalizeWorkflowPath(appConfig.OutputDirs.Photo)
+		dirs = appConfig.OutputDirs.Photo
 	case "other":
-		return normalizeWorkflowPath(appConfig.OutputDirs.Other)
+		dirs = appConfig.OutputDirs.Other
 	case "mixed":
-		return normalizeWorkflowPath(appConfig.OutputDirs.Mixed)
+		dirs = appConfig.OutputDirs.Mixed
 	default:
 		return ""
 	}
+	if index >= len(dirs) {
+		return ""
+	}
+	return normalizeWorkflowPath(dirs[index])
+}
+
+func parseOutputDirRef(raw string) (string, int) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", -1
+	}
+
+	parts := strings.SplitN(trimmed, ":", 2)
+	category := strings.ToLower(strings.TrimSpace(parts[0]))
+	if category == "" {
+		return "", -1
+	}
+	if len(parts) == 1 {
+		return category, 0
+	}
+
+	index, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || index < 0 {
+		return "", -1
+	}
+	return category, index
 }
 
 func resolveScanDirByKey(appConfig *repository.AppConfig, key string) string {

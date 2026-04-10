@@ -63,11 +63,11 @@ func TestConfigHandler(t *testing.T) {
 		err := repo.SaveAppConfig(context.Background(), &repository.AppConfig{
 			ScanInputDirs: []string{"/media/source", "/media/source-2"},
 			OutputDirs: repository.AppConfigOutputDirs{
-				Video: "/media/target/video",
-				Manga: "/media/target/manga",
-				Photo: "/media/target/photo",
-				Other: "/media/target/other",
-				Mixed: "/media/target/mixed",
+				Video: []string{"/media/target/video"},
+				Manga: []string{"/media/target/manga"},
+				Photo: []string{"/media/target/photo"},
+				Other: []string{"/media/target/other"},
+				Mixed: []string{"/media/target/mixed"},
 			},
 		})
 		if err != nil {
@@ -104,9 +104,9 @@ func TestConfigHandler(t *testing.T) {
 			"source_dir":"/mnt/source",
 			"target_dir":"/mnt/target",
 			"output_dirs":{
-				"video":"/mnt/target/video",
+				"video":["/mnt/target/video","/mnt/target/video-2"],
 				"manga":"/mnt/target/manga",
-				"photo":"/mnt/target/photo",
+				"photo":["/mnt/target/photo"],
 				"other":"/mnt/target/other",
 				"mixed":"/mnt/target/mixed"
 			}
@@ -130,8 +130,8 @@ func TestConfigHandler(t *testing.T) {
 		if storedConfig.ScanCron != "*/15 * * * *" {
 			t.Fatalf("scan_cron = %q, want */15 * * * *", storedConfig.ScanCron)
 		}
-		if storedConfig.OutputDirs.Video != "/mnt/target/video" {
-			t.Fatalf("output_dirs.video = %q, want /mnt/target/video", storedConfig.OutputDirs.Video)
+		if !reflect.DeepEqual(storedConfig.OutputDirs.Video, []string{"/mnt/target/video", "/mnt/target/video-2"}) {
+			t.Fatalf("output_dirs.video = %#v, want [/mnt/target/video /mnt/target/video-2]", storedConfig.OutputDirs.Video)
 		}
 	})
 
@@ -201,11 +201,27 @@ func TestConfigHandler(t *testing.T) {
 		}
 
 		expectedVideoDir := filepath.Join("/legacy/target", "video")
-		if payload.Data.OutputDirs.Video != expectedVideoDir {
-			t.Fatalf("output_dirs.video = %q, want %q", payload.Data.OutputDirs.Video, expectedVideoDir)
+		if !reflect.DeepEqual(payload.Data.OutputDirs.Video, []string{expectedVideoDir}) {
+			t.Fatalf("output_dirs.video = %#v, want [%q]", payload.Data.OutputDirs.Video, expectedVideoDir)
 		}
 		if !reflect.DeepEqual(payload.Data.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/legacy/source /legacy/source-2]", payload.Data.ScanInputDirs)
+		}
+	})
+
+	t.Run("put relative output dir returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
+			"output_dirs": {
+				"video": ["/ok/path", "relative/path"]
+			}
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
 		}
 	})
 }

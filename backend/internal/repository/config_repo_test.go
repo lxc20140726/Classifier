@@ -58,11 +58,11 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 		ScanInputDirs: []string{"/mnt/source", "/mnt/source-2"},
 		ScanCron:      "0 * * * *",
 		OutputDirs: AppConfigOutputDirs{
-			Video: "/mnt/out/video",
-			Manga: "/mnt/out/manga",
-			Photo: "/mnt/out/photo",
-			Other: "/mnt/out/other",
-			Mixed: "/mnt/out/mixed",
+			Video: []string{"/mnt/out/video", "/mnt/out/video-2"},
+			Manga: []string{"/mnt/out/manga"},
+			Photo: []string{"/mnt/out/photo"},
+			Other: []string{"/mnt/out/other"},
+			Mixed: []string{"/mnt/out/mixed"},
 		},
 	})
 	if err != nil {
@@ -83,8 +83,8 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 	if got.ScanCron != "0 * * * *" {
 		t.Fatalf("ScanCron = %q, want 0 * * * *", got.ScanCron)
 	}
-	if got.OutputDirs.Video != "/mnt/out/video" {
-		t.Fatalf("OutputDirs.Video = %q, want /mnt/out/video", got.OutputDirs.Video)
+	if !reflect.DeepEqual(got.OutputDirs.Video, []string{"/mnt/out/video", "/mnt/out/video-2"}) {
+		t.Fatalf("OutputDirs.Video = %#v, want [/mnt/out/video /mnt/out/video-2]", got.OutputDirs.Video)
 	}
 
 	rawScanInputDirs, err := repo.Get(ctx, "scan_input_dirs")
@@ -126,8 +126,8 @@ func TestConfigRepositoryGetAppConfigFallsBackToLegacyKV(t *testing.T) {
 	}
 
 	expectedVideoDir := filepath.Join("/legacy/target", "video")
-	if got.OutputDirs.Video != expectedVideoDir {
-		t.Fatalf("OutputDirs.Video = %q, want %q", got.OutputDirs.Video, expectedVideoDir)
+	if !reflect.DeepEqual(got.OutputDirs.Video, []string{expectedVideoDir}) {
+		t.Fatalf("OutputDirs.Video = %#v, want [%q]", got.OutputDirs.Video, expectedVideoDir)
 	}
 	if !reflect.DeepEqual(got.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 		t.Fatalf("ScanInputDirs = %#v, want [/legacy/source /legacy/source-2]", got.ScanInputDirs)
@@ -144,11 +144,11 @@ func TestConfigRepositorySaveAppConfigRejectsInvalidValues(t *testing.T) {
 		err := repo.SaveAppConfig(context.Background(), &AppConfig{
 			ScanInputDirs: []string{"relative/source"},
 			OutputDirs: AppConfigOutputDirs{
-				Video: "/out/video",
-				Manga: "/out/manga",
-				Photo: "/out/photo",
-				Other: "/out/other",
-				Mixed: "/out/mixed",
+				Video: []string{"/out/video"},
+				Manga: []string{"/out/manga"},
+				Photo: []string{"/out/photo"},
+				Other: []string{"/out/other"},
+				Mixed: []string{"/out/mixed"},
 			},
 		})
 		if !errors.Is(err, ErrInvalidConfig) {
@@ -160,11 +160,31 @@ func TestConfigRepositorySaveAppConfigRejectsInvalidValues(t *testing.T) {
 		err := repo.SaveAppConfig(context.Background(), &AppConfig{
 			ScanInputDirs: []string{"/source"},
 			OutputDirs: AppConfigOutputDirs{
-				Video: "relative/video",
+				Video: []string{"relative/video"},
 			},
 		})
 		if !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("output dirs are deduplicated and empty values cleaned", func(t *testing.T) {
+		err := repo.SaveAppConfig(context.Background(), &AppConfig{
+			ScanInputDirs: []string{"/source"},
+			OutputDirs: AppConfigOutputDirs{
+				Video: []string{"  ", "/out/video", "/out/video", " /out/video-2 "},
+			},
+		})
+		if err != nil {
+			t.Fatalf("SaveAppConfig() error = %v", err)
+		}
+
+		got, getErr := repo.GetAppConfig(context.Background())
+		if getErr != nil {
+			t.Fatalf("GetAppConfig() error = %v", getErr)
+		}
+		if !reflect.DeepEqual(got.OutputDirs.Video, []string{"/out/video", "/out/video-2"}) {
+			t.Fatalf("OutputDirs.Video = %#v, want [/out/video /out/video-2]", got.OutputDirs.Video)
 		}
 	})
 }
@@ -195,5 +215,60 @@ func TestConfigRepositoryEnsureAppConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.ScanInputDirs, []string{"/legacy/source"}) {
 		t.Fatalf("cfg.ScanInputDirs = %#v, want [/legacy/source]", cfg.ScanInputDirs)
+	}
+}
+
+func TestConfigRepositoryGetAppConfigCompatOldOutputDirsString(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewConfigRepository(database)
+	ctx := context.Background()
+
+	raw := `{"version":1,"scan_input_dirs":["/source"],"output_dirs":{"video":"/out/video","manga":"/out/manga"}}`
+	checksum := checksumHex([]byte(raw))
+	_, err := database.ExecContext(
+		ctx,
+		`INSERT INTO app_config (id, version, value, checksum, updated_at)
+VALUES (1, 1, ?, ?, CURRENT_TIMESTAMP)`,
+		raw,
+		checksum,
+	)
+	if err != nil {
+		t.Fatalf("insert app_config error = %v", err)
+	}
+
+	got, err := repo.GetAppConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetAppConfig() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.OutputDirs.Video, []string{"/out/video"}) {
+		t.Fatalf("OutputDirs.Video = %#v, want [/out/video]", got.OutputDirs.Video)
+	}
+	if !reflect.DeepEqual(got.OutputDirs.Manga, []string{"/out/manga"}) {
+		t.Fatalf("OutputDirs.Manga = %#v, want [/out/manga]", got.OutputDirs.Manga)
+	}
+}
+
+func TestConfigRepositoryGetAppConfigCompatLegacyKVOutputDirsString(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewConfigRepository(database)
+	ctx := context.Background()
+
+	if err := repo.Set(ctx, "output_dirs", `{"video":"/out/video","mixed":["/out/mixed"]}`); err != nil {
+		t.Fatalf("Set(output_dirs) error = %v", err)
+	}
+
+	got, err := repo.GetAppConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetAppConfig() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.OutputDirs.Video, []string{"/out/video"}) {
+		t.Fatalf("OutputDirs.Video = %#v, want [/out/video]", got.OutputDirs.Video)
+	}
+	if !reflect.DeepEqual(got.OutputDirs.Mixed, []string{"/out/mixed"}) {
+		t.Fatalf("OutputDirs.Mixed = %#v, want [/out/mixed]", got.OutputDirs.Mixed)
 	}
 }

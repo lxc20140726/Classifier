@@ -522,6 +522,17 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
 
   const error = state.localError ?? storeError
 
+  useEffect(() => {
+    if (!open) return undefined
+
+    const { overflow } = document.body.style
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = overflow
+    }
+  }, [open])
+
   const timelineItems = useMemo(() => {
     const rawEvents: TimelineEvent[] = []
 
@@ -578,9 +589,9 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
         aria-hidden="true"
       />
 
-      <aside
+        <aside
         className={cn(
-          'fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l-4 border-foreground bg-background shadow-[-8px_0_0_rgba(0,0,0,1)] transition-transform duration-300 ease-out',
+          'fixed right-0 top-0 z-50 flex h-[100dvh] w-full max-w-xl flex-col border-l-4 border-foreground bg-background shadow-[-8px_0_0_rgba(0,0,0,1)] transition-transform duration-300 ease-out',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
         aria-label="文件夹业务时间线"
@@ -603,7 +614,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-background px-6 py-6">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-background px-6 pt-6 pb-[max(3rem,env(safe-area-inset-bottom))]">
           {error && !state.failureDetail && (
             <div className="mb-6 border-2 border-foreground bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
               {error}

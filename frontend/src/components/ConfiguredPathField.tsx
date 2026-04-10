@@ -5,7 +5,7 @@ import { DirPicker } from '@/components/DirPicker'
 import { cn } from '@/lib/utils'
 import { useConfigStore } from '@/store/configStore'
 
-export type PathRefType = 'scan' | 'output' | 'custom'
+export type PathRefType = 'output' | 'custom'
 
 export interface ConfiguredPathFieldValue {
   pathRefType: PathRefType
@@ -29,6 +29,28 @@ const OUTPUT_KEYS: Array<{ key: 'video' | 'manga' | 'photo' | 'other' | 'mixed';
   { key: 'mixed', label: '混合' },
 ]
 
+interface OutputOption {
+  value: string
+  label: string
+  path: string
+}
+
+function parseOutputRefKey(raw: string): { key: string; index: number } {
+  const trimmed = raw.trim()
+  if (trimmed === '') {
+    return { key: '', index: 0 }
+  }
+  const [key, indexPart] = trimmed.split(':', 2)
+  if (!indexPart) {
+    return { key, index: 0 }
+  }
+  const parsed = Number.parseInt(indexPart, 10)
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return { key: '', index: 0 }
+  }
+  return { key, index: parsed }
+}
+
 export function ConfiguredPathField({
   value,
   placeholder,
@@ -37,41 +59,56 @@ export function ConfiguredPathField({
   onChange,
 }: ConfiguredPathFieldProps) {
   const [open, setOpen] = useState(false)
-  const { scanInputDirs, outputDirs, load } = useConfigStore()
+  const { outputDirs, load } = useConfigStore()
 
   useEffect(() => {
     void load()
   }, [load])
 
-  const resolvedOutputPath = useMemo(() => {
-    const key = value.pathRefKey as keyof typeof outputDirs
-    return outputDirs[key] ?? ''
-  }, [outputDirs, value.pathRefKey])
+  const outputOptions = useMemo<OutputOption[]>(() => {
+    return OUTPUT_KEYS.flatMap((option) => {
+      const paths = outputDirs[option.key] ?? []
+      return paths.map((path, index) => ({
+        value: `${option.key}:${index}`,
+        label: `${option.label} / ${index + 1} - ${path}`,
+        path,
+      }))
+    })
+  }, [outputDirs])
 
-  const resolvedScanPath = useMemo(() => {
-    if (scanInputDirs.length === 0) return ''
-    if (value.pathRefKey.trim() === '') return scanInputDirs[0]
-    const idx = Number.parseInt(value.pathRefKey, 10)
-    if (Number.isInteger(idx) && idx >= 0 && idx < scanInputDirs.length) {
-      return scanInputDirs[idx]
+  const resolvedOutputValue = useMemo(() => {
+    const parsed = parseOutputRefKey(value.pathRefKey)
+    if (parsed.key !== '' && OUTPUT_KEYS.some((item) => item.key === parsed.key)) {
+      return `${parsed.key}:${parsed.index}`
     }
-    return scanInputDirs.find((item) => item === value.pathRefKey) ?? ''
-  }, [scanInputDirs, value.pathRefKey])
+    return ''
+  }, [value.pathRefKey])
+
+  const resolvedOutputPath = useMemo(() => {
+    if (resolvedOutputValue !== '') {
+      const option = outputOptions.find((item) => item.value === resolvedOutputValue)
+      if (option) {
+        return option.path
+      }
+    }
+    const parsed = parseOutputRefKey(value.pathRefKey)
+    if (parsed.key === '' || !OUTPUT_KEYS.some((item) => item.key === parsed.key)) {
+      return ''
+    }
+    const paths = outputDirs[parsed.key as keyof typeof outputDirs] ?? []
+    return paths[parsed.index] ?? ''
+  }, [outputDirs, outputOptions, resolvedOutputValue, value.pathRefKey])
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-3 gap-2">
-        {(['scan', 'output', 'custom'] as const).map((mode) => (
+      <div className="grid grid-cols-2 gap-2">
+        {(['output', 'custom'] as const).map((mode) => (
           <button
             key={mode}
             type="button"
             onClick={() => {
-              if (mode === 'scan') {
-                onChange({ pathRefType: 'scan', pathRefKey: '0', pathSuffix: value.pathSuffix })
-                return
-              }
               if (mode === 'output') {
-                onChange({ pathRefType: 'output', pathRefKey: defaultOutputKey, pathSuffix: value.pathSuffix })
+                onChange({ pathRefType: 'output', pathRefKey: `${defaultOutputKey}:0`, pathSuffix: value.pathSuffix })
                 return
               }
               onChange({ pathRefType: 'custom', pathRefKey: value.pathRefKey, pathSuffix: value.pathSuffix })
@@ -83,43 +120,21 @@ export function ConfiguredPathField({
                 : 'border-foreground bg-background text-foreground',
             )}
           >
-            {mode === 'scan' ? '扫描目录' : mode === 'output' ? '输出目录' : '自定义路径'}
+            {mode === 'output' ? '输出目录' : '自定义路径'}
           </button>
         ))}
       </div>
 
-      {value.pathRefType === 'scan' && (
-        <div className="space-y-2">
-          <select
-            value={value.pathRefKey}
-            onChange={(event) => onChange({ ...value, pathRefKey: event.target.value })}
-            className="w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
-          >
-            {scanInputDirs.length === 0 && <option value="">暂无扫描目录，请先去系统配置填写</option>}
-            {scanInputDirs.map((path, index) => (
-              <option key={`${path}-${index}`} value={String(index)}>
-                {`#${index + 1} ${path}`}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            value={resolvedScanPath}
-            readOnly
-            className="w-full border-2 border-foreground bg-muted/20 px-3 py-2 text-xs font-mono font-bold"
-          />
-        </div>
-      )}
-
       {value.pathRefType === 'output' && (
         <div className="space-y-2">
           <select
-            value={value.pathRefKey}
+            value={resolvedOutputValue}
             onChange={(event) => onChange({ ...value, pathRefKey: event.target.value })}
             className="w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
           >
-            {OUTPUT_KEYS.map((option) => (
-              <option key={option.key} value={option.key}>{option.label}</option>
+            {outputOptions.length === 0 && <option value="">暂无输出目录，请先去系统配置填写</option>}
+            {outputOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
           <input

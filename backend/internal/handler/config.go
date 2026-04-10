@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/liqiye/classifier/internal/repository"
@@ -22,11 +24,11 @@ type ConfigHandler struct {
 }
 
 type appConfigOutputDirsPatch struct {
-	Video *string `json:"video"`
-	Manga *string `json:"manga"`
-	Photo *string `json:"photo"`
-	Other *string `json:"other"`
-	Mixed *string `json:"mixed"`
+	Video *stringOrStringList `json:"video"`
+	Manga *stringOrStringList `json:"manga"`
+	Photo *stringOrStringList `json:"photo"`
+	Other *stringOrStringList `json:"other"`
+	Mixed *stringOrStringList `json:"mixed"`
 }
 
 type appConfigPatchRequest struct {
@@ -39,6 +41,37 @@ type appConfigPatchRequest struct {
 	TargetDirs      *json.RawMessage          `json:"target_dirs"`
 	PathOptions     *json.RawMessage          `json:"path_options"`
 	DeprecatedField map[string]json.RawMessage
+}
+
+type stringOrStringList struct {
+	Values []string
+}
+
+func (v *stringOrStringList) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		v.Values = []string{}
+		return nil
+	}
+
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		v.Values = list
+		return nil
+	}
+
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		singleValue := strings.TrimSpace(single)
+		if singleValue == "" {
+			v.Values = []string{}
+			return nil
+		}
+		v.Values = []string{singleValue}
+		return nil
+	}
+
+	return fmt.Errorf("expected string or string array")
 }
 
 func NewConfigHandler(configRepo repository.ConfigRepository, syncer ConfigSyncer) *ConfigHandler {
@@ -119,19 +152,19 @@ func applyAppConfigPatch(target *repository.AppConfig, patch appConfigPatchReque
 	}
 	if patch.OutputDirs != nil {
 		if patch.OutputDirs.Video != nil {
-			target.OutputDirs.Video = *patch.OutputDirs.Video
+			target.OutputDirs.Video = patch.OutputDirs.Video.Values
 		}
 		if patch.OutputDirs.Manga != nil {
-			target.OutputDirs.Manga = *patch.OutputDirs.Manga
+			target.OutputDirs.Manga = patch.OutputDirs.Manga.Values
 		}
 		if patch.OutputDirs.Photo != nil {
-			target.OutputDirs.Photo = *patch.OutputDirs.Photo
+			target.OutputDirs.Photo = patch.OutputDirs.Photo.Values
 		}
 		if patch.OutputDirs.Other != nil {
-			target.OutputDirs.Other = *patch.OutputDirs.Other
+			target.OutputDirs.Other = patch.OutputDirs.Other.Values
 		}
 		if patch.OutputDirs.Mixed != nil {
-			target.OutputDirs.Mixed = *patch.OutputDirs.Mixed
+			target.OutputDirs.Mixed = patch.OutputDirs.Mixed.Values
 		}
 	}
 }

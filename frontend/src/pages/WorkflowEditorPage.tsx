@@ -4,6 +4,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  getBezierPath,
   MiniMap,
   PanOnScrollMode,
   ReactFlow,
@@ -12,15 +13,20 @@ import {
   Position,
   SelectionMode,
   useEdgesState,
+  useStore,
   useUpdateNodeInternals,
   useNodesState,
   type IsValidConnection,
   type Connection,
+  type ConnectionLineComponentProps,
   type Edge,
   type Node,
   type NodeProps,
   type OnConnect,
+  type OnConnectEnd,
+  type OnConnectStart,
   type OnReconnect,
+  type OnReconnectEnd,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { ArrowLeft, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2 } from 'lucide-react'
@@ -312,6 +318,104 @@ function parseHandleIndex(handle?: string | null) {
   const raw = handle.split('-')[1]
   const parsed = Number.parseInt(raw, 10)
   return Number.isNaN(parsed) ? null : parsed
+}
+
+function getHandleFromPointerEvent(event: MouseEvent | TouchEvent) {
+  const point = 'changedTouches' in event
+    ? event.changedTouches[0]
+    : event
+  if (!point) return null
+
+  const element = document.elementFromPoint(point.clientX, point.clientY)
+  const handleElement = element?.closest('.react-flow__handle')
+  if (!(handleElement instanceof HTMLElement)) return null
+
+  const nodeId = handleElement.getAttribute('data-nodeid')
+  const handleType = handleElement.classList.contains('source')
+    ? 'source'
+    : handleElement.classList.contains('target')
+      ? 'target'
+      : null
+
+  if (!nodeId || !handleType) return null
+
+  return {
+    nodeId,
+    handleId: handleElement.getAttribute('data-handleid'),
+    handleType,
+  }
+}
+
+function getHandleAnchor(
+  nodeLookup: Map<string, EditorNode>,
+  nodeId: string,
+  handleType: 'source' | 'target',
+  handleId?: string | null,
+) {
+  const node = nodeLookup.get(nodeId)
+  const handles = node?.internals.handleBounds?.[handleType]
+  const handle = handles?.find((item) => item.id === handleId) ?? handles?.[0]
+  if (!node || !handle) return null
+
+  const absoluteX = handle.x + node.internals.positionAbsolute.x
+  const absoluteY = handle.y + node.internals.positionAbsolute.y
+
+  if (handle.position === Position.Right) {
+    return { x: absoluteX + handle.width, y: absoluteY + (handle.height / 2), position: handle.position }
+  }
+  if (handle.position === Position.Left) {
+    return { x: absoluteX, y: absoluteY + (handle.height / 2), position: handle.position }
+  }
+  if (handle.position === Position.Bottom) {
+    return { x: absoluteX + (handle.width / 2), y: absoluteY + handle.height, position: handle.position }
+  }
+  return { x: absoluteX + (handle.width / 2), y: absoluteY, position: handle.position }
+}
+
+function WorkflowReconnectLine(
+  props: ConnectionLineComponentProps<EditorNode> & { reconnectingEdge: Edge | null },
+) {
+  const nodeLookup = useStore((state) => state.nodeLookup)
+  const { reconnectingEdge } = props
+
+  let fromX = props.fromX
+  let fromY = props.fromY
+  let fromPosition = props.fromPosition
+
+  if (reconnectingEdge) {
+    const fixedAnchor = props.fromHandle.type === 'target'
+      ? getHandleAnchor(nodeLookup, reconnectingEdge.source, 'source', reconnectingEdge.sourceHandle)
+      : getHandleAnchor(nodeLookup, reconnectingEdge.target, 'target', reconnectingEdge.targetHandle)
+
+    if (fixedAnchor) {
+      fromX = fixedAnchor.x
+      fromY = fixedAnchor.y
+      fromPosition = fixedAnchor.position
+    }
+  }
+
+  const [path] = getBezierPath({
+    sourceX: fromX,
+    sourceY: fromY,
+    sourcePosition: fromPosition,
+    targetX: props.toX,
+    targetY: props.toY,
+    targetPosition: props.toPosition,
+  })
+
+  return (
+    <path
+      d={path}
+      fill="none"
+      stroke={props.connectionLineStyle?.stroke ?? 'hsl(var(--primary))'}
+      strokeWidth={props.connectionLineStyle?.strokeWidth ?? 3}
+      strokeLinecap="round"
+      className={cn(
+        'transition-opacity',
+        props.connectionStatus === 'invalid' ? 'opacity-60' : 'opacity-100',
+      )}
+    />
+  )
 }
 
 function isValidEditorEdge(
@@ -608,9 +712,9 @@ function cfgJson(config: Record<string, unknown>, key: string): string {
   return JSON.stringify(v, null, 2)
 }
 
-function cfgPathRefType(config: Record<string, unknown>, defaultType: 'scan' | 'output' | 'custom'): 'scan' | 'output' | 'custom' {
+function cfgPathRefType(config: Record<string, unknown>, defaultType: 'output' | 'custom'): 'output' | 'custom' {
   const value = config['path_ref_type']
-  if (value === 'scan' || value === 'output' || value === 'custom') return value
+  if (value === 'output' || value === 'custom') return value
   return defaultType
 }
 
@@ -658,7 +762,7 @@ function NodeUsageHint({ children }: { children: ReactNode }) {
 
 function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeConfigPanelProps) {
   const set = (key: string, val: string) => updateNodeConfig(nodeId, key, val)
-  const setPathRef = (next: { pathRefType: 'scan' | 'output' | 'custom'; pathRefKey: string; pathSuffix: string }) => {
+  const setPathRef = (next: { pathRefType: 'output' | 'custom'; pathRefKey: string; pathSuffix: string }) => {
     set('path_ref_type', next.pathRefType)
     set('path_ref_key', next.pathRefKey)
     set('path_suffix', next.pathSuffix)
@@ -860,11 +964,11 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
           <NodeUsageHint>
             按处理项的 `current_path` 执行移动，成功后仅更新 `current_path`，保留 `source_path` 作为原始来源路径，便于后续缩略图、压缩和回滚稳定追踪。
           </NodeUsageHint>
-          <ConfigField label="目标路径引用" hint="统一路径语义：扫描目录 / 输出目录 / 自定义路径">
+          <ConfigField label="目标路径引用" hint="统一路径语义：输出目录 / 自定义路径">
             <ConfiguredPathField
               value={{
                 pathRefType: cfgPathRefType(config, 'output'),
-                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'target_dir') || 'mixed'),
+                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'target_dir') || 'mixed:0'),
                 pathSuffix: cfgPathSuffix(config),
               }}
               onChange={setPathRef}
@@ -917,7 +1021,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
             <ConfiguredPathField
               value={{
                 pathRefType: cfgPathRefType(config, 'output'),
-                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'target_dir') || 'mixed'),
+                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'target_dir') || 'mixed:0'),
                 pathSuffix: cfgPathSuffix(config),
               }}
               onChange={setPathRef}
@@ -939,7 +1043,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
             <ConfiguredPathField
               value={{
                 pathRefType: cfgPathRefType(config, 'output'),
-                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'output_dir') || 'video'),
+                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'output_dir') || 'video:0'),
                 pathSuffix: cfgPathSuffix(config),
               }}
               onChange={setPathRef}
@@ -1007,9 +1111,9 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     : Array.isArray(config['paths'])
       ? (config['paths'].find((item): item is string => typeof item === 'string') ?? '')
       : ''
-  const pathRefType = config['path_ref_type'] === 'scan' || config['path_ref_type'] === 'output' || config['path_ref_type'] === 'custom'
+  const pathRefType = config['path_ref_type'] === 'output' || config['path_ref_type'] === 'custom'
     ? config['path_ref_type']
-    : 'custom'
+    : 'output'
   const pathRefKey = typeof config['path_ref_key'] === 'string' && config['path_ref_key'].trim() !== ''
     ? config['path_ref_key']
     : path
@@ -1066,7 +1170,7 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     updateNodeConfig(nodeId, 'paths_option_ids', '[]')
   }
 
-  function setPath(nextValue: { pathRefType: 'scan' | 'output' | 'custom'; pathRefKey: string; pathSuffix: string }) {
+  function setPath(nextValue: { pathRefType: 'output' | 'custom'; pathRefKey: string; pathSuffix: string }) {
     updateNodeConfig(nodeId, 'path', nextValue.pathRefType === 'custom' ? nextValue.pathRefKey : '')
     updateNodeConfig(nodeId, 'path_ref_type', nextValue.pathRefType)
     updateNodeConfig(nodeId, 'path_ref_key', nextValue.pathRefKey)
@@ -1517,6 +1621,8 @@ function WorkflowEditorScreen() {
   const [nodeErrorModal, setNodeErrorModal] = useState<{ nodeId: string; nodeLabel: string; error: string } | null>(null)
   const canvasViewportRef = useRef<HTMLDivElement | null>(null)
   const reactFlowRef = useRef<FlowPositionProjector | null>(null)
+  const reconnectingEdgeRef = useRef<Edge | null>(null)
+  const reconnectHandledRef = useRef(false)
 
   const recentLaunchRecord = useWorkflowRunStore((s) => s.recentLaunchByWorkflowDefId[workflowDefId])
   const activeJobId = recentLaunchRecord?.jobId ?? null
@@ -1671,17 +1777,97 @@ function WorkflowEditorScreen() {
     return () => { active = false }
   }, [workflowDefId, setEdges, setNodes])
 
-  const onConnect = useMemo<OnConnect>(
-    () => (connection: Connection) => {
-      const getSchema = (nodeId: string) => {
-        const node = nodesRef.current.find((item) => item.id === nodeId)
-        if (!node) return undefined
-        return schemaMapRef.current.get(node.data.type)
-      }
-      if (!isValidEditorConnection(connection, getSchema)) {
-        setNotice('该连线无效，已阻止连接')
+  const onConnectStart = useMemo<OnConnectStart>(
+    () => (_event, params) => {
+      reconnectHandledRef.current = false
+      const handleType = params.handleType
+      const handleId = params.handleId ?? null
+      const nodeId = params.nodeId
+      if (!handleType || !handleId || !nodeId) {
+        reconnectingEdgeRef.current = null
         return
       }
+
+      const matched = edgesRef.current.find((edge) => {
+        if (handleType === 'source') {
+          return edge.source === nodeId && edge.sourceHandle === handleId
+        }
+        return edge.target === nodeId && edge.targetHandle === handleId
+      })
+      reconnectingEdgeRef.current = matched ?? null
+      if (matched) {
+        setEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== matched.id))
+        setSelectedEdgeId((currentSelectedEdgeId) => (currentSelectedEdgeId === matched.id ? null : currentSelectedEdgeId))
+      }
+    },
+    [setEdges],
+  )
+
+  const restoreReconnectingEdge = useCallback(() => {
+    const reconnectingEdge = reconnectingEdgeRef.current
+    if (!reconnectingEdge) return
+
+    reconnectingEdgeRef.current = null
+    setEdges((currentEdges) => {
+      if (currentEdges.some((edge) => edge.id === reconnectingEdge.id)) return currentEdges
+      return [...currentEdges, reconnectingEdge]
+    })
+  }, [setEdges])
+
+  const applyEditorConnection = useCallback((connection: Connection) => {
+    const getSchema = (nodeId: string) => {
+      const node = nodesRef.current.find((item) => item.id === nodeId)
+      if (!node) return undefined
+      return schemaMapRef.current.get(node.data.type)
+    }
+    if (!isValidEditorConnection(connection, getSchema)) {
+      setNotice('该连线无效，已阻止连接')
+      restoreReconnectingEdge()
+      reconnectHandledRef.current = false
+      return
+    }
+
+    setEdges((currentEdges) => {
+      if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
+        return currentEdges
+      }
+
+      const reconnectingEdge = reconnectingEdgeRef.current
+      if (reconnectingEdge) {
+        reconnectHandledRef.current = true
+        reconnectingEdgeRef.current = null
+        const filtered = currentEdges.filter((edge) => !(
+          edge.id === reconnectingEdge.id
+          || (edge.target === connection.target && edge.targetHandle === connection.targetHandle)
+          || (edge.source === connection.source && edge.sourceHandle === connection.sourceHandle)
+        ))
+        return [
+          ...filtered,
+          {
+            ...reconnectingEdge,
+            id: reconnectingEdge.id,
+            source: connection.source,
+            target: connection.target,
+            sourceHandle: connection.sourceHandle,
+            targetHandle: connection.targetHandle,
+            animated: false,
+          },
+        ]
+      }
+
+      const withoutExisting = currentEdges.filter(
+        (edge) => !(
+          (edge.target === connection.target && edge.targetHandle === connection.targetHandle)
+          || (edge.source === connection.source && edge.sourceHandle === connection.sourceHandle)
+        ),
+      )
+      return addEdge({ ...connection, animated: false }, withoutExisting)
+    })
+    setNotice(null)
+  }, [restoreReconnectingEdge, setEdges])
+
+  const onConnect = useMemo<OnConnect>(
+    () => (connection: Connection) => {
       // #region agent log
       sendAgentDebugLog({
         runId: 'pre-fix',
@@ -1696,18 +1882,9 @@ function WorkflowEditorScreen() {
         },
       })
       // #endregion
-      setEdges((currentEdges) => {
-        if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
-          return currentEdges
-        }
-        const withoutExisting = currentEdges.filter(
-          (edge) => !(edge.target === connection.target && edge.targetHandle === connection.targetHandle),
-        )
-        return addEdge({ ...connection, animated: false }, withoutExisting)
-      })
-      setNotice(null)
+      applyEditorConnection(connection)
     },
-    [setEdges],
+    [applyEditorConnection],
   )
 
   const onReconnect = useMemo<OnReconnect>(
@@ -1728,7 +1905,10 @@ function WorkflowEditorScreen() {
       setEdges((currentEdges) => {
         const filtered = currentEdges.filter((edge) => {
           if (edge.id === oldEdge.id) return false
-          return !(edge.target === newConnection.target && edge.targetHandle === newConnection.targetHandle)
+          return !(
+            (edge.target === newConnection.target && edge.targetHandle === newConnection.targetHandle)
+            || (edge.source === newConnection.source && edge.sourceHandle === newConnection.sourceHandle)
+          )
         })
         return [
           ...filtered,
@@ -1745,6 +1925,84 @@ function WorkflowEditorScreen() {
       setNotice(null)
     },
     [setEdges],
+  )
+
+  const onConnectEnd = useMemo<OnConnectEnd>(
+    () => (event, connectionState) => {
+      if (connectionState.isValid && reconnectingEdgeRef.current && !reconnectHandledRef.current && connectionState.fromHandle && connectionState.toHandle) {
+        const connection: Connection = connectionState.fromHandle.type === 'target'
+          ? {
+            source: connectionState.toHandle.nodeId,
+            sourceHandle: connectionState.toHandle.id,
+            target: connectionState.fromHandle.nodeId,
+            targetHandle: connectionState.fromHandle.id,
+          }
+          : {
+            source: connectionState.fromHandle.nodeId,
+            sourceHandle: connectionState.fromHandle.id,
+            target: connectionState.toHandle.nodeId,
+            targetHandle: connectionState.toHandle.id,
+          }
+        applyEditorConnection(connection)
+      } else if (reconnectingEdgeRef.current && !reconnectHandledRef.current) {
+        const reconnectingEdge = reconnectingEdgeRef.current
+        const fallbackHandle = getHandleFromPointerEvent(event)
+        const droppedHandle = connectionState.toHandle
+          ? {
+            nodeId: connectionState.toHandle.nodeId,
+            handleId: connectionState.toHandle.id,
+            handleType: connectionState.toHandle.type,
+          }
+          : fallbackHandle
+
+        if (droppedHandle && connectionState.fromHandle) {
+          const connection: Connection | null = connectionState.fromHandle.type === 'target' && droppedHandle.handleType === 'target'
+            ? {
+              source: reconnectingEdge.source,
+              sourceHandle: reconnectingEdge.sourceHandle ?? null,
+              target: droppedHandle.nodeId,
+              targetHandle: droppedHandle.handleId,
+            }
+            : connectionState.fromHandle.type === 'source' && droppedHandle.handleType === 'source'
+              ? {
+                source: droppedHandle.nodeId,
+                sourceHandle: droppedHandle.handleId,
+                target: reconnectingEdge.target,
+                targetHandle: reconnectingEdge.targetHandle ?? null,
+              }
+              : null
+
+          if (connection) {
+            applyEditorConnection(connection)
+            reconnectHandledRef.current = false
+            return
+          }
+        }
+
+        restoreReconnectingEdge()
+      } else if (!connectionState.isValid) {
+        restoreReconnectingEdge()
+      }
+      reconnectHandledRef.current = false
+    },
+    [applyEditorConnection, restoreReconnectingEdge],
+  )
+
+  const onReconnectEnd = useMemo<OnReconnectEnd<Edge>>(
+    () => () => {
+      reconnectingEdgeRef.current = null
+    },
+    [],
+  )
+
+  const connectionLineComponent = useCallback(
+    (props: ConnectionLineComponentProps<EditorNode>) => (
+      <WorkflowReconnectLine
+        {...props}
+        reconnectingEdge={reconnectingEdgeRef.current}
+      />
+    ),
+    [],
   )
 
   const isValidConnection = useMemo<IsValidConnection<Connection>>(
@@ -2283,8 +2541,11 @@ function WorkflowEditorScreen() {
               onInit={(instance) => { reactFlowRef.current = instance }}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
+              onConnectStart={onConnectStart}
+              onConnectEnd={onConnectEnd}
               onConnect={onConnect}
               onReconnect={onReconnect}
+              onReconnectEnd={onReconnectEnd}
               isValidConnection={isValidConnection}
               edgesReconnectable
               onNodeClick={() => setSelectedEdgeId(null)}
@@ -2302,6 +2563,7 @@ function WorkflowEditorScreen() {
               colorMode={theme}
               className="bg-background"
               connectionLineStyle={{ strokeWidth: 3, stroke: 'hsl(var(--primary))' }}
+              connectionLineComponent={connectionLineComponent}
               defaultEdgeOptions={{ style: { strokeWidth: 3, stroke: 'hsl(var(--foreground))' } }}
             >
               <Background gap={20} size={2} color="hsl(var(--foreground))" variant={BackgroundVariant.Dots} style={{ opacity: 0.15 }} />
