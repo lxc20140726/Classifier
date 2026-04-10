@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { listFolders } from '@/api/folders'
 import { updateWorkflowDef } from '@/api/workflowDefs'
 import { startWorkflowJob } from '@/api/workflowRuns'
+import { WorkflowRunStatusCard } from '@/components/WorkflowRunStatusCard'
 import {
   applyFolderSelectionToEnabledPickers,
   checkLaunchableFolderPickers,
@@ -12,7 +13,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import { useWorkflowDefStore } from '@/store/workflowDefStore'
-import type { Folder, WorkflowRunStatus, WorkflowDefinition } from '@/types'
+import type { Folder, WorkflowDefinition, WorkflowGraph } from '@/types'
 
 export type WorkflowDefsPageProps = Record<string, never>
 
@@ -150,11 +151,21 @@ interface LaunchDialogState {
   def: WorkflowDefinition | null
 }
 
+function countEnabledNodes(graphJSON: string) {
+  try {
+    const parsed = JSON.parse(graphJSON) as Partial<WorkflowGraph>
+    const nodes = Array.isArray(parsed.nodes) ? parsed.nodes : []
+    return nodes.filter((node) => node && node.enabled !== false).length
+  } catch {
+    return 0
+  }
+}
+
 export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   const navigate = useNavigate()
   const { defs, isLoading, error, fetchDefs, createDef, updateDef, deleteDef, setActive } =
     useWorkflowDefStore()
-  const { runsByJobId, reviewSummaryByRunId, fetchRunsForJob, fetchRunReviews } = useWorkflowRunStore()
+  const { bindLatestLaunch, restoreLatestLaunch, buildRunCardView } = useWorkflowRunStore()
 
   const [modal, setModal] = useState<ModalMode | null>(null)
   const [createStep, setCreateStep] = useState<CreateStep>('pick-template')
@@ -256,6 +267,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
     } catch {
       setSelectedFolderIds([])
     }
+    void restoreLatestLaunch(def.id)
   }
 
   function closeLaunchDialog() {
@@ -340,7 +352,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
       await fetchDefs()
       const res = await startWorkflowJob({ workflow_def_id: currentLaunchDef.id })
       setLaunchSuccessJobId(res.job_id)
-      void fetchRunsForJob(res.job_id)
+      void bindLatestLaunch(currentLaunchDef.id, res.job_id)
     } catch (err) {
       setLaunchError(err instanceof Error ? err.message : '启动失败')
     } finally {
@@ -348,29 +360,9 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
     }
   }
 
-  const launchedRuns = launchSuccessJobId ? (runsByJobId[launchSuccessJobId] ?? []) : []
-  const launchedRun = launchedRuns[0] ?? null
-  const launchedReviewSummary = launchedRun ? reviewSummaryByRunId[launchedRun.id] : undefined
-
-  useEffect(() => {
-    if (!launchSuccessJobId) return
-    void fetchRunsForJob(launchSuccessJobId)
-  }, [launchSuccessJobId, fetchRunsForJob])
-
-  useEffect(() => {
-    if (!launchedRun || launchedRun.status !== 'waiting_input') return
-    void fetchRunReviews(launchedRun.id)
-  }, [launchedRun, fetchRunReviews])
-
-  const RUN_STATUS_LABELS: Record<WorkflowRunStatus, string> = {
-    pending: '等待中',
-    running: '进行中',
-    succeeded: '已完成',
-    failed: '失败',
-    partial: '部分完成',
-    waiting_input: '待确认',
-    rolled_back: '已回退',
-  }
+  const launchCardView = currentLaunchDef
+    ? buildRunCardView(currentLaunchDef.id, countEnabledNodes(currentLaunchDef.graph_json))
+    : null
 
   return (
     <section className="mx-auto max-w-5xl px-6 py-8">
@@ -572,37 +564,16 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 <div className="border-2 border-green-900 bg-green-100 px-4 py-3 text-sm font-bold text-green-900 shadow-hard">
                   启动成功，作业 ID：{launchSuccessJobId}
                 </div>
-                <div className="border-2 border-foreground bg-background p-3">
-                  <div className="mb-2 flex items-center justify-between">
-                    <h3 className="text-sm font-black tracking-wide">当前运行卡片</h3>
-                    <span className="border-2 border-foreground bg-muted px-2 py-0.5 text-xs font-black">
-                      {launchedRun ? RUN_STATUS_LABELS[launchedRun.status] : '初始化中'}
-                    </span>
-                  </div>
-                  {!launchedRun ? (
-                    <p className="text-xs font-bold text-muted-foreground">正在获取运行状态...</p>
-                  ) : launchedRun.status === 'waiting_input' ? (
-                    <div className="space-y-2">
-                      <p className="text-xs font-bold text-purple-800">
-                        确认进度：{(launchedReviewSummary?.approved ?? 0) + (launchedReviewSummary?.rolled_back ?? 0)} / {launchedReviewSummary?.total ?? 0}
-                      </p>
-                      <p className="text-[11px] font-bold text-muted-foreground">
-                        待确认 {launchedReviewSummary?.pending ?? 0}，已通过 {launchedReviewSummary?.approved ?? 0}，已回退 {launchedReviewSummary?.rolled_back ?? 0}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-xs font-bold text-muted-foreground">
-                      运行状态：{RUN_STATUS_LABELS[launchedRun.status]}
-                    </p>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => navigate('/jobs')}
-                    className="mt-3 border-2 border-foreground bg-background px-3 py-1.5 text-xs font-bold transition-all hover:bg-foreground hover:text-background"
-                  >
-                    查看完整明细
-                  </button>
-                </div>
+              </div>
+            )}
+
+            {launchCardView && (
+              <div className="mt-4">
+                <WorkflowRunStatusCard
+                  view={launchCardView}
+                  title="当前运行卡片"
+                  onOpenJobs={() => navigate('/jobs')}
+                />
               </div>
             )}
 

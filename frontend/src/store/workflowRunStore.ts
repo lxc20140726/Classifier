@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 
+import { listJobs } from '@/api/jobs'
 import {
   approveWorkflowRunReview,
   getWorkflowRunDetail,
@@ -20,13 +21,38 @@ import type {
   ProvideInputBody,
   WorkflowNodeEvent,
   WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowRunUpdatedEvent,
 } from '@/types'
+
+interface RecentLaunchRecord {
+  jobId: string
+  workflowRunId?: string
+  updatedAt: string
+}
+
+export interface WorkflowRunCardView {
+  workflowDefId: string
+  jobId: string
+  workflowRunId: string
+  status: WorkflowRunStatus
+  currentNodeId: string
+  currentNodeType: string
+  completedNodes: number
+  totalNodes: number
+  failureSummary: string
+  reviewSummary?: ProcessingReviewSummary
+  reviewProgressText: string
+  isBinding: boolean
+}
 
 interface WorkflowRunStore {
   runsByJobId: Record<string, WorkflowRun[]>
+  runsById: Record<string, WorkflowRun>
   nodesByRunId: Record<string, NodeRun[]>
   reviewsByRunId: Record<string, ProcessingReviewItem[]>
   reviewSummaryByRunId: Record<string, ProcessingReviewSummary>
+  recentLaunchByWorkflowDefId: Record<string, RecentLaunchRecord>
   fetchingJobIds: Set<string>
   fetchingRunIds: Set<string>
   fetchRunsForJob: (jobId: string) => Promise<void>
@@ -38,26 +64,179 @@ interface WorkflowRunStore {
   rollbackRun: (runId: string) => Promise<void>
   provideInput: (runId: string, category: ProvideInputBody['category']) => Promise<void>
   provideRawInput: (runId: string, body: Record<string, unknown>) => Promise<void>
+  bindLatestLaunch: (workflowDefId: string, jobId: string) => Promise<void>
+  restoreLatestLaunch: (workflowDefId: string) => Promise<void>
+  handleRunUpdated: (event: WorkflowRunUpdatedEvent) => void
+  handleReviewEvent: (workflowRunId: string) => void
+  refreshRunFromEvent: (runId: string) => void
   handleNodeEvent: (event: WorkflowNodeEvent) => void
+  buildRunCardView: (workflowDefId: string, totalNodes: number) => WorkflowRunCardView | null
 }
+
+const RECENT_LAUNCH_STORAGE_KEY = 'classifier-workflow-recent-launch-v1'
+const RUN_REFRESH_DEBOUNCE_MS = 350
+
+const TERMINAL_NODE_STATUSES = new Set<NodeRunStatus>(['succeeded', 'failed', 'skipped', 'waiting_input'])
+
+const refreshTimers = new Map<string, number>()
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function parseRecentLaunchRecord(value: unknown): RecentLaunchRecord | null {
+  if (!isRecord(value)) return null
+  if (typeof value.jobId !== 'string' || value.jobId.trim() === '') return null
+  if (typeof value.updatedAt !== 'string' || value.updatedAt.trim() === '') return null
+  const workflowRunId = typeof value.workflowRunId === 'string' && value.workflowRunId.trim() !== ''
+    ? value.workflowRunId
+    : undefined
+  return {
+    jobId: value.jobId,
+    workflowRunId,
+    updatedAt: value.updatedAt,
+  }
+}
+
+function loadRecentLaunches(): Record<string, RecentLaunchRecord> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(RECENT_LAUNCH_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!isRecord(parsed)) return {}
+
+    const out: Record<string, RecentLaunchRecord> = {}
+    for (const [workflowDefId, value] of Object.entries(parsed)) {
+      if (typeof workflowDefId !== 'string' || workflowDefId.trim() === '') continue
+      const record = parseRecentLaunchRecord(value)
+      if (!record) continue
+      out[workflowDefId] = record
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function persistRecentLaunches(next: Record<string, RecentLaunchRecord>) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(RECENT_LAUNCH_STORAGE_KEY, JSON.stringify(next))
+  } catch {
+    // 忽略持久化异常，避免影响主流程
+  }
+}
+
+function sortRunsDesc(runs: WorkflowRun[]) {
+  return [...runs].sort((a, b) => {
+    const aTime = Date.parse(a.updated_at || a.created_at || '')
+    const bTime = Date.parse(b.updated_at || b.created_at || '')
+    if (!Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime !== bTime) {
+      return bTime - aTime
+    }
+    return b.created_at.localeCompare(a.created_at)
+  })
+}
+
+function upsertRunByJob(currentRuns: WorkflowRun[], run: WorkflowRun) {
+  const idx = currentRuns.findIndex((item) => item.id === run.id)
+  if (idx === -1) {
+    return sortRunsDesc([...currentRuns, run])
+  }
+  return sortRunsDesc(currentRuns.map((item, index) => (index === idx ? run : item)))
+}
+
+function chooseCurrentNode(run: WorkflowRun, nodeRuns: NodeRun[]) {
+  const runningNode = [...nodeRuns]
+    .filter((nodeRun) => nodeRun.status === 'running')
+    .sort((a, b) => b.sequence - a.sequence)[0]
+  if (runningNode) return runningNode
+
+  const waitingNode = [...nodeRuns]
+    .filter((nodeRun) => nodeRun.status === 'waiting_input')
+    .sort((a, b) => b.sequence - a.sequence)[0]
+  if (waitingNode) return waitingNode
+
+  const lastNodeID = (run.last_node_id ?? '').trim()
+  if (lastNodeID !== '') {
+    const matched = [...nodeRuns]
+      .filter((nodeRun) => nodeRun.node_id === lastNodeID)
+      .sort((a, b) => b.sequence - a.sequence)[0]
+    if (matched) return matched
+  }
+
+  return [...nodeRuns].sort((a, b) => b.sequence - a.sequence)[0] ?? null
+}
+
+function scheduleRunRefresh(runId: string, runFetch: (runID: string) => Promise<void>) {
+  if (!runId || refreshTimers.has(runId)) return
+  const timer = window.setTimeout(() => {
+    refreshTimers.delete(runId)
+    void runFetch(runId)
+  }, RUN_REFRESH_DEBOUNCE_MS)
+  refreshTimers.set(runId, timer)
+}
+
+const initialRecentLaunches = loadRecentLaunches()
 
 export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
   runsByJobId: {},
+  runsById: {},
   nodesByRunId: {},
   reviewsByRunId: {},
   reviewSummaryByRunId: {},
+  recentLaunchByWorkflowDefId: initialRecentLaunches,
   fetchingJobIds: new Set(),
   fetchingRunIds: new Set(),
 
   async fetchRunsForJob(jobId) {
-    if (get().fetchingJobIds.has(jobId)) return
+    if (!jobId || get().fetchingJobIds.has(jobId)) return
     set((state) => ({ fetchingJobIds: new Set([...state.fetchingJobIds, jobId]) }))
     try {
       const response = await listWorkflowRunsByJob(jobId, { limit: 100 })
-      set((state) => ({
-        runsByJobId: { ...state.runsByJobId, [jobId]: response.data },
-        fetchingJobIds: new Set([...state.fetchingJobIds].filter((id) => id !== jobId)),
-      }))
+      set((state) => {
+        const nextRunsById = { ...state.runsById }
+        response.data.forEach((run) => {
+          nextRunsById[run.id] = run
+        })
+
+        let nextRecent = state.recentLaunchByWorkflowDefId
+        let recentChanged = false
+        response.data.forEach((run) => {
+          const workflowDefId = run.workflow_def_id?.trim()
+          if (!workflowDefId) return
+          const current = nextRecent[workflowDefId]
+          if (!current || current.jobId === jobId) {
+            nextRecent = {
+              ...nextRecent,
+              [workflowDefId]: {
+                jobId,
+                workflowRunId: run.id,
+                updatedAt: new Date().toISOString(),
+              },
+            }
+            recentChanged = true
+          }
+        })
+
+        if (recentChanged) {
+          persistRecentLaunches(nextRecent)
+        }
+
+        return {
+          runsByJobId: { ...state.runsByJobId, [jobId]: sortRunsDesc(response.data) },
+          runsById: nextRunsById,
+          recentLaunchByWorkflowDefId: nextRecent,
+          fetchingJobIds: new Set([...state.fetchingJobIds].filter((id) => id !== jobId)),
+        }
+      })
     } catch (error) {
       console.error(`fetchRunsForJob ${jobId}:`, error)
       set((state) => ({
@@ -67,28 +246,53 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
   },
 
   async fetchRunDetail(runId) {
-    if (get().fetchingRunIds.has(runId)) return
+    if (!runId || get().fetchingRunIds.has(runId)) return
     set((state) => ({ fetchingRunIds: new Set([...state.fetchingRunIds, runId]) }))
     try {
       const response = await getWorkflowRunDetail(runId)
-      const jobId = response.data.job_id
+      const run = response.data
+      const jobId = run.job_id
+
       set((state) => {
-        const existingRuns = state.runsByJobId[jobId] ?? []
-        const idx = existingRuns.findIndex((r) => r.id === runId)
-        const updatedRuns =
-          idx !== -1
-            ? existingRuns.map((r, i) => (i === idx ? response.data : r))
-            : [...existingRuns, response.data]
+        const currentRuns = state.runsByJobId[jobId] ?? []
+        const updatedRuns = upsertRunByJob(currentRuns, run)
+
+        const nextRunsById = { ...state.runsById, [run.id]: run }
+
+        const workflowDefId = run.workflow_def_id?.trim()
+        let nextRecent = state.recentLaunchByWorkflowDefId
+        if (workflowDefId) {
+          nextRecent = {
+            ...nextRecent,
+            [workflowDefId]: {
+              jobId: run.job_id,
+              workflowRunId: run.id,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+          persistRecentLaunches(nextRecent)
+        }
+
+        const nextReviewSummaryByRunId = { ...state.reviewSummaryByRunId }
+        if (response.review_summary) {
+          nextReviewSummaryByRunId[runId] = response.review_summary
+        } else {
+          delete nextReviewSummaryByRunId[runId]
+        }
+
         return {
           runsByJobId: { ...state.runsByJobId, [jobId]: updatedRuns },
+          runsById: nextRunsById,
           nodesByRunId: { ...state.nodesByRunId, [runId]: response.node_runs },
-          reviewSummaryByRunId: {
-            ...state.reviewSummaryByRunId,
-            ...(response.review_summary ? { [runId]: response.review_summary } : {}),
-          },
+          reviewSummaryByRunId: nextReviewSummaryByRunId,
+          recentLaunchByWorkflowDefId: nextRecent,
           fetchingRunIds: new Set([...state.fetchingRunIds].filter((id) => id !== runId)),
         }
       })
+
+      if (run.status === 'waiting_input') {
+        void get().fetchRunReviews(runId)
+      }
     } catch (error) {
       console.error(`fetchRunDetail ${runId}:`, error)
       set((state) => ({
@@ -98,6 +302,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
   },
 
   async fetchRunReviews(runId) {
+    if (!runId) return
     const response = await listWorkflowRunReviews(runId)
     set((state) => ({
       reviewsByRunId: { ...state.reviewsByRunId, [runId]: response.data },
@@ -134,36 +339,261 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => ({
     await get().fetchRunDetail(runId)
   },
 
-  handleNodeEvent(event) {
-    const { workflow_run_id, node_id, node_type, error } = event
-    const status: NodeRunStatus = error ? 'failed' : (event.status ?? 'running')
+  async bindLatestLaunch(workflowDefId, jobId) {
+    if (!workflowDefId || !jobId) return
 
     set((state) => {
-      const existing = state.nodesByRunId[workflow_run_id] ?? []
-      const idx = existing.findIndex((n) => n.node_id === node_id)
-      let updated: NodeRun[]
+      const nextRecent = {
+        ...state.recentLaunchByWorkflowDefId,
+        [workflowDefId]: {
+          jobId,
+          workflowRunId: state.recentLaunchByWorkflowDefId[workflowDefId]?.workflowRunId,
+          updatedAt: new Date().toISOString(),
+        },
+      }
+      persistRecentLaunches(nextRecent)
+      return { recentLaunchByWorkflowDefId: nextRecent }
+    })
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await get().fetchRunsForJob(jobId)
+      const runs = get().runsByJobId[jobId] ?? []
+      const matchedRun = runs.find((run) => run.workflow_def_id === workflowDefId)
+      if (matchedRun) {
+        set((state) => {
+          const nextRecent = {
+            ...state.recentLaunchByWorkflowDefId,
+            [workflowDefId]: {
+              jobId,
+              workflowRunId: matchedRun.id,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+          persistRecentLaunches(nextRecent)
+          return { recentLaunchByWorkflowDefId: nextRecent }
+        })
+        void get().fetchRunDetail(matchedRun.id)
+        if (matchedRun.status === 'waiting_input') {
+          void get().fetchRunReviews(matchedRun.id)
+        }
+        return
+      }
+      await delay(250)
+    }
+  },
+
+  async restoreLatestLaunch(workflowDefId) {
+    if (!workflowDefId) return
+
+    const localRecord = get().recentLaunchByWorkflowDefId[workflowDefId]
+    if (localRecord?.workflowRunId) {
+      void get().fetchRunDetail(localRecord.workflowRunId)
+      return
+    }
+
+    if (localRecord?.jobId) {
+      await get().fetchRunsForJob(localRecord.jobId)
+      const localRuns = get().runsByJobId[localRecord.jobId] ?? []
+      const matchedRun = localRuns.find((run) => run.workflow_def_id === workflowDefId)
+      if (matchedRun) {
+        set((state) => {
+          const nextRecent = {
+            ...state.recentLaunchByWorkflowDefId,
+            [workflowDefId]: {
+              jobId: localRecord.jobId,
+              workflowRunId: matchedRun.id,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+          persistRecentLaunches(nextRecent)
+          return { recentLaunchByWorkflowDefId: nextRecent }
+        })
+        void get().fetchRunDetail(matchedRun.id)
+        return
+      }
+    }
+
+    try {
+      const jobResp = await listJobs({ page: 1, limit: 100 })
+      const fallbackJob = jobResp.data.find(
+        (job) => job.type === 'workflow' && job.workflow_def_id === workflowDefId,
+      )
+      if (!fallbackJob) return
+      await get().bindLatestLaunch(workflowDefId, fallbackJob.id)
+    } catch (error) {
+      console.error(`restoreLatestLaunch ${workflowDefId}:`, error)
+    }
+  },
+
+  handleRunUpdated(event) {
+    const workflowDefId = event.workflow_def_id?.trim() ?? ''
+    const workflowRunId = event.workflow_run_id?.trim() ?? ''
+    const jobId = event.job_id?.trim() ?? ''
+
+    if (!workflowRunId || !jobId || !workflowDefId) return
+
+    set((state) => {
+      const now = new Date().toISOString()
+      const existing = state.runsById[workflowRunId]
+      const nextRun: WorkflowRun = {
+        id: workflowRunId,
+        job_id: jobId,
+        folder_id: existing?.folder_id ?? '',
+        source_dir: existing?.source_dir,
+        workflow_def_id: workflowDefId,
+        status: (event.status ?? existing?.status ?? 'pending') as WorkflowRunStatus,
+        resume_node_id: event.resume_node_id ?? existing?.resume_node_id ?? null,
+        last_node_id: event.last_node_id ?? existing?.last_node_id ?? '',
+        error: event.error ?? existing?.error ?? '',
+        started_at: existing?.started_at ?? null,
+        finished_at: existing?.finished_at ?? null,
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      }
+
+      const currentRuns = state.runsByJobId[jobId] ?? []
+      const nextRuns = upsertRunByJob(currentRuns, nextRun)
+
+      const nextRecent = {
+        ...state.recentLaunchByWorkflowDefId,
+        [workflowDefId]: {
+          jobId,
+          workflowRunId,
+          updatedAt: now,
+        },
+      }
+      persistRecentLaunches(nextRecent)
+
+      return {
+        runsById: { ...state.runsById, [workflowRunId]: nextRun },
+        runsByJobId: { ...state.runsByJobId, [jobId]: nextRuns },
+        recentLaunchByWorkflowDefId: nextRecent,
+      }
+    })
+
+    get().refreshRunFromEvent(workflowRunId)
+  },
+
+  handleReviewEvent(workflowRunId) {
+    if (!workflowRunId) return
+    get().refreshRunFromEvent(workflowRunId)
+    void get().fetchRunReviews(workflowRunId)
+  },
+
+  refreshRunFromEvent(runId) {
+    if (!runId) return
+    const knownRun = get().runsById[runId]
+    if (!knownRun) {
+      void get().fetchRunDetail(runId)
+      return
+    }
+    scheduleRunRefresh(runId, get().fetchRunDetail)
+  },
+
+  handleNodeEvent(event) {
+    const workflowRunID = event.workflow_run_id
+    const nodeID = event.node_id
+    const nodeType = event.node_type
+    const status: NodeRunStatus = event.error ? 'failed' : (event.status ?? 'running')
+
+    set((state) => {
+      const existing = state.nodesByRunId[workflowRunID] ?? []
+      const idx = existing.findIndex((nodeRun) => nodeRun.node_id === nodeID)
+
+      const now = new Date().toISOString()
+      let updatedNodes: NodeRun[]
       if (idx !== -1) {
-        updated = existing.map((n, i) =>
-          i === idx ? { ...n, status, error: error ?? n.error } : n,
-        )
+        updatedNodes = existing.map((nodeRun, index) => {
+          if (index !== idx) return nodeRun
+          return {
+            ...nodeRun,
+            node_type: (nodeType as NodeType) || nodeRun.node_type,
+            status,
+            error: event.error ?? nodeRun.error,
+            started_at: status === 'running' ? (nodeRun.started_at ?? now) : nodeRun.started_at,
+            finished_at: status !== 'running' ? now : nodeRun.finished_at,
+          }
+        })
       } else {
         const placeholder: NodeRun = {
           id: '',
-          workflow_run_id,
-          node_id,
-          node_type: node_type as NodeType,
+          workflow_run_id: workflowRunID,
+          node_id: nodeID,
+          node_type: nodeType as NodeType,
           sequence: 0,
           status,
           input_json: '',
           output_json: '',
-          error: error ?? '',
-          started_at: status === 'running' ? new Date().toISOString() : null,
-          finished_at: status !== 'running' ? new Date().toISOString() : null,
-          created_at: new Date().toISOString(),
+          error: event.error ?? '',
+          started_at: status === 'running' ? now : null,
+          finished_at: status !== 'running' ? now : null,
+          created_at: now,
         }
-        updated = [...existing, placeholder]
+        updatedNodes = [...existing, placeholder]
       }
-      return { nodesByRunId: { ...state.nodesByRunId, [workflow_run_id]: updated } }
+
+      return {
+        nodesByRunId: { ...state.nodesByRunId, [workflowRunID]: updatedNodes },
+      }
     })
+
+    get().refreshRunFromEvent(workflowRunID)
+  },
+
+  buildRunCardView(workflowDefId, totalNodes) {
+    const record = get().recentLaunchByWorkflowDefId[workflowDefId]
+    if (!record) return null
+
+    const runID = record.workflowRunId
+    const fromRunID = runID ? get().runsById[runID] : undefined
+    const fromJobRuns = (get().runsByJobId[record.jobId] ?? []).find(
+      (run) => run.workflow_def_id === workflowDefId,
+    )
+    const run = fromRunID ?? fromJobRuns ?? null
+
+    if (!run) {
+      return {
+        workflowDefId,
+        jobId: record.jobId,
+        workflowRunId: record.workflowRunId ?? '',
+        status: 'pending',
+        currentNodeId: '',
+        currentNodeType: '',
+        completedNodes: 0,
+        totalNodes,
+        failureSummary: '',
+        reviewProgressText: '等待关联运行记录',
+        isBinding: true,
+      }
+    }
+
+    const nodeRuns = get().nodesByRunId[run.id] ?? []
+    const currentNode = chooseCurrentNode(run, nodeRuns)
+    const completedNodes = nodeRuns.filter((nodeRun) => TERMINAL_NODE_STATUSES.has(nodeRun.status)).length
+    const normalizedTotalNodes = totalNodes > 0 ? totalNodes : Math.max(nodeRuns.length, completedNodes)
+
+    const reviewSummary = get().reviewSummaryByRunId[run.id]
+    const reviewProgressText = reviewSummary
+      ? `${reviewSummary.approved + reviewSummary.rolled_back} / ${reviewSummary.total}`
+      : '—'
+
+    const latestFailedNode = [...nodeRuns]
+      .filter((nodeRun) => nodeRun.status === 'failed' && nodeRun.error.trim() !== '')
+      .sort((a, b) => b.sequence - a.sequence)[0]
+
+    return {
+      workflowDefId,
+      jobId: run.job_id,
+      workflowRunId: run.id,
+      status: run.status,
+      currentNodeId: currentNode?.node_id ?? (run.last_node_id?.trim() ?? ''),
+      currentNodeType: currentNode?.node_type ?? '',
+      completedNodes,
+      totalNodes: normalizedTotalNodes,
+      failureSummary: run.error?.trim() || latestFailedNode?.error?.trim() || '',
+      reviewSummary,
+      reviewProgressText,
+      isBinding: false,
+    }
   },
 }))

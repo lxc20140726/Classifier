@@ -8,6 +8,7 @@ import (
 
 	"github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
+	"github.com/liqiye/classifier/internal/sse"
 )
 
 func TestWorkflowRunnerServiceProcessingReviewApproveFlow(t *testing.T) {
@@ -107,6 +108,130 @@ func TestWorkflowRunnerServiceProcessingReviewApproveFlow(t *testing.T) {
 	}
 	if updatedFolder.Status != "done" {
 		t.Fatalf("folder status = %q, want done", updatedFolder.Status)
+	}
+}
+
+func TestWorkflowRunnerServiceWorkflowRunUpdatedEventOnReviewFlow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	reviewRepo := repository.NewProcessingReviewRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+	broker := sse.NewBroker()
+	events := broker.Subscribe()
+	defer broker.Unsubscribe(events)
+
+	folder := &repository.Folder{
+		ID:             "folder-review-updated-event",
+		Path:           "/source/review-updated-event",
+		SourceDir:      "/source",
+		RelativePath:   "review-updated-event",
+		Name:           "review-updated-event",
+		Category:       "photo",
+		CategorySource: "manual",
+		Status:         "pending",
+	}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	producer := &processingItemSourceExecutor{items: []ProcessingItem{{
+		FolderID:   folder.ID,
+		SourcePath: folder.Path,
+		FolderName: folder.Name,
+		Category:   folder.Category,
+	}}}
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "source", Type: producer.Type(), Enabled: true},
+			{ID: "rename", Type: renameNodeExecutorType, Enabled: true, Config: map[string]any{"strategy": "template", "template": "{name}-ok"}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "source", SourcePort: "items"}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e1", Source: "source", SourcePort: "items", Target: "rename", TargetPort: "items"},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+	def := &repository.WorkflowDefinition{ID: "wf-review-updated-event", Name: "wf-review-updated-event", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fs.NewMockAdapter(), broker, nil)
+	svc.SetProcessingReviewRepository(reviewRepo)
+	svc.RegisterExecutor(producer)
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	run := waitWorkflowRunStatus(t, workflowRunRepo, jobID, "waiting_input")
+	waitWorkflowRunUpdatedStatus(t, events, run.ID, "waiting_input", jobID, def.ID)
+
+	reviews, err := svc.ListProcessingReviews(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("ListProcessingReviews() error = %v", err)
+	}
+	if len(reviews.Items) == 0 {
+		t.Fatalf("review items empty, want at least 1")
+	}
+
+	if err := svc.ApproveProcessingReview(ctx, run.ID, reviews.Items[0].ID); err != nil {
+		t.Fatalf("ApproveProcessingReview() error = %v", err)
+	}
+
+	waitWorkflowRunUpdatedStatus(t, events, run.ID, "succeeded", jobID, def.ID)
+}
+
+func waitWorkflowRunUpdatedStatus(t *testing.T, events <-chan sse.Event, runID, status, jobID, workflowDefID string) {
+	t.Helper()
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("timed out waiting workflow_run.updated status=%q run=%q", status, runID)
+		case event := <-events:
+			if event.Type != "workflow_run.updated" {
+				continue
+			}
+			var payload struct {
+				JobID         string  `json:"job_id"`
+				WorkflowRunID string  `json:"workflow_run_id"`
+				WorkflowDefID string  `json:"workflow_def_id"`
+				Status        string  `json:"status"`
+				LastNodeID    string  `json:"last_node_id"`
+				ResumeNodeID  *string `json:"resume_node_id"`
+				Error         string  `json:"error"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				t.Fatalf("json.Unmarshal(workflow_run.updated) error = %v", err)
+			}
+			if payload.WorkflowRunID != runID || payload.Status != status {
+				continue
+			}
+			if payload.JobID != jobID {
+				t.Fatalf("workflow_run.updated job_id = %q, want %q", payload.JobID, jobID)
+			}
+			if payload.WorkflowDefID != workflowDefID {
+				t.Fatalf("workflow_run.updated workflow_def_id = %q, want %q", payload.WorkflowDefID, workflowDefID)
+			}
+			if status == "running" && payload.ResumeNodeID != nil && *payload.ResumeNodeID != "" {
+				t.Fatalf("running workflow_run.updated resume_node_id = %q, want empty", *payload.ResumeNodeID)
+			}
+			return
+		}
 	}
 }
 

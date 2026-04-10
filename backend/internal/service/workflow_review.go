@@ -122,6 +122,7 @@ func (s *WorkflowRunnerService) prepareProcessingReviews(ctx context.Context, wo
 		if err := s.workflowRuns.UpdateStatus(ctx, workflowRunID, "waiting_input", ""); err != nil {
 			return false, fmt.Errorf("set waiting_input for existing reviews %q: %w", workflowRunID, err)
 		}
+		s.publishWorkflowRunUpdated(ctx, workflowRunID)
 		s.publish("workflow_run.review_pending", map[string]any{
 			"workflow_run_id": workflowRunID,
 			"total":           len(existing),
@@ -261,6 +262,7 @@ func (s *WorkflowRunnerService) prepareProcessingReviews(ctx context.Context, wo
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "waiting_input", ""); err != nil {
 		return false, fmt.Errorf("set waiting_input for review run %q: %w", run.ID, err)
 	}
+	s.publishWorkflowRunUpdated(ctx, run.ID)
 
 	items, err := s.reviews.ListByWorkflowRunID(ctx, run.ID)
 	if err != nil {
@@ -307,6 +309,7 @@ func (s *WorkflowRunnerService) refreshReviewDrivenRunStatus(ctx context.Context
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, nextStatus, ""); err != nil {
 		return fmt.Errorf("update workflow run %q status %q: %w", run.ID, nextStatus, err)
 	}
+	s.publishWorkflowRunUpdated(ctx, run.ID)
 
 	if nextStatus == "waiting_input" {
 		if err := s.jobs.UpdateStatus(ctx, run.JobID, "waiting_input", ""); err != nil {

@@ -29,6 +29,7 @@ import { ApiRequestError } from '@/api/client'
 import { ConfiguredPathField } from '@/components/ConfiguredPathField'
 import { listFolders } from '@/api/folders'
 import { Modal } from '@/components/Modal'
+import { WorkflowRunStatusCard } from '@/components/WorkflowRunStatusCard'
 import { startWorkflowJob } from '@/api/workflowRuns'
 import type { Folder, NodeRun, NodeRunStatus } from '@/types'
 import { listNodeTypes } from '@/api/nodeTypes'
@@ -1496,14 +1497,18 @@ function WorkflowEditorScreen() {
   const [isRunning, setIsRunning] = useState(false)
   const [configAutoSaveTick, setConfigAutoSaveTick] = useState(0)
   const [selectionModeOn, setSelectionModeOn] = useState(false)
-  const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [rollbackingRunId, setRollbackingRunId] = useState<string | null>(null)
   const [nodeErrorModal, setNodeErrorModal] = useState<{ nodeId: string; nodeLabel: string; error: string } | null>(null)
   const canvasViewportRef = useRef<HTMLDivElement | null>(null)
   const reactFlowRef = useRef<FlowPositionProjector | null>(null)
 
+  const recentLaunchRecord = useWorkflowRunStore((s) => s.recentLaunchByWorkflowDefId[workflowDefId])
+  const activeJobId = recentLaunchRecord?.jobId ?? null
   const nodesByRunId = useWorkflowRunStore((s) => s.nodesByRunId)
   const runsByJobId = useWorkflowRunStore((s) => s.runsByJobId)
+  const bindLatestLaunch = useWorkflowRunStore((s) => s.bindLatestLaunch)
+  const restoreLatestLaunch = useWorkflowRunStore((s) => s.restoreLatestLaunch)
+  const buildRunCardView = useWorkflowRunStore((s) => s.buildRunCardView)
   const fetchRunsForJob = useWorkflowRunStore((s) => s.fetchRunsForJob)
   const fetchRunDetail = useWorkflowRunStore((s) => s.fetchRunDetail)
   const rollbackRun = useWorkflowRunStore((s) => s.rollbackRun)
@@ -1554,6 +1559,11 @@ function WorkflowEditorScreen() {
     void fetchRunsForJob(activeJobId)
   }, [activeJobId, fetchRunsForJob])
 
+  useEffect(() => {
+    if (!workflowDefId) return
+    void restoreLatestLaunch(workflowDefId)
+  }, [workflowDefId, restoreLatestLaunch])
+
   const activeRunIds = useMemo(() => {
     if (!activeJobId) return []
     return (runsByJobId[activeJobId] ?? [])
@@ -1562,6 +1572,11 @@ function WorkflowEditorScreen() {
   }, [activeJobId, runsByJobId])
 
   const activeRunIdsKey = activeRunIds.join('|')
+  const enabledNodeCount = useMemo(
+    () => Object.values(workflowNodes).filter((node) => node.enabled !== false).length,
+    [workflowNodes],
+  )
+  const editorRunCardView = workflowDefId ? buildRunCardView(workflowDefId, enabledNodeCount) : null
 
   useEffect(() => {
     if (!activeRunIdsKey) return
@@ -1963,7 +1978,7 @@ function WorkflowEditorScreen() {
         },
       })
       // #endregion
-      setActiveJobId(res.job_id)
+      void bindLatestLaunch(workflowDefId, res.job_id)
       setNotice('工作流已启动')
     } catch (runError) {
       if (runError instanceof ApiRequestError) {
@@ -2034,6 +2049,18 @@ function WorkflowEditorScreen() {
             </div>
           </div>
         </header>
+
+        {editorRunCardView && (
+          <div className="pointer-events-none fixed right-6 top-24 z-30 w-[360px] max-w-[calc(100vw-2rem)]">
+            <div className="pointer-events-auto">
+              <WorkflowRunStatusCard
+                view={editorRunCardView}
+                title="当前运行卡片"
+                onOpenJobs={() => navigate('/jobs')}
+              />
+            </div>
+          </div>
+        )}
 
         {/* ── Body ───────────────────────────────────────────────────────── */}
         <div className="flex min-h-0 flex-1 overflow-hidden">

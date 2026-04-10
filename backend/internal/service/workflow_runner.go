@@ -478,6 +478,7 @@ func (s *WorkflowRunnerService) RollbackWorkflowRun(ctx context.Context, workflo
 	if err := s.workflowRuns.UpdateStatus(ctx, workflowRunID, "rolled_back", ""); err != nil {
 		return fmt.Errorf("workflowRunner.RollbackWorkflowRun update workflow run status %q: %w", workflowRunID, err)
 	}
+	s.publishWorkflowRunUpdated(ctx, workflowRunID)
 
 	return nil
 }
@@ -491,6 +492,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "running", run.ResumeNodeID); err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun set running for %q: %w", run.ID, err)
 	}
+	s.publishWorkflowRunUpdated(ctx, run.ID)
 
 	def, err := s.workflowDefs.GetByID(ctx, run.WorkflowDefID)
 	if err != nil {
@@ -639,6 +641,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "succeeded", ""); err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun set succeeded for %q: %w", run.ID, err)
 	}
+	s.publishWorkflowRunUpdated(ctx, run.ID)
 
 	_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.complete", "success", time.Since(runStartedAt).Milliseconds(), nil)
 	return nil
@@ -921,6 +924,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "waiting_input", node.ID); err != nil {
 			return nodeExecutionResult{Err: fmt.Errorf("workflowRunner.executeWorkflowRun set waiting_input for %q: %w", run.ID, err)}
 		}
+		s.publishWorkflowRunUpdated(ctx, run.ID)
 
 		s.publish("workflow_run.node_pending", map[string]any{
 			"job_id":          run.JobID,
@@ -1011,6 +1015,7 @@ func (s *WorkflowRunnerService) markWorkflowRunFailed(ctx context.Context, runID
 	if err := s.workflowRuns.UpdateFailure(ctx, runID, nodeID, finalReason); err != nil {
 		return fmt.Errorf("workflowRunner.markWorkflowRunFailed update workflow run %q: %w", runID, err)
 	}
+	s.publishWorkflowRunUpdated(ctx, runID)
 	return nil
 }
 
@@ -1695,6 +1700,32 @@ func (s *WorkflowRunnerService) publish(eventType string, payload any) {
 	}
 
 	_ = s.broker.Publish(eventType, payload)
+}
+
+func (s *WorkflowRunnerService) publishWorkflowRunUpdated(ctx context.Context, workflowRunID string) {
+	if strings.TrimSpace(workflowRunID) == "" {
+		return
+	}
+
+	run, err := s.workflowRuns.GetByID(ctx, workflowRunID)
+	if err != nil {
+		return
+	}
+
+	var resumeNodeID any = nil
+	if strings.TrimSpace(run.ResumeNodeID) != "" {
+		resumeNodeID = strings.TrimSpace(run.ResumeNodeID)
+	}
+
+	s.publish("workflow_run.updated", map[string]any{
+		"job_id":          run.JobID,
+		"workflow_run_id": run.ID,
+		"workflow_def_id": run.WorkflowDefID,
+		"status":          run.Status,
+		"last_node_id":    strings.TrimSpace(run.LastNodeID),
+		"resume_node_id":  resumeNodeID,
+		"error":           strings.TrimSpace(run.Error),
+	})
 }
 
 func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {

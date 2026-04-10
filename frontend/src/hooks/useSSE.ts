@@ -5,7 +5,7 @@ import { useFolderStore } from '@/store/folderStore'
 import { useJobStore } from '@/store/jobStore'
 import { useNotificationStore } from '@/store/notificationStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
-import type { JobDoneEvent, ScanProgressEvent, WorkflowNodeEvent } from '@/types'
+import type { JobDoneEvent, ScanProgressEvent, WorkflowNodeEvent, WorkflowRunUpdatedEvent } from '@/types'
 
 interface JobProgressEvent extends ScanProgressEvent {
   failed?: number
@@ -108,11 +108,20 @@ export function useSSE() {
         useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'failed' })
       })
 
+      eventSource.addEventListener('workflow_run.node_pending', (event) => {
+        const payload = JSON.parse(event.data) as WorkflowNodeEvent
+        useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'waiting_input' })
+      })
+
+      eventSource.addEventListener('workflow_run.updated', (event) => {
+        const payload = JSON.parse(event.data) as WorkflowRunUpdatedEvent
+        useWorkflowRunStore.getState().handleRunUpdated(payload)
+      })
+
       const refreshRunReviews = (event: MessageEvent<string>) => {
         const payload = JSON.parse(event.data) as { workflow_run_id: string }
         if (!payload.workflow_run_id) return
-        void useWorkflowRunStore.getState().fetchRunDetail(payload.workflow_run_id)
-        void useWorkflowRunStore.getState().fetchRunReviews(payload.workflow_run_id)
+        useWorkflowRunStore.getState().handleReviewEvent(payload.workflow_run_id)
         void useJobStore.getState().fetchJobs()
       }
 

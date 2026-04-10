@@ -317,6 +317,16 @@ export interface WorkflowNodeEvent {
   error?: string
 }
 
+export interface WorkflowRunUpdatedEvent {
+  job_id: string
+  workflow_run_id: string
+  workflow_def_id: string
+  status: WorkflowRunStatus
+  last_node_id?: string
+  resume_node_id?: string | null
+  error?: string
+}
+
 export interface NodeUIPosition {
   x: number
   y: number
