@@ -102,6 +102,15 @@ interface FlowPositionProjector {
   screenToFlowPosition: (position: { x: number; y: number }) => { x: number; y: number }
 }
 
+function buildJobHistoryLink(jobId: string, workflowRunId?: string) {
+  const query = new URLSearchParams()
+  query.set('job_id', jobId)
+  if (workflowRunId && workflowRunId.trim() !== '') {
+    query.set('workflow_run_id', workflowRunId)
+  }
+  return `/job-history?${query.toString()}`
+}
+
 /**
  * 节点分类定义：按业务语义划分颜色主题，保证同类节点颜色一致。
  *
@@ -2056,7 +2065,7 @@ function WorkflowEditorScreen() {
               <WorkflowRunStatusCard
                 view={editorRunCardView}
                 title="当前运行卡片"
-                onOpenJobs={() => navigate('/jobs')}
+                onOpenJobs={() => navigate(buildJobHistoryLink(editorRunCardView.jobId, editorRunCardView.workflowRunId))}
               />
             </div>
           </div>

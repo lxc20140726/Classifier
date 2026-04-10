@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import { ClassificationPreviewInline } from '@/components/workflow-preview/ClassificationPreviewInline'
 import { ProcessingPreviewInline } from '@/components/workflow-preview/ProcessingPreviewInline'
@@ -39,6 +39,10 @@ function formatDuration(startedAt: string | null | undefined, finishedAt: string
 function buildFailedAuditLogsLink(params: Record<string, string>) {
   const search = new URLSearchParams({ ...params, result: 'failed' })
   return `/audit-logs?${search.toString()}`
+}
+
+function readTargetParam(value: string | null) {
+  return value?.trim() ?? ''
 }
 
 const JOB_STATUS_LABELS: Record<JobStatus, string> = {
@@ -166,7 +170,7 @@ function NodeResultPreview({ node }: { node: NodeRun }) {
   return <span className="text-[10px] font-bold text-muted-foreground">—</span>
 }
 
-function NodeRunsPanel({ run }: { run: WorkflowRun }) {
+function NodeRunsPanel({ run, highlightFailedNodes }: { run: WorkflowRun; highlightFailedNodes?: boolean }) {
   const { nodesByRunId, fetchRunDetail } = useWorkflowRunStore()
   const nodes = nodesByRunId[run.id] ?? []
 
@@ -193,7 +197,13 @@ function NodeRunsPanel({ run }: { run: WorkflowRun }) {
         </thead>
         <tbody>
           {nodes.map((node) => (
-            <tr key={node.id || node.node_id} className="border-b-2 border-foreground/20 last:border-0 hover:bg-muted/10 align-top">
+            <tr
+              key={node.id || node.node_id}
+              className={cn(
+                'border-b-2 border-foreground/20 last:border-0 hover:bg-muted/10 align-top',
+                highlightFailedNodes && node.status === 'failed' && 'bg-red-100/70',
+              )}
+            >
               <td className="py-3 pr-4 font-mono font-bold">{node.node_id}</td>
               <td className="py-3 pr-4 font-bold">{node.node_type}</td>
               <td className="py-3 pr-4 font-black">{node.sequence}</td>
@@ -229,9 +239,18 @@ function NodeRunsPanel({ run }: { run: WorkflowRun }) {
   )
 }
 
-function WorkflowRunRow({ run }: { run: WorkflowRun }) {
+function WorkflowRunRow({
+  run,
+  forceExpanded,
+  highlightFailedNodes,
+}: {
+  run: WorkflowRun
+  forceExpanded?: boolean
+  highlightFailedNodes?: boolean
+}) {
   const [expanded, setExpanded] = useState(false)
   const [isActing, setIsActing] = useState(false)
+  const isExpanded = !!forceExpanded || expanded
   const {
     rollbackRun,
     fetchRunDetail,
@@ -294,10 +313,16 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
 
   return (
     <>
-      <tr className="cursor-pointer border-b-2 border-foreground transition-colors hover:bg-muted/20" onClick={() => setExpanded((v) => !v)}>
+      <tr
+        className={cn(
+          'cursor-pointer border-b-2 border-foreground transition-colors hover:bg-muted/20',
+          forceExpanded && 'bg-blue-50/60',
+        )}
+        onClick={() => setExpanded((v) => !v)}
+      >
         <td className="py-3 pl-4 pr-3">
           <div className="flex items-center justify-center w-6 h-6 border-2 border-foreground bg-background">
-            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </div>
         </td>
         <td className="py-3 pr-4 font-mono text-xs font-bold">{run.folder_id.slice(0, 8)}</td>
@@ -318,7 +343,7 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
           )}
         </td>
       </tr>
-      {expanded && (
+      {isExpanded && (
         <tr className="border-b-2 border-foreground bg-muted/10">
           <td colSpan={5} className="px-6 py-4 space-y-4">
             {(run.status === 'failed' || run.status === 'partial') && run.error && (
@@ -391,7 +416,7 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
                 )}
               </div>
             )}
-            <NodeRunsPanel run={run} />
+            <NodeRunsPanel run={run} highlightFailedNodes={highlightFailedNodes} />
           </td>
         </tr>
       )}
@@ -399,7 +424,7 @@ function WorkflowRunRow({ run }: { run: WorkflowRun }) {
   )
 }
 
-function WorkflowRunsPanel({ job }: { job: Job }) {
+function WorkflowRunsPanel({ job, targetWorkflowRunId }: { job: Job; targetWorkflowRunId?: string }) {
   const { runsByJobId, fetchRunsForJob } = useWorkflowRunStore()
   const runs = runsByJobId[job.id] ?? []
 
@@ -439,7 +464,12 @@ function WorkflowRunsPanel({ job }: { job: Job }) {
             </thead>
             <tbody>
               {runs.map((run) => (
-                <WorkflowRunRow key={run.id} run={run} />
+                <WorkflowRunRow
+                  key={run.id}
+                  run={run}
+                  forceExpanded={targetWorkflowRunId !== '' && run.id === targetWorkflowRunId}
+                  highlightFailedNodes={targetWorkflowRunId !== '' && run.id === targetWorkflowRunId}
+                />
               ))}
             </tbody>
           </table>
@@ -449,15 +479,22 @@ function WorkflowRunsPanel({ job }: { job: Job }) {
   )
 }
 
-function JobRow({ job }: { job: Job }) {
+function JobRow({ job, forceExpanded, targetWorkflowRunId }: { job: Job; forceExpanded?: boolean; targetWorkflowRunId?: string }) {
   const [expanded, setExpanded] = useState(false)
+  const isExpanded = !!forceExpanded || expanded
 
   return (
     <>
-      <tr className="cursor-pointer border-b-2 border-foreground transition-colors hover:bg-muted/30" onClick={() => setExpanded((v) => !v)}>
+      <tr
+        className={cn(
+          'cursor-pointer border-b-2 border-foreground transition-colors hover:bg-muted/30',
+          forceExpanded && 'bg-blue-50/60',
+        )}
+        onClick={() => setExpanded((v) => !v)}
+      >
         <td className="px-4 py-4">
           <div className="flex items-center justify-center w-6 h-6 border-2 border-foreground bg-background">
-            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </div>
         </td>
         <td className="px-4 py-4 font-mono text-xs font-bold">{job.id.slice(0, 8)}</td>
@@ -472,10 +509,10 @@ function JobRow({ job }: { job: Job }) {
         <td className="px-4 py-4 text-xs font-mono font-bold text-muted-foreground">{formatDate(job.created_at)}</td>
         <td className="px-4 py-4 text-xs font-mono font-bold text-muted-foreground">{formatDuration(job.started_at, job.finished_at)}</td>
       </tr>
-      {expanded && (
+      {isExpanded && (
         <tr className="border-b-2 border-foreground bg-muted/10">
           <td colSpan={8} className="px-8 py-6">
-            <WorkflowRunsPanel job={job} />
+            <WorkflowRunsPanel job={job} targetWorkflowRunId={targetWorkflowRunId} />
           </td>
         </tr>
       )}
@@ -485,10 +522,30 @@ function JobRow({ job }: { job: Job }) {
 
 export default function JobHistoryPage() {
   const { jobs, total, isLoading, error, fetchJobs } = useJobStore()
+  const runsByJobId = useWorkflowRunStore((state) => state.runsByJobId)
+  const [searchParams] = useSearchParams()
+
+  const targetJobId = readTargetParam(searchParams.get('job_id'))
+  const targetWorkflowRunId = readTargetParam(searchParams.get('workflow_run_id'))
 
   useEffect(() => {
-    void fetchJobs()
-  }, [fetchJobs])
+    void fetchJobs(targetJobId ? { page: 1, limit: 100 } : undefined)
+  }, [fetchJobs, targetJobId])
+
+  const targetNotFoundMessage = useMemo(() => {
+    if (!targetJobId || isLoading) return null
+
+    const targetJob = jobs.find((job) => job.id === targetJobId)
+    if (!targetJob) return `未找到任务记录：${targetJobId}`
+
+    if (!targetWorkflowRunId) return null
+    if (!(targetJobId in runsByJobId)) return null
+
+    const targetRun = (runsByJobId[targetJobId] ?? []).find((run) => run.id === targetWorkflowRunId)
+    if (!targetRun) return `任务已定位，但未找到对应工作流运行：${targetWorkflowRunId}`
+
+    return null
+  }, [jobs, isLoading, runsByJobId, targetJobId, targetWorkflowRunId])
 
   return (
     <div className="flex flex-col gap-8 p-6">
@@ -501,6 +558,12 @@ export default function JobHistoryPage() {
 
       {error && (
         <div className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{error}</div>
+      )}
+
+      {targetNotFoundMessage && (
+        <div className="border-2 border-amber-900 bg-amber-100 px-4 py-3 text-sm font-bold text-amber-900 shadow-hard">
+          {targetNotFoundMessage}
+        </div>
       )}
 
       <div className="space-y-4">
@@ -532,7 +595,14 @@ export default function JobHistoryPage() {
                   <td colSpan={8} className="px-4 py-16 text-center font-bold text-muted-foreground border-2 border-dashed border-foreground m-4">暂无任务记录。</td>
                 </tr>
               ) : (
-                jobs.map((job) => <JobRow key={job.id} job={job} />)
+                jobs.map((job) => (
+                  <JobRow
+                    key={job.id}
+                    job={job}
+                    forceExpanded={targetJobId !== '' && job.id === targetJobId}
+                    targetWorkflowRunId={targetJobId === job.id ? targetWorkflowRunId : ''}
+                  />
+                ))
               )}
             </tbody>
           </table>

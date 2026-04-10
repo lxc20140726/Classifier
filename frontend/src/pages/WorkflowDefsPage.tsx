@@ -161,6 +161,15 @@ function countEnabledNodes(graphJSON: string) {
   }
 }
 
+function buildJobHistoryLink(jobId: string, workflowRunId?: string) {
+  const query = new URLSearchParams()
+  query.set('job_id', jobId)
+  if (workflowRunId && workflowRunId.trim() !== '') {
+    query.set('workflow_run_id', workflowRunId)
+  }
+  return `/job-history?${query.toString()}`
+}
+
 export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   const navigate = useNavigate()
   const { defs, isLoading, error, fetchDefs, createDef, updateDef, deleteDef, setActive } =
@@ -572,7 +581,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 <WorkflowRunStatusCard
                   view={launchCardView}
                   title="当前运行卡片"
-                  onOpenJobs={() => navigate('/jobs')}
+                  onOpenJobs={() => navigate(buildJobHistoryLink(launchCardView.jobId, launchCardView.workflowRunId))}
                 />
               </div>
             )}
@@ -591,7 +600,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 {launchSuccessJobId && (
                   <button
                     type="button"
-                    onClick={() => navigate('/jobs')}
+                    onClick={() => navigate(buildJobHistoryLink(launchSuccessJobId, launchCardView?.workflowRunId))}
                     className="border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
                   >
                     前往作业页
