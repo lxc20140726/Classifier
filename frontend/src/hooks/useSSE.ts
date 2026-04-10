@@ -19,6 +19,17 @@ export function useSSE() {
   useEffect(() => {
     let eventSource: EventSource | null = null
     let reconnectTimer: number | null = null
+    let folderRefreshTimer: number | null = null
+
+    const scheduleFolderRefresh = () => {
+      if (folderRefreshTimer !== null) {
+        window.clearTimeout(folderRefreshTimer)
+      }
+      folderRefreshTimer = window.setTimeout(() => {
+        folderRefreshTimer = null
+        void useFolderStore.getState().fetchFolders()
+      }, 300)
+    }
 
     const connect = () => {
       eventSource = new EventSource('/api/events')
@@ -116,6 +127,9 @@ export function useSSE() {
       eventSource.addEventListener('workflow_run.updated', (event) => {
         const payload = JSON.parse(event.data) as WorkflowRunUpdatedEvent
         useWorkflowRunStore.getState().handleRunUpdated(payload)
+        if (payload.status === 'succeeded' || payload.status === 'waiting_input' || payload.status === 'rolled_back' || payload.status === 'partial') {
+          scheduleFolderRefresh()
+        }
       })
 
       const refreshRunReviews = (event: MessageEvent<string>) => {
@@ -123,6 +137,7 @@ export function useSSE() {
         if (!payload.workflow_run_id) return
         useWorkflowRunStore.getState().handleReviewEvent(payload.workflow_run_id)
         void useJobStore.getState().fetchJobs()
+        scheduleFolderRefresh()
       }
 
       eventSource.addEventListener('workflow_run.review_pending', refreshRunReviews)
@@ -139,6 +154,9 @@ export function useSSE() {
     return () => {
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer)
+      }
+      if (folderRefreshTimer !== null) {
+        window.clearTimeout(folderRefreshTimer)
       }
 
       eventSource?.close()

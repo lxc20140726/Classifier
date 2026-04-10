@@ -32,7 +32,7 @@ func TestWorkflowRunnerServiceProcessingReviewApproveFlow(t *testing.T) {
 		Name:           "review-approve",
 		Category:       "photo",
 		CategorySource: "manual",
-		Status:         "pending",
+		Status:         "done",
 	}
 	if err := folderRepo.Upsert(ctx, folder); err != nil {
 		t.Fatalf("folderRepo.Upsert() error = %v", err)
@@ -80,6 +80,13 @@ func TestWorkflowRunnerServiceProcessingReviewApproveFlow(t *testing.T) {
 	}
 	if job.Status != "waiting_input" {
 		t.Fatalf("job status = %q, want waiting_input", job.Status)
+	}
+	waitingFolder, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() waiting_input error = %v", err)
+	}
+	if waitingFolder.Status != "pending" {
+		t.Fatalf("folder status in waiting_input = %q, want pending", waitingFolder.Status)
 	}
 
 	reviews, err := svc.ListProcessingReviews(ctx, run.ID)

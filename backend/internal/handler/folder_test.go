@@ -268,7 +268,6 @@ func TestFolderHandler(t *testing.T) {
 			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
 		}
 		appConfig.ScanInputDirs = []string{"/task/source"}
-		appConfig.SourceDir = "/task/source"
 		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
 			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
 		}
@@ -301,7 +300,6 @@ func TestFolderHandler(t *testing.T) {
 			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
 		}
 		appConfig.ScanInputDirs = []string{"/scan/a", "/scan/b"}
-		appConfig.SourceDir = "/test/source"
 		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
 			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
 		}
@@ -321,13 +319,12 @@ func TestFolderHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("scan falls back to source_dir when scan_input_dirs empty", func(t *testing.T) {
+	t.Run("scan falls back to default source dir when scan_input_dirs empty", func(t *testing.T) {
 		appConfig, err := configRepo.GetAppConfig(context.Background())
 		if err != nil {
 			t.Fatalf("configRepo.GetAppConfig() error = %v", err)
 		}
 		appConfig.ScanInputDirs = []string{}
-		appConfig.SourceDir = "/legacy/source"
 		if err := configRepo.SaveAppConfig(context.Background(), appConfig); err != nil {
 			t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
 		}
@@ -341,8 +338,8 @@ func TestFolderHandler(t *testing.T) {
 		}
 
 		call := <-starter.called
-		if len(call.sourceDirs) != 1 || call.sourceDirs[0] != "/legacy/source" {
-			t.Fatalf("sourceDirs = %#v, want source_dir fallback", call.sourceDirs)
+		if len(call.sourceDirs) != 1 || call.sourceDirs[0] != "/test/source" {
+			t.Fatalf("sourceDirs = %#v, want default source dir fallback", call.sourceDirs)
 		}
 	})
 

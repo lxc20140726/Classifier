@@ -49,11 +49,11 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: items input is required", e.Type())
 	}
 
-	targetDir := stringConfig(input.Node.Config, "target_dir")
-	targetDir = normalizeWorkflowPath(targetDir)
-	if targetDir == "" {
-		targetDir = normalizeWorkflowPath(stringConfig(input.Node.Config, "targetDir"))
-	}
+	targetDir := resolveWorkflowNodePath(input.Node.Config, input.AppConfig, workflowNodePathOptions{
+		DefaultType:      workflowPathRefTypeOutput,
+		DefaultOutputKey: "mixed",
+		LegacyKeys:       []string{"target_dir", "targetDir", "output_dir"},
+	})
 	if targetDir == "" {
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: target_dir is required", e.Type())
 	}
@@ -125,10 +125,15 @@ func (e *phase4MoveNodeExecutor) Execute(ctx context.Context, input NodeExecutio
 		default:
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: unsupported source_kind %q", e.Type(), item.SourceKind)
 		}
-		item.SourcePath = targetRoot
+		item.CurrentPath = normalizeWorkflowPath(targetRoot)
 		item.ParentPath = targetDir
 		item.FolderName = rootName
 		item.TargetName = rootName
+		if e.folders != nil && strings.TrimSpace(item.FolderID) != "" && item.SourceKind == ProcessingItemSourceKindDirectory {
+			if err := e.folders.UpdatePath(ctx, item.FolderID, item.CurrentPath, targetDir, rootName); err != nil {
+				return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: update folder path for %q: %w", e.Type(), item.FolderID, err)
+			}
+		}
 		outputItems = append(outputItems, item)
 
 		if input.ProgressFn != nil {
@@ -251,9 +256,10 @@ func (e *phase4MoveNodeExecutor) executeLegacyMove(
 	movedItems := make([]ProcessingItem, 0, len(items))
 	stepResults := make([]ProcessingStepResult, 0, len(items))
 	for index, item := range items {
-		sourcePath := normalizeWorkflowPath(item.SourcePath)
+		item = processingItemNormalize(item)
+		sourcePath := processingItemCurrentPath(item)
 		if sourcePath == "" {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item source_path is required", e.Type())
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item current_path is required", e.Type())
 		}
 		targetName := phase4MoveItemName(item)
 		if strings.TrimSpace(targetName) == "" {
@@ -289,8 +295,9 @@ func (e *phase4MoveNodeExecutor) executeLegacyMove(
 			}
 		}
 
-		item.SourcePath = normalizeWorkflowPath(finalPath)
+		item.CurrentPath = normalizeWorkflowPath(finalPath)
 		item.ParentPath = normalizeWorkflowPath(filepath.Dir(finalPath))
+		item.FolderName = filepath.Base(finalPath)
 		item.TargetName = filepath.Base(finalPath)
 		movedItems = append(movedItems, item)
 		stepResults = append(stepResults, ProcessingStepResult{
@@ -320,20 +327,15 @@ func (e *phase4MoveNodeExecutor) normalizeAndValidateItems(ctx context.Context, 
 	normalized := make([]ProcessingItem, 0, len(items))
 	rootPath := ""
 	for _, raw := range items {
-		item := raw
-		item.SourcePath = normalizeWorkflowPath(item.SourcePath)
-		item.ParentPath = normalizeWorkflowPath(item.ParentPath)
-		item.RootPath = normalizeWorkflowPath(item.RootPath)
-		item.RelativePath = normalizeWorkflowPath(item.RelativePath)
-		item.OriginalSourcePath = normalizeWorkflowPath(item.OriginalSourcePath)
-		item.SourceKind = strings.ToLower(strings.TrimSpace(item.SourceKind))
-		if item.SourcePath == "" {
-			return "", "", nil, fmt.Errorf("item source_path is required")
+		item := processingItemNormalize(raw)
+		currentPath := processingItemCurrentPath(item)
+		if currentPath == "" {
+			return "", "", nil, fmt.Errorf("item current_path is required")
 		}
 		if item.SourceKind == "" {
-			info, err := e.fs.Stat(ctx, item.SourcePath)
+			info, err := e.fs.Stat(ctx, currentPath)
 			if err != nil {
-				return "", "", nil, fmt.Errorf("stat source_path %q: %w", item.SourcePath, err)
+				return "", "", nil, fmt.Errorf("stat current_path %q: %w", currentPath, err)
 			}
 			if info.IsDir {
 				item.SourceKind = ProcessingItemSourceKindDirectory
@@ -389,24 +391,25 @@ func (e *phase4MoveNodeExecutor) moveDirectoryArtifacts(
 	conflictPolicy string,
 	input NodeExecutionInput,
 ) ([]ProcessingStepResult, error) {
-	info, err := e.fs.Stat(ctx, item.SourcePath)
+	sourcePath := processingItemCurrentPath(item)
+	info, err := e.fs.Stat(ctx, sourcePath)
 	if err != nil {
-		return nil, fmt.Errorf("stat directory item %q: %w", item.SourcePath, err)
+		return nil, fmt.Errorf("stat directory item %q: %w", sourcePath, err)
 	}
 	if !info.IsDir {
-		return nil, fmt.Errorf("directory item source_path %q is not directory", item.SourcePath)
+		return nil, fmt.Errorf("directory item current_path %q is not directory", sourcePath)
 	}
 
-	entries, err := e.fs.ReadDir(ctx, item.SourcePath)
+	entries, err := e.fs.ReadDir(ctx, sourcePath)
 	if err != nil {
-		return nil, fmt.Errorf("read directory item %q: %w", item.SourcePath, err)
+		return nil, fmt.Errorf("read directory item %q: %w", sourcePath, err)
 	}
 
 	results := make([]ProcessingStepResult, 0, len(entries))
 	for _, entry := range entries {
-		sourceFilePath := joinWorkflowPath(item.SourcePath, entry.Name)
+		sourceFilePath := joinWorkflowPath(sourcePath, entry.Name)
 		if entry.IsDir {
-			return nil, fmt.Errorf("directory item %q contains subdirectory %q; recursive merge is not supported", item.SourcePath, sourceFilePath)
+			return nil, fmt.Errorf("directory item %q contains subdirectory %q; recursive merge is not supported", sourcePath, sourceFilePath)
 		}
 
 		targetName := entry.Name
@@ -447,27 +450,28 @@ func (e *phase4MoveNodeExecutor) moveArchiveArtifact(
 	conflictPolicy string,
 	input NodeExecutionInput,
 ) (ProcessingStepResult, error) {
-	info, err := e.fs.Stat(ctx, item.SourcePath)
+	sourcePath := processingItemCurrentPath(item)
+	info, err := e.fs.Stat(ctx, sourcePath)
 	if err != nil {
-		return ProcessingStepResult{}, fmt.Errorf("stat archive item %q: %w", item.SourcePath, err)
+		return ProcessingStepResult{}, fmt.Errorf("stat archive item %q: %w", sourcePath, err)
 	}
 	if info.IsDir {
-		return ProcessingStepResult{}, fmt.Errorf("archive item source_path %q is directory", item.SourcePath)
+		return ProcessingStepResult{}, fmt.Errorf("archive item current_path %q is directory", sourcePath)
 	}
 
-	targetName := filepath.Base(item.SourcePath)
+	targetName := filepath.Base(sourcePath)
 	flattened := phase4MoveFlattenPath(item.RelativePath)
 	if flattened != "" {
-		targetName = flattened + filepath.Ext(item.SourcePath)
+		targetName = flattened + filepath.Ext(sourcePath)
 	}
 
 	targetPath, skipped, err := e.resolveArtifactDestinationPath(ctx, targetRoot, targetName, conflictPolicy, "", false)
 	if err != nil {
-		return ProcessingStepResult{}, fmt.Errorf("resolve destination for archive %q: %w", item.SourcePath, err)
+		return ProcessingStepResult{}, fmt.Errorf("resolve destination for archive %q: %w", sourcePath, err)
 	}
 	if skipped {
 		return ProcessingStepResult{
-			SourcePath: item.SourcePath,
+			SourcePath: sourcePath,
 			TargetPath: targetPath,
 			NodeType:   input.Node.Type,
 			NodeLabel:  strings.TrimSpace(input.Node.Label),
@@ -475,11 +479,11 @@ func (e *phase4MoveNodeExecutor) moveArchiveArtifact(
 		}, nil
 	}
 
-	if err := e.fs.MoveFile(ctx, item.SourcePath, targetPath); err != nil {
-		return ProcessingStepResult{}, fmt.Errorf("move archive %q to %q: %w", item.SourcePath, targetPath, err)
+	if err := e.fs.MoveFile(ctx, sourcePath, targetPath); err != nil {
+		return ProcessingStepResult{}, fmt.Errorf("move archive %q to %q: %w", sourcePath, targetPath, err)
 	}
 	return ProcessingStepResult{
-		SourcePath: item.SourcePath,
+		SourcePath: sourcePath,
 		TargetPath: targetPath,
 		NodeType:   input.Node.Type,
 		NodeLabel:  strings.TrimSpace(input.Node.Label),
@@ -682,6 +686,7 @@ func phase4MoveResolveFolderIDForStep(items []ProcessingItem, step ProcessingSte
 		}
 		candidates := []string{
 			normalizeWorkflowPath(item.SourcePath),
+			normalizeWorkflowPath(item.CurrentPath),
 			normalizeWorkflowPath(item.OriginalSourcePath),
 		}
 		for _, path := range candidates {
@@ -755,5 +760,9 @@ func phase4MoveItemName(item ProcessingItem) string {
 		return strings.TrimSpace(item.FolderName)
 	}
 
+	currentPath := processingItemCurrentPath(item)
+	if currentPath != "" {
+		return strings.TrimSpace(filepath.Base(currentPath))
+	}
 	return strings.TrimSpace(filepath.Base(strings.TrimSpace(item.SourcePath)))
 }

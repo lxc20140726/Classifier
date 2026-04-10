@@ -59,11 +59,7 @@ export interface Snapshot {
 export interface AppConfig {
   version?: number
   scan_cron?: string
-  source_dir?: string
-  target_dir?: string
-  target_dirs?: string[]
   scan_input_dirs?: string[]
-  path_options?: ConfiguredPathOption[]
   output_dirs?: {
     video?: string
     manga?: string
@@ -71,15 +67,6 @@ export interface AppConfig {
     other?: string
     mixed?: string
   }
-}
-
-export type ConfiguredPathCategory = 'scan' | 'target' | 'output' | 'general'
-
-export interface ConfiguredPathOption {
-  id: string
-  name: string
-  path: string
-  category: ConfiguredPathCategory
 }
 
 export interface ApiError {

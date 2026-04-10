@@ -49,10 +49,10 @@ const TEMPLATE_CLASSIFY_AND_MOVE = JSON.stringify({
     { id: 'n-reader', type: 'classification-reader', label: '分类读取器', config: {}, inputs: {}, enabled: true, ui_position: { x: 1120, y: 300 } },
     { id: 'n-splitter', type: 'folder-splitter', label: '文件夹拆分器', config: {}, inputs: {}, enabled: true, ui_position: { x: 1480, y: 300 } },
     { id: 'n-router', type: 'category-router', label: '类别路由器', config: {}, inputs: {}, enabled: true, ui_position: { x: 1700, y: 300 } },
-    { id: 'n-move-video', type: 'move-node', label: '移动节点（视频）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 100 } },
-    { id: 'n-move-manga', type: 'move-node', label: '移动节点（漫画）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 260 } },
-    { id: 'n-move-photo', type: 'move-node', label: '移动节点（图片）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 420 } },
-    { id: 'n-move-other', type: 'move-node', label: '移动节点（其他）', config: { target_dir: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 580 } },
+    { id: 'n-move-video', type: 'move-node', label: '移动节点（视频）', config: { path_ref_type: 'output', path_ref_key: 'video', path_suffix: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 100 } },
+    { id: 'n-move-manga', type: 'move-node', label: '移动节点（漫画）', config: { path_ref_type: 'output', path_ref_key: 'manga', path_suffix: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 260 } },
+    { id: 'n-move-photo', type: 'move-node', label: '移动节点（图片）', config: { path_ref_type: 'output', path_ref_key: 'photo', path_suffix: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 420 } },
+    { id: 'n-move-other', type: 'move-node', label: '移动节点（其他）', config: { path_ref_type: 'output', path_ref_key: 'other', path_suffix: '' }, inputs: {}, enabled: true, ui_position: { x: 1960, y: 580 } },
   ],
   edges: [
     { id: 'e1', source: 'n-scanner', source_port: 0, target: 'n-kw', target_port: 0 },
@@ -82,7 +82,7 @@ const TEMPLATE_GENERIC_PROCESSING = JSON.stringify({
     { id: 'g-rename-other', type: 'rename-node', label: '重命名（其他）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'other' } } }, enabled: true, ui_position: { x: 860, y: 420 } },
     { id: 'g-rename-mixed', type: 'rename-node', label: '重命名（混合叶子）', config: { strategy: 'template', template: '{name}' }, inputs: { items: { link_source: { source_node_id: 'g-router', source_port: 'mixed_leaf' } } }, enabled: true, ui_position: { x: 860, y: 540 } },
     { id: 'g-collect', type: 'collect-node', label: '收集节点', config: {}, inputs: { items_1: { link_source: { source_node_id: 'g-rename-video', source_port: 'items' } }, items_2: { link_source: { source_node_id: 'g-rename-manga', source_port: 'items' } }, items_3: { link_source: { source_node_id: 'g-rename-photo', source_port: 'items' } }, items_4: { link_source: { source_node_id: 'g-rename-other', source_port: 'items' } }, items_5: { link_source: { source_node_id: 'g-rename-mixed', source_port: 'items' } } }, enabled: true, ui_position: { x: 1160, y: 280 } },
-    { id: 'g-move', type: 'move-node', label: '移动节点', config: { target_dir: '.processed', move_unit: 'folder', conflict_policy: 'auto_rename' }, inputs: { items: { link_source: { source_node_id: 'g-collect', source_port: 'items' } } }, enabled: true, ui_position: { x: 1420, y: 280 } },
+    { id: 'g-move', type: 'move-node', label: '移动节点', config: { path_ref_type: 'output', path_ref_key: 'mixed', path_suffix: '.processed', move_unit: 'folder', conflict_policy: 'auto_rename' }, inputs: { items: { link_source: { source_node_id: 'g-collect', source_port: 'items' } } }, enabled: true, ui_position: { x: 1420, y: 280 } },
   ],
   edges: [
     { id: 'g-e1', source: 'g-reader', source_port: 'entry', target: 'g-split', target_port: 'entry' },
@@ -184,7 +184,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   const [launchDialog, setLaunchDialog] = useState<LaunchDialogState>({ open: false, def: null })
   const [launchFolderRecords, setLaunchFolderRecords] = useState<Folder[]>([])
   const [launchSearchQuery, setLaunchSearchQuery] = useState('')
-  const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([])
+  const [selectedFolderId, setSelectedFolderId] = useState('')
   const [launchRecordsLoading, setLaunchRecordsLoading] = useState(false)
   const [launchRecordsError, setLaunchRecordsError] = useState<string | null>(null)
   const [launchError, setLaunchError] = useState<string | null>(null)
@@ -272,9 +272,9 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
 
     try {
       const checkResult = checkLaunchableFolderPickers(def.graph_json)
-      setSelectedFolderIds(checkResult.initialSelectedFolderIds)
+      setSelectedFolderId(checkResult.initialSelectedFolderId)
     } catch {
-      setSelectedFolderIds([])
+      setSelectedFolderId('')
     }
     void restoreLatestLaunch(def.id)
   }
@@ -283,7 +283,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
     setLaunchDialog({ open: false, def: null })
     setLaunchFolderRecords([])
     setLaunchSearchQuery('')
-    setSelectedFolderIds([])
+    setSelectedFolderId('')
     setLaunchRecordsLoading(false)
     setLaunchRecordsError(null)
     setLaunchError(null)
@@ -331,11 +331,11 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
   function toggleSelectedFolder(folderId: string) {
     setLaunchError(null)
     setLaunchSuccessJobId(null)
-    if (selectedFolderIds.includes(folderId)) {
-      setSelectedFolderIds((prev) => prev.filter((id) => id !== folderId))
+    if (selectedFolderId === folderId) {
+      setSelectedFolderId('')
       return
     }
-    setSelectedFolderIds((prev) => [...prev, folderId])
+    setSelectedFolderId(folderId)
   }
 
   async function handleLaunchWorkflow() {
@@ -344,8 +344,8 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
       setLaunchError('该工作流缺少文件夹选择器节点，无法直接启动')
       return
     }
-    if (selectedFolderIds.length === 0) {
-      setLaunchError('请至少选择一条文件夹记录')
+    if (selectedFolderId.trim() === '') {
+      setLaunchError('请选择一条文件夹记录')
       return
     }
 
@@ -355,7 +355,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
     try {
       const nextGraphJson = applyFolderSelectionToEnabledPickers(
         currentLaunchDef.graph_json,
-        selectedFolderIds,
+        selectedFolderId,
       )
       await updateWorkflowDef(currentLaunchDef.id, { graph_json: nextGraphJson })
       await fetchDefs()
@@ -494,7 +494,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 <p className="mt-2 text-xs font-bold text-red-700">{launchCheckError}</p>
               ) : canDirectLaunch ? (
                 <p className="mt-2 text-xs font-bold text-green-700">
-                  检测到 {enabledPickerCount} 个启用中的 folder-picker 节点，将统一写入所选记录。
+                  检测到 {enabledPickerCount} 个启用中的 folder-picker 节点，将统一写入所选单条记录。
                 </p>
               ) : (
                 <p className="mt-2 text-xs font-bold text-amber-700">
@@ -542,8 +542,9 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                         className="flex cursor-pointer items-start gap-2 border-2 border-foreground bg-background px-2 py-2"
                       >
                         <input
-                          type="checkbox"
-                          checked={selectedFolderIds.includes(folder.id)}
+                          type="radio"
+                          name="workflow-launch-folder-record"
+                          checked={selectedFolderId === folder.id}
                           onChange={() => toggleSelectedFolder(folder.id)}
                           className="mt-0.5 h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
                         />
@@ -557,7 +558,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 </div>
 
                 <p className="text-xs font-bold text-muted-foreground">
-                  已选记录：{selectedFolderIds.length} 条
+                  已选记录：{selectedFolderId ? '1 条' : '0 条'}
                 </p>
               </div>
             )}
@@ -609,7 +610,7 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
                 <button
                   type="button"
                   onClick={() => void handleLaunchWorkflow()}
-                  disabled={!canDirectLaunch || !!launchCheckError || selectedFolderIds.length === 0 || isLaunching}
+                  disabled={!canDirectLaunch || !!launchCheckError || selectedFolderId.trim() === '' || isLaunching}
                   className="inline-flex items-center gap-2 border-2 border-foreground bg-green-300 px-6 py-2.5 text-sm font-bold text-green-900 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-green-300 disabled:hover:text-green-900 disabled:hover:shadow-none disabled:hover:translate-y-0"
                 >
                   {isLaunching && <Loader2 className="h-4 w-4 animate-spin" />}

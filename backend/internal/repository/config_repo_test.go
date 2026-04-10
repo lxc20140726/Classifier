@@ -34,46 +34,6 @@ func TestConfigRepositorySetGet(t *testing.T) {
 	}
 }
 
-func TestConfigRepositoryGetAll(t *testing.T) {
-	t.Parallel()
-
-	database := newTestDB(t)
-	repo := NewConfigRepository(database)
-	ctx := context.Background()
-
-	fixtures := map[string]string{
-		"scan.path":      "/media",
-		"scan.recursive": "true",
-		"move.target":    "/sorted",
-	}
-
-	for key, value := range fixtures {
-		if err := repo.Set(ctx, key, value); err != nil {
-			t.Fatalf("Set(%q) error = %v", key, err)
-		}
-	}
-
-	all, err := repo.GetAll(ctx)
-	if err != nil {
-		t.Fatalf("GetAll() error = %v", err)
-	}
-
-	if len(all) != len(fixtures) {
-		t.Fatalf("GetAll() len = %d, want %d", len(all), len(fixtures))
-	}
-
-	for key, want := range fixtures {
-		got, ok := all[key]
-		if !ok {
-			t.Fatalf("GetAll() missing key %q", key)
-		}
-
-		if got != want {
-			t.Fatalf("GetAll()[%q] = %q, want %q", key, got, want)
-		}
-	}
-}
-
 func TestConfigRepositoryGetNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -97,22 +57,6 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 		Version:       2,
 		ScanInputDirs: []string{"/mnt/source", "/mnt/source-2"},
 		ScanCron:      "0 * * * *",
-		SourceDir:     "/mnt/source",
-		TargetDir:     "/mnt/target",
-		PathOptions: []AppConfigPathOption{
-			{
-				ID:       "scan-default",
-				Name:     "默认扫描目录",
-				Path:     "/mnt/source",
-				Category: "scan",
-			},
-			{
-				ID:       "target-default",
-				Name:     "默认整理目录",
-				Path:     "/mnt/target",
-				Category: "target",
-			},
-		},
 		OutputDirs: AppConfigOutputDirs{
 			Video: "/mnt/out/video",
 			Manga: "/mnt/out/manga",
@@ -139,11 +83,8 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 	if got.ScanCron != "0 * * * *" {
 		t.Fatalf("ScanCron = %q, want 0 * * * *", got.ScanCron)
 	}
-	if !reflect.DeepEqual(got.PathOptions, []AppConfigPathOption{
-		{ID: "scan-default", Name: "默认扫描目录", Path: "/mnt/source", Category: "scan"},
-		{ID: "target-default", Name: "默认整理目录", Path: "/mnt/target", Category: "target"},
-	}) {
-		t.Fatalf("PathOptions = %#v, want configured options", got.PathOptions)
+	if got.OutputDirs.Video != "/mnt/out/video" {
+		t.Fatalf("OutputDirs.Video = %q, want /mnt/out/video", got.OutputDirs.Video)
 	}
 
 	rawScanInputDirs, err := repo.Get(ctx, "scan_input_dirs")
@@ -154,12 +95,11 @@ func TestConfigRepositorySaveAndGetAppConfig(t *testing.T) {
 		t.Fatalf("scan_input_dirs = %q, want %q", rawScanInputDirs, `["/mnt/source","/mnt/source-2"]`)
 	}
 
-	rawScanCron, err := repo.Get(ctx, "scan_cron")
-	if err != nil {
-		t.Fatalf("Get(scan_cron) error = %v", err)
+	if _, err := repo.Get(ctx, "source_dir"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(source_dir) error = %v, want ErrNotFound", err)
 	}
-	if rawScanCron != "0 * * * *" {
-		t.Fatalf("scan_cron = %q, want 0 * * * *", rawScanCron)
+	if _, err := repo.Get(ctx, "target_dir"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(target_dir) error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -185,12 +125,6 @@ func TestConfigRepositoryGetAppConfigFallsBackToLegacyKV(t *testing.T) {
 		t.Fatalf("GetAppConfig() error = %v", err)
 	}
 
-	if got.SourceDir != "/legacy/source" {
-		t.Fatalf("SourceDir = %q, want /legacy/source", got.SourceDir)
-	}
-	if got.TargetDir != "/legacy/target" {
-		t.Fatalf("TargetDir = %q, want /legacy/target", got.TargetDir)
-	}
 	expectedVideoDir := filepath.Join("/legacy/target", "video")
 	if got.OutputDirs.Video != expectedVideoDir {
 		t.Fatalf("OutputDirs.Video = %q, want %q", got.OutputDirs.Video, expectedVideoDir)
@@ -198,36 +132,23 @@ func TestConfigRepositoryGetAppConfigFallsBackToLegacyKV(t *testing.T) {
 	if !reflect.DeepEqual(got.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 		t.Fatalf("ScanInputDirs = %#v, want [/legacy/source /legacy/source-2]", got.ScanInputDirs)
 	}
-	if len(got.PathOptions) != 0 {
-		t.Fatalf("PathOptions = %#v, want empty list", got.PathOptions)
-	}
 }
 
-func TestConfigRepositorySaveAppConfigRejectsRelativePath(t *testing.T) {
+func TestConfigRepositorySaveAppConfigRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 
 	database := newTestDB(t)
 	repo := NewConfigRepository(database)
 
-	err := repo.SaveAppConfig(context.Background(), &AppConfig{
-		SourceDir: "relative/source",
-	})
-	if !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
-	}
-}
-
-func TestConfigRepositorySaveAppConfigRejectsInvalidPathOption(t *testing.T) {
-	t.Parallel()
-
-	database := newTestDB(t)
-	repo := NewConfigRepository(database)
-
-	t.Run("duplicate id", func(t *testing.T) {
+	t.Run("relative scan path", func(t *testing.T) {
 		err := repo.SaveAppConfig(context.Background(), &AppConfig{
-			PathOptions: []AppConfigPathOption{
-				{ID: "dup", Name: "A", Path: "/tmp/a", Category: "general"},
-				{ID: "dup", Name: "B", Path: "/tmp/b", Category: "scan"},
+			ScanInputDirs: []string{"relative/source"},
+			OutputDirs: AppConfigOutputDirs{
+				Video: "/out/video",
+				Manga: "/out/manga",
+				Photo: "/out/photo",
+				Other: "/out/other",
+				Mixed: "/out/mixed",
 			},
 		})
 		if !errors.Is(err, ErrInvalidConfig) {
@@ -235,32 +156,11 @@ func TestConfigRepositorySaveAppConfigRejectsInvalidPathOption(t *testing.T) {
 		}
 	})
 
-	t.Run("empty name", func(t *testing.T) {
+	t.Run("relative output dir", func(t *testing.T) {
 		err := repo.SaveAppConfig(context.Background(), &AppConfig{
-			PathOptions: []AppConfigPathOption{
-				{ID: "x", Name: "", Path: "/tmp/a", Category: "general"},
-			},
-		})
-		if !errors.Is(err, ErrInvalidConfig) {
-			t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
-		}
-	})
-
-	t.Run("empty path", func(t *testing.T) {
-		err := repo.SaveAppConfig(context.Background(), &AppConfig{
-			PathOptions: []AppConfigPathOption{
-				{ID: "x", Name: "A", Path: "", Category: "general"},
-			},
-		})
-		if !errors.Is(err, ErrInvalidConfig) {
-			t.Fatalf("SaveAppConfig() error = %v, want ErrInvalidConfig", err)
-		}
-	})
-
-	t.Run("invalid category", func(t *testing.T) {
-		err := repo.SaveAppConfig(context.Background(), &AppConfig{
-			PathOptions: []AppConfigPathOption{
-				{ID: "x", Name: "A", Path: "/tmp/a", Category: "invalid"},
+			ScanInputDirs: []string{"/source"},
+			OutputDirs: AppConfigOutputDirs{
+				Video: "relative/video",
 			},
 		})
 		if !errors.Is(err, ErrInvalidConfig) {
@@ -284,14 +184,6 @@ func TestConfigRepositoryEnsureAppConfig(t *testing.T) {
 		t.Fatalf("EnsureAppConfig() error = %v", err)
 	}
 
-	var rowCount int
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM app_config WHERE id = 1").Scan(&rowCount); err != nil {
-		t.Fatalf("query app_config count error = %v", err)
-	}
-	if rowCount != 1 {
-		t.Fatalf("app_config row count = %d, want 1", rowCount)
-	}
-
 	var rawValue string
 	if err := database.QueryRowContext(ctx, "SELECT value FROM app_config WHERE id = 1").Scan(&rawValue); err != nil {
 		t.Fatalf("query app_config value error = %v", err)
@@ -301,7 +193,7 @@ func TestConfigRepositoryEnsureAppConfig(t *testing.T) {
 	if err := json.Unmarshal([]byte(rawValue), &cfg); err != nil {
 		t.Fatalf("json.Unmarshal(app_config.value) error = %v", err)
 	}
-	if cfg.SourceDir != "/legacy/source" {
-		t.Fatalf("cfg.SourceDir = %q, want /legacy/source", cfg.SourceDir)
+	if !reflect.DeepEqual(cfg.ScanInputDirs, []string{"/legacy/source"}) {
+		t.Fatalf("cfg.ScanInputDirs = %#v, want [/legacy/source]", cfg.ScanInputDirs)
 	}
 }

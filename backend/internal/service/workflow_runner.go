@@ -42,6 +42,7 @@ type NodeExecutionInput struct {
 	Node        repository.WorkflowGraphNode
 	Folder      *repository.Folder
 	SourceDir   string
+	AppConfig   *repository.AppConfig
 	Inputs      map[string]*TypedValue
 	ProgressFn  func(percent int, msg string)
 }
@@ -53,6 +54,13 @@ const (
 	ExecutionFailure ExecutionStatus = "failure"
 	ExecutionPending ExecutionStatus = "pending"
 )
+
+var processingStatusDrivenNodeTypes = map[string]struct{}{
+	renameNodeExecutorType:     {},
+	phase4MoveNodeExecutorType: {},
+	compressNodeExecutorType:   {},
+	thumbnailNodeExecutorType:  {},
+}
 
 type NodeExecutionOutput struct {
 	Outputs       map[string]TypedValue
@@ -165,6 +173,7 @@ type WorkflowRunnerService struct {
 	broker        *sse.Broker
 	auditSvc      *AuditService
 	typeRegistry  *TypeRegistry
+	config        repository.ConfigRepository
 }
 
 func NewWorkflowRunnerService(
@@ -219,6 +228,10 @@ func NewWorkflowRunnerService(
 
 func (s *WorkflowRunnerService) SetProcessingReviewRepository(repo repository.ProcessingReviewRepository) {
 	s.reviews = repo
+}
+
+func (s *WorkflowRunnerService) SetConfigRepository(repo repository.ConfigRepository) {
+	s.config = repo
 }
 
 func (s *WorkflowRunnerService) RegisterExecutor(executor WorkflowNodeExecutor) {
@@ -478,6 +491,9 @@ func (s *WorkflowRunnerService) RollbackWorkflowRun(ctx context.Context, workflo
 	if err := s.workflowRuns.UpdateStatus(ctx, workflowRunID, "rolled_back", ""); err != nil {
 		return fmt.Errorf("workflowRunner.RollbackWorkflowRun update workflow run status %q: %w", workflowRunID, err)
 	}
+	if err := s.syncFolderStatusesByWorkflowRun(ctx, workflowRunID, "rolled_back"); err != nil {
+		return fmt.Errorf("workflowRunner.RollbackWorkflowRun sync folder statuses for %q: %w", workflowRunID, err)
+	}
 	s.publishWorkflowRunUpdated(ctx, workflowRunID)
 
 	return nil
@@ -519,6 +535,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	}
 
 	runStartedAt := time.Now()
+	appConfig := s.getRuntimeAppConfig(ctx)
 	workflowFailureReason := ""
 	workflowFailureNodeID := ""
 	if !resume {
@@ -605,7 +622,7 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				resultCh <- s.executeWorkflowNode(levelCtx, run, folder, node, resume && node.ID == resumeNodeID, resumeData, &seq, &seqMu, outputCache, nodeStatusCache, &outputMu)
+				resultCh <- s.executeWorkflowNode(levelCtx, run, folder, appConfig, node, resume && node.ID == resumeNodeID, resumeData, &seq, &seqMu, outputCache, nodeStatusCache, &outputMu)
 			}()
 		}
 
@@ -641,6 +658,9 @@ func (s *WorkflowRunnerService) executeWorkflowRun(ctx context.Context, workflow
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "succeeded", ""); err != nil {
 		return fmt.Errorf("workflowRunner.executeWorkflowRun set succeeded for %q: %w", run.ID, err)
 	}
+	if err := s.syncFolderStatusesByWorkflowRun(ctx, run.ID, "succeeded"); err != nil {
+		return fmt.Errorf("workflowRunner.executeWorkflowRun sync folder statuses for %q: %w", run.ID, err)
+	}
 	s.publishWorkflowRunUpdated(ctx, run.ID)
 
 	_ = s.writeWorkflowRunAudit(ctx, run, folder, "workflow.run.complete", "success", time.Since(runStartedAt).Milliseconds(), nil)
@@ -658,6 +678,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	ctx context.Context,
 	run *repository.WorkflowRun,
 	folder *repository.Folder,
+	appConfig *repository.AppConfig,
 	node repository.WorkflowGraphNode,
 	resume bool,
 	resumeData map[string]any,
@@ -743,6 +764,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		"source_dir":      run.SourceDir,
 		"node":            node,
 		"inputs":          typedInputValuesForJSON(inputs),
+		"app_config":      appConfig,
 	}
 	if folder != nil {
 		inputPayload["folder_id"] = folder.ID
@@ -810,6 +832,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		Node:        node,
 		Folder:      folder,
 		SourceDir:   run.SourceDir,
+		AppConfig:   appConfig,
 		Inputs:      inputs,
 		ProgressFn: func(percent int, msg string) {
 			s.publish("workflow_run.node_progress", map[string]any{
@@ -995,6 +1018,17 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 	})
 
 	return nodeExecutionResult{}
+}
+
+func (s *WorkflowRunnerService) getRuntimeAppConfig(ctx context.Context) *repository.AppConfig {
+	if s == nil || s.config == nil {
+		return nil
+	}
+	cfg, err := s.config.GetAppConfig(ctx)
+	if err != nil {
+		return nil
+	}
+	return cfg
 }
 
 func withErrorCode(errorCode, message string) string {
@@ -1726,6 +1760,128 @@ func (s *WorkflowRunnerService) publishWorkflowRunUpdated(ctx context.Context, w
 		"resume_node_id":  resumeNodeID,
 		"error":           strings.TrimSpace(run.Error),
 	})
+}
+
+func (s *WorkflowRunnerService) syncFolderStatusesByWorkflowRun(ctx context.Context, workflowRunID, runStatus string) error {
+	if s.folders == nil || strings.TrimSpace(workflowRunID) == "" {
+		return nil
+	}
+
+	targetStatus, shouldSync := workflowRunStatusToFolderStatus(runStatus)
+	if !shouldSync {
+		return nil
+	}
+
+	nodeRuns, _, err := s.nodeRuns.List(ctx, repository.NodeRunListFilter{WorkflowRunID: workflowRunID, Page: 1, Limit: 2000})
+	if err != nil {
+		return fmt.Errorf("list node runs for workflow run %q: %w", workflowRunID, err)
+	}
+	if !workflowRunHasProcessingNode(nodeRuns) {
+		return nil
+	}
+
+	folderIDs, err := s.collectWorkflowRunFolderIDs(ctx, workflowRunID, nodeRuns)
+	if err != nil {
+		return err
+	}
+	for _, folderID := range folderIDs {
+		if updateErr := s.folders.UpdateStatus(ctx, folderID, targetStatus); updateErr != nil {
+			return fmt.Errorf("update folder %q status to %q: %w", folderID, targetStatus, updateErr)
+		}
+	}
+	return nil
+}
+
+func workflowRunStatusToFolderStatus(runStatus string) (string, bool) {
+	switch strings.TrimSpace(runStatus) {
+	case "waiting_input":
+		return "pending", true
+	case "succeeded":
+		return "done", true
+	case "rolled_back":
+		return "pending", true
+	default:
+		return "", false
+	}
+}
+
+func workflowRunHasProcessingNode(nodeRuns []*repository.NodeRun) bool {
+	for _, nodeRun := range nodeRuns {
+		if nodeRun == nil {
+			continue
+		}
+		if _, ok := processingStatusDrivenNodeTypes[strings.TrimSpace(nodeRun.NodeType)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *WorkflowRunnerService) collectWorkflowRunFolderIDs(ctx context.Context, workflowRunID string, nodeRuns []*repository.NodeRun) ([]string, error) {
+	ordered := make([]string, 0, 8)
+	seen := make(map[string]struct{}, 8)
+	addFolderID := func(raw string) {
+		folderID := strings.TrimSpace(raw)
+		if folderID == "" {
+			return
+		}
+		if _, exists := seen[folderID]; exists {
+			return
+		}
+		seen[folderID] = struct{}{}
+		ordered = append(ordered, folderID)
+	}
+
+	run, err := s.workflowRuns.GetByID(ctx, workflowRunID)
+	if err != nil {
+		return nil, fmt.Errorf("get workflow run %q: %w", workflowRunID, err)
+	}
+	addFolderID(run.FolderID)
+
+	if s.reviews != nil {
+		reviews, listErr := s.reviews.ListByWorkflowRunID(ctx, workflowRunID)
+		if listErr != nil {
+			return nil, fmt.Errorf("list processing reviews for workflow run %q: %w", workflowRunID, listErr)
+		}
+		for _, review := range reviews {
+			if review == nil {
+				continue
+			}
+			addFolderID(review.FolderID)
+		}
+	}
+
+	for _, nodeRun := range nodeRuns {
+		if nodeRun == nil || strings.TrimSpace(nodeRun.OutputJSON) == "" {
+			continue
+		}
+		typedOutputs, typed, parseErr := parseTypedNodeOutputs(nodeRun.OutputJSON)
+		if parseErr != nil || !typed {
+			continue
+		}
+
+		for _, output := range typedOutputs {
+			if entries, entryErr := parseClassifiedEntryList(output.Value); entryErr == nil {
+				for _, entry := range entries {
+					collectClassifiedEntryFolderIDs(entry, addFolderID)
+				}
+			}
+			if items, ok := categoryRouterToItems(output.Value); ok {
+				for _, item := range items {
+					addFolderID(item.FolderID)
+				}
+			}
+		}
+	}
+
+	return ordered, nil
+}
+
+func collectClassifiedEntryFolderIDs(entry ClassifiedEntry, add func(string)) {
+	add(entry.FolderID)
+	for _, child := range entry.Subtree {
+		collectClassifiedEntryFolderIDs(child, add)
+	}
 }
 
 func parseWorkflowGraph(graphJSON string) (*repository.WorkflowGraph, error) {

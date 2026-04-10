@@ -1105,6 +1105,9 @@ func TestWorkflowRunnerServicePhase4MoveRollback(t *testing.T) {
 	if moved.Path != "/target/album" {
 		t.Fatalf("folder path after move = %q, want /target/album", moved.Path)
 	}
+	if moved.Status != "done" {
+		t.Fatalf("folder status after move = %q, want done", moved.Status)
+	}
 
 	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
 	if err := svc.RollbackWorkflowRun(ctx, run.ID); err != nil {
@@ -1117,6 +1120,9 @@ func TestWorkflowRunnerServicePhase4MoveRollback(t *testing.T) {
 	}
 	if rolledBack.Path != "/source/album" {
 		t.Fatalf("folder path after rollback = %q, want /source/album", rolledBack.Path)
+	}
+	if rolledBack.Status != "pending" {
+		t.Fatalf("folder status after rollback = %q, want pending", rolledBack.Status)
 	}
 
 	existsTarget, err := adapter.Exists(ctx, "/target/album")

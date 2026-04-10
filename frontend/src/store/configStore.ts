@@ -1,29 +1,38 @@
 import { create } from 'zustand'
 
 import { getConfig } from '@/api/config'
-import type { ConfiguredPathOption } from '@/types'
+import type { AppConfig } from '@/types'
 
 interface ConfigState {
-  sourceDir: string
   scanInputDirs: string[]
-  pathOptions: ConfiguredPathOption[]
+  outputDirs: NonNullable<AppConfig['output_dirs']>
   loaded: boolean
   load: (force?: boolean) => Promise<void>
 }
 
 export const useConfigStore = create<ConfigState>((set, get) => ({
-  sourceDir: '',
   scanInputDirs: [],
-  pathOptions: [],
+  outputDirs: {
+    video: '',
+    manga: '',
+    photo: '',
+    other: '',
+    mixed: '',
+  },
   loaded: false,
   load: async (force = false) => {
     if (get().loaded && !force) return
     try {
       const res = await getConfig()
       set({
-        sourceDir: res.data.source_dir ?? '',
         scanInputDirs: res.data.scan_input_dirs ?? [],
-        pathOptions: res.data.path_options ?? [],
+        outputDirs: {
+          video: res.data.output_dirs?.video ?? '',
+          manga: res.data.output_dirs?.manga ?? '',
+          photo: res.data.output_dirs?.photo ?? '',
+          other: res.data.output_dirs?.other ?? '',
+          mixed: res.data.output_dirs?.mixed ?? '',
+        },
         loaded: true,
       })
     } catch {

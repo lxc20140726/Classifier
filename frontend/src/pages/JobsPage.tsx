@@ -191,8 +191,7 @@ function ScheduledWorkflowModal({
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
   const overlayRef = useRef<HTMLDivElement | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
-  const { sourceDir, pathOptions, load: loadConfig } = useConfigStore()
-  const scanPathOptions = pathOptions.filter((option) => option.category === 'scan' || option.category === 'general')
+  const { scanInputDirs, load: loadConfig } = useConfigStore()
 
   useEffect(() => {
     if (modal && overlayRef.current && modalRef.current) {
@@ -294,19 +293,19 @@ function ScheduledWorkflowModal({
                     <p className="text-sm font-black">已选择 {form.sourceDirs.length} 个扫描输入目录</p>
                     <p className="text-xs font-medium text-muted-foreground mt-1">每个扫描任务维护自己的目录列表。</p>
                   </div>
-                  {scanPathOptions.length > 0 && (
+                  {scanInputDirs.length > 0 && (
                     <div className="space-y-2">
-                      <p className="text-xs font-black tracking-widest">从路径选项添加</p>
+                      <p className="text-xs font-black tracking-widest">从系统扫描目录添加</p>
                       <div className="max-h-28 space-y-1 overflow-auto">
-                        {scanPathOptions.map((option) => (
+                        {scanInputDirs.map((path, index) => (
                           <button
-                            key={option.id}
+                            key={`${path}-${index}`}
                             type="button"
-                            onClick={() => onToggleSourceDir(option.path)}
+                            onClick={() => onToggleSourceDir(path)}
                             className="w-full border-2 border-foreground bg-background px-3 py-2 text-left text-xs font-bold transition-all hover:bg-foreground hover:text-background"
                           >
-                            <span className="block truncate">{option.name}</span>
-                            <span className="block truncate font-mono text-[10px] opacity-70">{option.path}</span>
+                            <span className="block truncate">{`扫描目录 #${index + 1}`}</span>
+                            <span className="block truncate font-mono text-[10px] opacity-70">{path}</span>
                           </button>
                         ))}
                       </div>
@@ -363,7 +362,7 @@ function ScheduledWorkflowModal({
 
         <DirPicker
           open={dirPickerOpen}
-          initialPath={sourceDir}
+          initialPath={scanInputDirs[0] ?? '/'}
           title="选择扫描输入目录"
           onCancel={() => setDirPickerOpen(false)}
           onConfirm={(path) => {

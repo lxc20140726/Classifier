@@ -198,10 +198,6 @@ func (h *FolderHandler) resolveScanSourceDirs(ctx context.Context) ([]string, er
 		return sourceDirs, nil
 	}
 
-	if trimmedSourceDir := strings.TrimSpace(appConfig.SourceDir); trimmedSourceDir != "" {
-		return []string{trimmedSourceDir}, nil
-	}
-
 	if trimmedDefaultSourceDir := strings.TrimSpace(h.defaultSourceDir); trimmedDefaultSourceDir != "" {
 		return []string{trimmedDefaultSourceDir}, nil
 	}

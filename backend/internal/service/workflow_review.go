@@ -122,6 +122,9 @@ func (s *WorkflowRunnerService) prepareProcessingReviews(ctx context.Context, wo
 		if err := s.workflowRuns.UpdateStatus(ctx, workflowRunID, "waiting_input", ""); err != nil {
 			return false, fmt.Errorf("set waiting_input for existing reviews %q: %w", workflowRunID, err)
 		}
+		if err := s.syncFolderStatusesByWorkflowRun(ctx, workflowRunID, "waiting_input"); err != nil {
+			return false, fmt.Errorf("sync folder statuses for existing reviews run %q: %w", workflowRunID, err)
+		}
 		s.publishWorkflowRunUpdated(ctx, workflowRunID)
 		s.publish("workflow_run.review_pending", map[string]any{
 			"workflow_run_id": workflowRunID,
@@ -158,7 +161,7 @@ func (s *WorkflowRunnerService) prepareProcessingReviews(ctx context.Context, wo
 				continue
 			}
 			agg := ensureProcessingFolderAggregate(perFolder, folderID)
-			sourcePath := strings.TrimSpace(item.SourcePath)
+			sourcePath := processingItemCurrentPath(item)
 			if sourcePath != "" {
 				agg.SourcePaths[sourcePath] = struct{}{}
 				agg.LastPath = sourcePath
@@ -262,6 +265,9 @@ func (s *WorkflowRunnerService) prepareProcessingReviews(ctx context.Context, wo
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, "waiting_input", ""); err != nil {
 		return false, fmt.Errorf("set waiting_input for review run %q: %w", run.ID, err)
 	}
+	if err := s.syncFolderStatusesByWorkflowRun(ctx, run.ID, "waiting_input"); err != nil {
+		return false, fmt.Errorf("sync folder statuses for review run %q: %w", run.ID, err)
+	}
 	s.publishWorkflowRunUpdated(ctx, run.ID)
 
 	items, err := s.reviews.ListByWorkflowRunID(ctx, run.ID)
@@ -308,6 +314,9 @@ func (s *WorkflowRunnerService) refreshReviewDrivenRunStatus(ctx context.Context
 
 	if err := s.workflowRuns.UpdateStatus(ctx, run.ID, nextStatus, ""); err != nil {
 		return fmt.Errorf("update workflow run %q status %q: %w", run.ID, nextStatus, err)
+	}
+	if err := s.syncFolderStatusesByWorkflowRun(ctx, run.ID, nextStatus); err != nil {
+		return fmt.Errorf("sync folder statuses for workflow run %q status %q: %w", run.ID, nextStatus, err)
 	}
 	s.publishWorkflowRunUpdated(ctx, run.ID)
 
@@ -500,7 +509,8 @@ type reviewNodeRunInputPayload struct {
 		Label  string         `json:"label"`
 		Config map[string]any `json:"config"`
 	} `json:"node"`
-	Inputs map[string]any `json:"inputs"`
+	Inputs    map[string]any        `json:"inputs"`
+	AppConfig *repository.AppConfig `json:"app_config"`
 }
 
 func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs map[string]TypedValue) []ProcessingStepResult {
@@ -528,7 +538,7 @@ func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs 
 	case renameNodeExecutorType:
 		out := make([]ProcessingStepResult, 0, len(items))
 		for _, item := range items {
-			sourcePath := strings.TrimSpace(item.SourcePath)
+			sourcePath := processingItemCurrentPath(item)
 			targetName := strings.TrimSpace(item.TargetName)
 			status := "renamed"
 			if targetName == "" || targetName == filepath.Base(sourcePath) {
@@ -551,23 +561,23 @@ func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs 
 			if folderID := strings.TrimSpace(item.FolderID); folderID != "" {
 				inputByFolderID[folderID] = item
 			}
-			if sourcePath := strings.TrimSpace(item.SourcePath); sourcePath != "" {
+			if sourcePath := processingItemCurrentPath(item); sourcePath != "" {
 				inputByPath[sourcePath] = item
 			}
 		}
 
 		out := make([]ProcessingStepResult, 0, len(items))
 		for _, item := range items {
-			targetPath := strings.TrimSpace(item.SourcePath)
+			targetPath := processingItemCurrentPath(item)
 			sourcePath := targetPath
 			if folderID := strings.TrimSpace(item.FolderID); folderID != "" {
 				if before, ok := inputByFolderID[folderID]; ok {
-					sourcePath = strings.TrimSpace(before.SourcePath)
+					sourcePath = processingItemCurrentPath(before)
 				}
 			}
 			if sourcePath == targetPath {
 				if before, ok := inputByPath[targetPath]; ok {
-					sourcePath = strings.TrimSpace(before.SourcePath)
+					sourcePath = processingItemCurrentPath(before)
 				}
 			}
 			status := "moved"
@@ -592,10 +602,11 @@ func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs 
 		if format != "cbz" && format != "zip" {
 			format = "cbz"
 		}
-		archiveDir := strings.TrimSpace(stringConfig(cfg, "target_dir"))
-		if archiveDir == "" {
-			archiveDir = strings.TrimSpace(stringConfig(cfg, "output_dir"))
-		}
+		archiveDir := resolveWorkflowNodePath(cfg, inputPayload.AppConfig, workflowNodePathOptions{
+			DefaultType:      workflowPathRefTypeOutput,
+			DefaultOutputKey: "mixed",
+			LegacyKeys:       []string{"target_dir", "output_dir"},
+		})
 		if archiveDir == "" {
 			archiveDir = ".archives"
 		}
@@ -603,7 +614,7 @@ func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs 
 
 		out := make([]ProcessingStepResult, 0, len(items))
 		for _, item := range items {
-			sourcePath := strings.TrimSpace(item.SourcePath)
+			sourcePath := processingItemCurrentPath(item)
 			name := phase4MoveItemName(item)
 			if name == "" {
 				name = strings.TrimSpace(filepath.Base(sourcePath))
@@ -620,21 +631,22 @@ func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs 
 		return out
 	case thumbnailNodeExecutorType:
 		cfg := inputPayload.Node.Config
-		configuredOutputDir := normalizeWorkflowPath(stringConfig(cfg, "output_dir"))
-		if configuredOutputDir == "" {
-			configuredOutputDir = normalizeWorkflowPath(stringConfig(cfg, "target_dir"))
-		}
+		configuredOutputDir := resolveWorkflowNodePath(cfg, inputPayload.AppConfig, workflowNodePathOptions{
+			DefaultType:      workflowPathRefTypeOutput,
+			DefaultOutputKey: "video",
+			LegacyKeys:       []string{"output_dir", "target_dir"},
+		})
 
 		out := make([]ProcessingStepResult, 0, len(items))
 		for _, item := range items {
-			sourcePath := normalizeWorkflowPath(item.SourcePath)
+			sourcePath := processingItemCurrentPath(item)
 			outputDir := configuredOutputDir
 			if outputDir == "" {
-				outputDir = normalizeWorkflowPath(filepath.Dir(sourcePath))
+				outputDir = normalizeWorkflowPath(thumbnailNodeDefaultOutputDir(item))
 			}
 			outputName := phase4MoveItemName(item)
 			if outputName == "" {
-				outputName = filepath.Base(sourcePath)
+				outputName = thumbnailNodeOutputBaseName(item)
 			}
 			targetPath := normalizeWorkflowPath(joinWorkflowPath(outputDir, outputName+".jpg"))
 			out = append(out, ProcessingStepResult{

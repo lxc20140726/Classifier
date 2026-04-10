@@ -336,6 +336,7 @@ func (s *ScannerService) recordClassificationSnapshot(ctx context.Context, jobID
 		"category":         folder.Category,
 		"category_source":  folder.CategorySource,
 		"total_files":      folder.TotalFiles,
+		"total_size":       folder.TotalSize,
 		"image_count":      folder.ImageCount,
 		"video_count":      folder.VideoCount,
 		"other_file_count": folder.OtherFileCount,

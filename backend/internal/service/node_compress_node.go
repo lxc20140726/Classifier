@@ -71,10 +71,11 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	}
 	ext := "." + format
 
-	archiveDir := strings.TrimSpace(stringConfig(input.Node.Config, "target_dir"))
-	if archiveDir == "" {
-		archiveDir = strings.TrimSpace(stringConfig(input.Node.Config, "output_dir"))
-	}
+	archiveDir := resolveWorkflowNodePath(input.Node.Config, input.AppConfig, workflowNodePathOptions{
+		DefaultType:      workflowPathRefTypeOutput,
+		DefaultOutputKey: "mixed",
+		LegacyKeys:       []string{"target_dir", "output_dir"},
+	})
 	if archiveDir == "" {
 		archiveDir = ".archives"
 	}
@@ -100,9 +101,10 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 	archiveItems := make([]ProcessingItem, 0, len(items))
 	archives := make([]string, 0, len(items))
 	for _, item := range items {
-		sourcePath := strings.TrimSpace(item.SourcePath)
+		item = processingItemNormalize(item)
+		sourcePath := processingItemCurrentPath(item)
 		if sourcePath == "" {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item source_path is required", e.Type())
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item current_path is required", e.Type())
 		}
 
 		info, err := e.fs.Stat(ctx, sourcePath)
@@ -152,8 +154,8 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 }
 
 func compressNodeBuildArchiveItem(item ProcessingItem, archivePath string) ProcessingItem {
-	derived := item
-	derived.SourcePath = archivePath
+	derived := processingItemNormalize(item)
+	derived.CurrentPath = normalizeWorkflowPath(archivePath)
 	derived.ParentPath = filepath.Dir(archivePath)
 	derived.FolderName = filepath.Base(archivePath)
 	derived.TargetName = filepath.Base(archivePath)

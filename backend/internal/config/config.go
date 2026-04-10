@@ -19,6 +19,12 @@ type Config struct {
 	MaxConcurrency   int
 }
 
+type DeploymentPaths struct {
+	DefaultScanRoot   string
+	DefaultOutputRoot string
+	DeleteStagingDir  string
+}
+
 // Load reads configuration from environment variables with sane defaults.
 func Load() *Config {
 	maxConcurrency := 4
@@ -40,6 +46,17 @@ func Load() *Config {
 		Port:             getEnv("PORT", "8080"),
 		TZ:               getEnv("TZ", "Asia/Shanghai"),
 		MaxConcurrency:   maxConcurrency,
+	}
+}
+
+func (c *Config) DeploymentPaths() DeploymentPaths {
+	if c == nil {
+		return DeploymentPaths{}
+	}
+	return DeploymentPaths{
+		DefaultScanRoot:   c.SourceDir,
+		DefaultOutputRoot: c.TargetDir,
+		DeleteStagingDir:  c.DeleteStagingDir,
 	}
 }
 

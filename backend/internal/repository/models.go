@@ -168,22 +168,11 @@ type AppConfigOutputDirs struct {
 	Mixed string `json:"mixed"`
 }
 
-type AppConfigPathOption struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	Category string `json:"category"`
-}
-
 type AppConfig struct {
-	Version       int                   `json:"version"`
-	ScanInputDirs []string              `json:"scan_input_dirs"`
-	ScanCron      string                `json:"scan_cron"`
-	SourceDir     string                `json:"source_dir"`
-	TargetDir     string                `json:"target_dir"`
-	TargetDirs    []string              `json:"target_dirs"`
-	OutputDirs    AppConfigOutputDirs   `json:"output_dirs"`
-	PathOptions   []AppConfigPathOption `json:"path_options"`
+	Version       int                 `json:"version"`
+	ScanInputDirs []string            `json:"scan_input_dirs"`
+	ScanCron      string              `json:"scan_cron"`
+	OutputDirs    AppConfigOutputDirs `json:"output_dirs"`
 }
 
 type WorkflowDefinition struct {

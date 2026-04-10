@@ -74,10 +74,11 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: ffmpeg binary not found: %w", e.Type(), err)
 	}
 
-	configuredOutputDir := normalizeWorkflowPath(stringConfig(input.Node.Config, "output_dir"))
-	if configuredOutputDir == "" {
-		configuredOutputDir = normalizeWorkflowPath(stringConfig(input.Node.Config, "target_dir"))
-	}
+	configuredOutputDir := resolveWorkflowNodePath(input.Node.Config, input.AppConfig, workflowNodePathOptions{
+		DefaultType:      workflowPathRefTypeOutput,
+		DefaultOutputKey: "video",
+		LegacyKeys:       []string{"output_dir", "target_dir"},
+	})
 	createTarget := folderSplitterBoolConfig(input.Node.Config, "create_target_if_missing", true)
 
 	offsetSeconds := intConfig(input.Node.Config, "offset_seconds", 8)
@@ -90,9 +91,10 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 	thumbnailPaths := make([]string, 0, len(items))
 	ensuredDirs := map[string]struct{}{}
 	for _, item := range items {
-		sourcePath := normalizeWorkflowPath(item.SourcePath)
-		if sourcePath == "" {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item source_path is required", e.Type())
+		item = processingItemNormalize(item)
+		currentPath := processingItemCurrentPath(item)
+		if currentPath == "" {
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: item current_path is required", e.Type())
 		}
 
 		videoPath, err := e.representativeVideoPath(ctx, item)
@@ -102,10 +104,10 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 
 		outputDir := configuredOutputDir
 		if outputDir == "" {
-			outputDir = normalizeWorkflowPath(filepath.Dir(sourcePath))
+			outputDir = normalizeWorkflowPath(thumbnailNodeDefaultOutputDir(item))
 		}
 		if outputDir == "" {
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: cannot resolve output dir for %q", e.Type(), sourcePath)
+			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: cannot resolve output dir for %q", e.Type(), currentPath)
 		}
 		if _, ok := ensuredDirs[outputDir]; !ok {
 			outExists, err := e.fs.Exists(ctx, outputDir)
@@ -125,7 +127,7 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 
 		outputName := phase4MoveItemName(item)
 		if strings.TrimSpace(outputName) == "" {
-			outputName = filepath.Base(strings.TrimSpace(item.SourcePath))
+			outputName = thumbnailNodeOutputBaseName(item)
 		}
 		thumbnailPath := joinWorkflowPath(outputDir, outputName+".jpg")
 
@@ -143,7 +145,7 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 
 		thumbnailPaths = append(thumbnailPaths, thumbnailPath)
 		stepResults = append(stepResults, ProcessingStepResult{
-			SourcePath: sourcePath,
+			SourcePath: currentPath,
 			TargetPath: normalizeWorkflowPath(thumbnailPath),
 			NodeType:   input.Node.Type,
 			NodeLabel:  strings.TrimSpace(input.Node.Label),
@@ -479,14 +481,25 @@ func (e *thumbnailNodeExecutor) clearCoverImagePathIfNeeded(ctx context.Context,
 }
 
 func (e *thumbnailNodeExecutor) representativeVideoPath(ctx context.Context, item ProcessingItem) (string, error) {
-	sourcePath := strings.TrimSpace(item.SourcePath)
-	if sourcePath == "" {
-		return "", fmt.Errorf("item source_path is required")
+	mediaPath := processingItemMediaPath(item)
+	if mediaPath == "" {
+		return "", fmt.Errorf("item current_path is required")
 	}
 
-	entries, err := e.fs.ReadDir(ctx, sourcePath)
+	info, err := e.fs.Stat(ctx, mediaPath)
 	if err != nil {
-		return "", fmt.Errorf("read source dir %q: %w", sourcePath, err)
+		return "", fmt.Errorf("stat current path %q: %w", mediaPath, err)
+	}
+	if !info.IsDir {
+		if thumbnailNodeIsVideoFile(filepath.Base(mediaPath)) {
+			return mediaPath, nil
+		}
+		return "", fmt.Errorf("当前处理项不包含可生成缩略图的视频源: %q 不是视频目录或视频文件", mediaPath)
+	}
+
+	entries, err := e.fs.ReadDir(ctx, mediaPath)
+	if err != nil {
+		return "", fmt.Errorf("read source dir %q: %w", mediaPath, err)
 	}
 
 	bestName := ""
@@ -505,10 +518,42 @@ func (e *thumbnailNodeExecutor) representativeVideoPath(ctx context.Context, ite
 	}
 
 	if bestName == "" {
-		return "", fmt.Errorf("no direct video file found in %q", sourcePath)
+		return "", fmt.Errorf("当前处理项不包含可生成缩略图的视频源: %q 中没有可提取的视频文件", mediaPath)
 	}
 
-	return joinWorkflowPath(sourcePath, bestName), nil
+	return joinWorkflowPath(mediaPath, bestName), nil
+}
+
+func thumbnailNodeDefaultOutputDir(item ProcessingItem) string {
+	currentPath := processingItemCurrentPath(item)
+	if currentPath == "" {
+		return ""
+	}
+	sourceKind := strings.ToLower(strings.TrimSpace(item.SourceKind))
+	if sourceKind == ProcessingItemSourceKindDirectory {
+		return currentPath
+	}
+	if ext := strings.ToLower(filepath.Ext(currentPath)); ext != "" {
+		return normalizeWorkflowPath(filepath.Dir(currentPath))
+	}
+	return currentPath
+}
+
+func thumbnailNodeOutputBaseName(item ProcessingItem) string {
+	currentPath := processingItemCurrentPath(item)
+	if currentPath == "" {
+		return ""
+	}
+	if item.TargetName != "" {
+		return strings.TrimSpace(item.TargetName)
+	}
+	if item.FolderName != "" {
+		return strings.TrimSpace(item.FolderName)
+	}
+	if strings.ToLower(strings.TrimSpace(item.SourceKind)) == ProcessingItemSourceKindDirectory {
+		return filepath.Base(currentPath)
+	}
+	return strings.TrimSuffix(filepath.Base(currentPath), filepath.Ext(currentPath))
 }
 
 func thumbnailNodeBuildArgs(videoPath, outputPath string, offsetSeconds, width int) []string {

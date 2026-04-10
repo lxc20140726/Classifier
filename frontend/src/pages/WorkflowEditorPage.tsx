@@ -14,11 +14,13 @@ import {
   useEdgesState,
   useUpdateNodeInternals,
   useNodesState,
+  type IsValidConnection,
   type Connection,
   type Edge,
   type Node,
   type NodeProps,
   type OnConnect,
+  type OnReconnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { ArrowLeft, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Loader2, MousePointer, Play, Plus, RotateCcw, Save, Trash2, TriangleAlert, Wand2 } from 'lucide-react'
@@ -316,6 +318,7 @@ function isValidEditorEdge(
   edge: Edge,
   getSchema: (nodeId: string) => NodeSchema | undefined,
 ) {
+  if (!edge.source || !edge.target || edge.source === edge.target) return false
   const sourcePortIndex = parseHandleIndex(edge.sourceHandle)
   const targetPortIndex = parseHandleIndex(edge.targetHandle)
   if (sourcePortIndex == null || targetPortIndex == null) return false
@@ -328,7 +331,23 @@ function isValidEditorEdge(
   const targetPort = targetSchema.input_ports[targetPortIndex]
   if (!sourcePort || !targetPort) return false
 
+  if (sourcePort.type && targetPort.type && sourcePort.type !== targetPort.type) return false
+
   return true
+}
+
+function isValidEditorConnection(
+  connection: Connection,
+  getSchema: (nodeId: string) => NodeSchema | undefined,
+) {
+  if (!connection.source || !connection.target) return false
+  return isValidEditorEdge({
+    id: '__connection__',
+    source: connection.source,
+    target: connection.target,
+    sourceHandle: connection.sourceHandle ?? null,
+    targetHandle: connection.targetHandle ?? null,
+  }, getSchema)
 }
 
 function nodesToGraph(
@@ -589,13 +608,20 @@ function cfgJson(config: Record<string, unknown>, key: string): string {
   return JSON.stringify(v, null, 2)
 }
 
-function cfgPathSource(config: Record<string, unknown>, key: string): 'preset' | 'custom' {
-  const value = config[key]
-  return value === 'preset' ? 'preset' : 'custom'
+function cfgPathRefType(config: Record<string, unknown>, defaultType: 'scan' | 'output' | 'custom'): 'scan' | 'output' | 'custom' {
+  const value = config['path_ref_type']
+  if (value === 'scan' || value === 'output' || value === 'custom') return value
+  return defaultType
 }
 
-function cfgPathOptionID(config: Record<string, unknown>, key: string): string {
-  const value = config[key]
+function cfgPathRefKey(config: Record<string, unknown>, fallback: string): string {
+  const value = config['path_ref_key']
+  if (typeof value === 'string' && value.trim() !== '') return value
+  return fallback
+}
+
+function cfgPathSuffix(config: Record<string, unknown>): string {
+  const value = config['path_suffix']
   return typeof value === 'string' ? value : ''
 }
 
@@ -632,19 +658,10 @@ function NodeUsageHint({ children }: { children: ReactNode }) {
 
 function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeConfigPanelProps) {
   const set = (key: string, val: string) => updateNodeConfig(nodeId, key, val)
-  const setPathWithMeta = (
-    pathKey: string,
-    sourceKey: string,
-    optionIDKey: string,
-    next: { path: string; source: 'preset' | 'custom'; optionId: string },
-  ) => {
-    set(pathKey, next.path)
-    set(sourceKey, next.source)
-    if (next.optionId === '') {
-      set(optionIDKey, '')
-      return
-    }
-    set(optionIDKey, next.optionId)
+  const setPathRef = (next: { pathRefType: 'scan' | 'output' | 'custom'; pathRefKey: string; pathSuffix: string }) => {
+    set('path_ref_type', next.pathRefType)
+    set('path_ref_key', next.pathRefKey)
+    set('path_suffix', next.pathSuffix)
   }
   const strategy = cfgStr(config, 'strategy') || 'simple'
 
@@ -693,7 +710,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'folder-splitter':
       return (
         <NodeUsageHint>
-          将分类条目拆分为处理项列表。开启 split_with_subdirs 后会递归拆分到叶子目录（不限 mixed），确保后续处理流聚焦单个目录。
+          将分类条目拆分为处理项列表。会初始化统一契约字段：`source_path` 表示原始来源，`current_path` 表示当前有效位置；开启 split_with_subdirs 后会递归拆分到叶子目录（不限 mixed）。
         </NodeUsageHint>
       )
 
@@ -833,17 +850,20 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'move-node':
       return (
         <div className="space-y-3">
-          <ConfigField label="目标目录" hint="移动后文件夹的存放路径">
+          <NodeUsageHint>
+            按处理项的 `current_path` 执行移动，成功后仅更新 `current_path`，保留 `source_path` 作为原始来源路径，便于后续缩略图、压缩和回滚稳定追踪。
+          </NodeUsageHint>
+          <ConfigField label="目标路径引用" hint="统一路径语义：扫描目录 / 输出目录 / 自定义路径">
             <ConfiguredPathField
               value={{
-                path: cfgStr(config, 'target_dir'),
-                source: cfgPathSource(config, 'target_dir_source'),
-                optionId: cfgPathOptionID(config, 'target_dir_option_id'),
+                pathRefType: cfgPathRefType(config, 'output'),
+                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'target_dir') || 'mixed'),
+                pathSuffix: cfgPathSuffix(config),
               }}
-              onChange={(next) => setPathWithMeta('target_dir', 'target_dir_source', 'target_dir_option_id', next)}
-              allowedCategories={['target', 'output', 'general']}
+              onChange={setPathRef}
               placeholder="/data/target"
               pickerTitle="选择目标目录"
+              defaultOutputKey="mixed"
             />
           </ConfigField>
           <ConfigField label="冲突策略" hint="目标路径已存在时的处理方式（默认自动重命名）">
@@ -864,7 +884,7 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
       return (
         <div className="space-y-3">
           <NodeUsageHint>
-            items 输出会透传原始处理项；archive_items 输出用于将生成的压缩包（.cbz/.zip）作为新处理项传给下游（如 move-node / collect-node）。
+            `items` 会透传原处理项；`archive_items` 会产出新的压缩包处理项，其中 `source_path` 仍保留原始来源，`current_path` 指向压缩产物，可直接接到 move-node / collect-node。
           </NodeUsageHint>
           <ConfigField label="压缩范围" hint="all：所有文件夹；leaf：仅叶子节点（默认 all）">
             <select
@@ -886,17 +906,17 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
               <option value="zip">zip — 通用压缩</option>
             </select>
           </ConfigField>
-          <ConfigField label="输出目录" hint="压缩文件的存放路径，留空则放在原文件夹旁">
+          <ConfigField label="输出路径引用" hint="默认使用输出目录体系，仍支持自定义路径">
             <ConfiguredPathField
               value={{
-                path: cfgStr(config, 'target_dir'),
-                source: cfgPathSource(config, 'target_dir_source'),
-                optionId: cfgPathOptionID(config, 'target_dir_option_id'),
+                pathRefType: cfgPathRefType(config, 'output'),
+                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'target_dir') || 'mixed'),
+                pathSuffix: cfgPathSuffix(config),
               }}
-              onChange={(next) => setPathWithMeta('target_dir', 'target_dir_source', 'target_dir_option_id', next)}
-              allowedCategories={['target', 'output', 'general']}
+              onChange={setPathRef}
               placeholder="/data/archive"
               pickerTitle="选择输出目录"
+              defaultOutputKey="mixed"
             />
           </ConfigField>
         </div>
@@ -905,17 +925,20 @@ function NodeConfigPanel({ nodeId, nodeType, config, updateNodeConfig }: NodeCon
     case 'thumbnail-node':
       return (
         <div className="space-y-3">
-          <ConfigField label="输出目录" hint="缩略图的存放路径，留空则与视频文件同目录">
+          <NodeUsageHint>
+            优先读取处理项的 `current_path` 作为当前有效媒体位置。未配置输出目录时，会跟随当前目录就近生成缩略图，移动后的目录也能稳定命中。
+          </NodeUsageHint>
+          <ConfigField label="输出路径引用" hint="留空时默认跟随当前有效目录，仍支持显式指定输出目录">
             <ConfiguredPathField
               value={{
-                path: cfgStr(config, 'output_dir'),
-                source: cfgPathSource(config, 'output_dir_source'),
-                optionId: cfgPathOptionID(config, 'output_dir_option_id'),
+                pathRefType: cfgPathRefType(config, 'output'),
+                pathRefKey: cfgPathRefKey(config, cfgStr(config, 'output_dir') || 'video'),
+                pathSuffix: cfgPathSuffix(config),
               }}
-              onChange={(next) => setPathWithMeta('output_dir', 'output_dir_source', 'output_dir_option_id', next)}
-              allowedCategories={['target', 'output', 'general']}
+              onChange={setPathRef}
               placeholder="/data/thumbnails"
               pickerTitle="选择缩略图输出目录"
+              defaultOutputKey="video"
             />
           </ConfigField>
           <ConfigField label="截图偏移（秒）" hint="从视频第几秒截取缩略图（默认 8）">
@@ -972,24 +995,29 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
     ? 'folders'
     : 'path'
 
-  const rawPaths = config['paths']
-  const paths: string[] = Array.isArray(rawPaths)
-    ? rawPaths.filter((p): p is string => typeof p === 'string')
-    : []
-  const rawPathSources = config['paths_sources']
-  const pathSources: Array<'preset' | 'custom'> = Array.isArray(rawPathSources)
-    ? rawPathSources.map((item) => (item === 'preset' ? 'preset' : 'custom'))
-    : []
-  const rawPathOptionIDs = config['paths_option_ids']
-  const pathOptionIDs: string[] = Array.isArray(rawPathOptionIDs)
-    ? rawPathOptionIDs.filter((item): item is string => typeof item === 'string')
-    : []
+  const path = typeof config['path'] === 'string'
+    ? config['path']
+    : Array.isArray(config['paths'])
+      ? (config['paths'].find((item): item is string => typeof item === 'string') ?? '')
+      : ''
+  const pathRefType = config['path_ref_type'] === 'scan' || config['path_ref_type'] === 'output' || config['path_ref_type'] === 'custom'
+    ? config['path_ref_type']
+    : 'custom'
+  const pathRefKey = typeof config['path_ref_key'] === 'string' && config['path_ref_key'].trim() !== ''
+    ? config['path_ref_key']
+    : path
+  const pathSuffix = typeof config['path_suffix'] === 'string' ? config['path_suffix'] : ''
   const rawFolderIDs = config['folder_ids']
   const folderIDsCompat: string[] = Array.isArray(rawFolderIDs)
     ? rawFolderIDs.filter((item): item is string => typeof item === 'string')
     : []
   const rawSavedFolderIDs = config['saved_folder_ids']
-  const savedFolderIDs: string[] = Array.isArray(rawSavedFolderIDs)
+  const savedFolderID = typeof config['saved_folder_id'] === 'string'
+    ? config['saved_folder_id']
+    : Array.isArray(rawSavedFolderIDs)
+      ? (rawSavedFolderIDs.find((item): item is string => typeof item === 'string') ?? (folderIDsCompat[0] ?? ''))
+      : (folderIDsCompat[0] ?? '')
+  const savedFolderIDsCompat: string[] = Array.isArray(rawSavedFolderIDs)
     ? rawSavedFolderIDs.filter((item): item is string => typeof item === 'string')
     : folderIDsCompat
 
@@ -1017,63 +1045,52 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
   function setSourceMode(mode: 'path' | 'folders') {
     updateNodeConfig(nodeId, 'source_mode', mode)
     if (mode === 'path') {
+      updateNodeConfig(nodeId, 'saved_folder_id', '')
       updateNodeConfig(nodeId, 'folder_ids', '[]')
       updateNodeConfig(nodeId, 'saved_folder_ids', '[]')
       return
     }
+    updateNodeConfig(nodeId, 'path', '')
+    updateNodeConfig(nodeId, 'path_ref_type', 'custom')
+    updateNodeConfig(nodeId, 'path_ref_key', '')
+    updateNodeConfig(nodeId, 'path_suffix', '')
     updateNodeConfig(nodeId, 'paths', '[]')
     updateNodeConfig(nodeId, 'paths_sources', '[]')
     updateNodeConfig(nodeId, 'paths_option_ids', '[]')
   }
 
-  function setPaths(next: string[]) {
-    updateNodeConfig(nodeId, 'paths', JSON.stringify(next))
+  function setPath(nextValue: { pathRefType: 'scan' | 'output' | 'custom'; pathRefKey: string; pathSuffix: string }) {
+    updateNodeConfig(nodeId, 'path', nextValue.pathRefType === 'custom' ? nextValue.pathRefKey : '')
+    updateNodeConfig(nodeId, 'path_ref_type', nextValue.pathRefType)
+    updateNodeConfig(nodeId, 'path_ref_key', nextValue.pathRefKey)
+    updateNodeConfig(nodeId, 'path_suffix', nextValue.pathSuffix)
+    updateNodeConfig(nodeId, 'path_source', 'custom')
+    updateNodeConfig(nodeId, 'path_option_id', '')
+    // 清空旧数组字段，收口为单值配置。
+    updateNodeConfig(nodeId, 'paths', '[]')
+    updateNodeConfig(nodeId, 'paths_sources', '[]')
+    updateNodeConfig(nodeId, 'paths_option_ids', '[]')
   }
 
-  function setPathSources(next: Array<'preset' | 'custom'>) {
-    updateNodeConfig(nodeId, 'paths_sources', JSON.stringify(next))
+  function setSavedFolderID(nextID: string) {
+    updateNodeConfig(nodeId, 'saved_folder_id', nextID)
+    // 清空旧数组字段，收口为单值配置。
+    updateNodeConfig(nodeId, 'saved_folder_ids', '[]')
+    updateNodeConfig(nodeId, 'folder_ids', '[]')
   }
 
-  function setPathOptionIDs(next: string[]) {
-    updateNodeConfig(nodeId, 'paths_option_ids', JSON.stringify(next))
-  }
-
-  function setSavedFolderIDs(next: string[]) {
-    updateNodeConfig(nodeId, 'saved_folder_ids', JSON.stringify(next))
-    // 同步兼容旧字段，确保历史后端版本也可识别。
-    updateNodeConfig(nodeId, 'folder_ids', JSON.stringify(next))
-  }
-
-  function addPath() {
-    setPaths([...paths, ''])
-    setPathSources([...pathSources, 'custom'])
-    setPathOptionIDs([...pathOptionIDs, ''])
-  }
-
-  function updatePath(index: number, nextValue: { path: string; source: 'preset' | 'custom'; optionId: string }) {
-    setPaths(paths.map((item, i) => (i === index ? nextValue.path : item)))
-    setPathSources(paths.map((_, i) => (i === index ? nextValue.source : (pathSources[i] ?? 'custom'))))
-    setPathOptionIDs(paths.map((_, i) => (i === index ? nextValue.optionId : (pathOptionIDs[i] ?? ''))))
-  }
-
-  function removePath(index: number) {
-    setPaths(paths.filter((_, i) => i !== index))
-    setPathSources(pathSources.filter((_, i) => i !== index))
-    setPathOptionIDs(pathOptionIDs.filter((_, i) => i !== index))
-  }
-
-  function toggleFolderRecord(id: string) {
-    if (savedFolderIDs.includes(id)) {
-      setSavedFolderIDs(savedFolderIDs.filter((item) => item !== id))
+  function selectFolderRecord(id: string) {
+    if (savedFolderID === id) {
+      setSavedFolderID('')
       return
     }
-    setSavedFolderIDs([...savedFolderIDs, id])
+    setSavedFolderID(id)
   }
 
   return (
     <div className="space-y-3">
       <NodeUsageHint>
-        支持两种互斥模式：路径模式（自选目录）与记录模式（从媒体文件夹记录选择）。folders 端口输出目录树，path 端口输出第一个目录路径。
+        支持两种互斥模式：路径模式（单路径）与记录模式（单记录）。folders 端口输出目录树，path 端口输出该目录路径。
       </NodeUsageHint>
       <div className="grid grid-cols-2 gap-2">
         <button
@@ -1103,44 +1120,21 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
       </div>
 
       {sourceMode === 'path' ? (
-        <ConfigField label="文件夹路径列表" hint="每行一个文件夹路径，运行时直接作为目录树输出">
-          <div className="space-y-2">
-            {paths.map((p, i) => (
-              <div key={i} className="flex gap-2">
-                <div className="flex-1">
-                  <ConfiguredPathField
-                    value={{
-                      path: p,
-                      source: pathSources[i] ?? 'custom',
-                      optionId: pathOptionIDs[i] ?? '',
-                    }}
-                    onChange={(next) => updatePath(i, next)}
-                    allowedCategories={['target', 'output', 'general']}
-                    placeholder="/data/folder"
-                    pickerTitle="选择文件夹"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removePath(i)}
-                  className="shrink-0 border-2 border-foreground bg-background px-2 py-2 text-foreground transition-all hover:bg-foreground hover:text-background"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={addPath}
-              className="flex w-full items-center justify-center gap-2 border-2 border-dashed border-foreground bg-background py-2 text-sm font-bold text-muted-foreground transition-all hover:border-solid hover:text-foreground"
-            >
-              <Plus className="h-4 w-4" />
-              添加文件夹
-            </button>
-          </div>
+        <ConfigField label="文件夹路径" hint="运行时将该目录作为目录树输出（仅支持单路径）">
+          <ConfiguredPathField
+            value={{
+              pathRefType,
+              pathRefKey,
+              pathSuffix,
+            }}
+            onChange={setPath}
+            placeholder="/data/folder"
+            pickerTitle="选择文件夹"
+            defaultOutputKey="mixed"
+          />
         </ConfigField>
       ) : (
-        <ConfigField label="数据库已保存文件夹" hint="从数据库中的文件夹记录里选择多个目录">
+        <ConfigField label="数据库已保存文件夹" hint="从数据库中的文件夹记录里选择 1 条目录记录">
           <div className="space-y-2">
             <input
               value={query}
@@ -1163,9 +1157,10 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
                 records.map((record) => (
                   <label key={record.id} className="flex cursor-pointer items-start gap-2 border-2 border-foreground bg-background px-2 py-2">
                     <input
-                      type="checkbox"
-                      checked={savedFolderIDs.includes(record.id)}
-                      onChange={() => toggleFolderRecord(record.id)}
+                      type="radio"
+                      name={`folder-picker-record-${nodeId}`}
+                      checked={savedFolderID === record.id}
+                      onChange={() => selectFolderRecord(record.id)}
                       className="mt-0.5 h-4 w-4 rounded-none border-2 border-foreground text-foreground focus:ring-foreground focus:ring-offset-0"
                     />
                     <span className="min-w-0">
@@ -1176,6 +1171,11 @@ function FolderPickerConfigPanel({ nodeId, config, updateNodeConfig }: FolderPic
                 ))
               )}
             </div>
+            {(savedFolderID === '' && savedFolderIDsCompat.length > 1) && (
+              <p className="text-[10px] font-bold text-amber-700">
+                检测到旧版多选配置，当前仅会使用单条记录，请重新选择后保存。
+              </p>
+            )}
           </div>
         </ConfigField>
       )}
@@ -1342,7 +1342,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
                 position={Position.Left}
                 style={{ left: '-7px', top: '50%', transform: 'translateY(-50%)' }}
                 className={cn(
-                  '!w-2.5 !h-2.5 !border-2 !border-background hover:!scale-125 transition-transform',
+                  '!w-2.5 !h-2.5 !border-2 !border-background transition-transform hover:!scale-125 [&.connecting]:!scale-125 [&.valid]:!ring-2 [&.valid]:!ring-emerald-500',
                   PORT_TYPE_COLORS[port.type] ?? '!bg-foreground',
                 )}
               />
@@ -1363,7 +1363,7 @@ function WorkflowNodeCard({ id, data, selected }: NodeProps<EditorNode>) {
                 position={Position.Right}
                 style={{ right: '-7px', top: '50%', transform: 'translateY(-50%)' }}
                 className={cn(
-                  '!w-2.5 !h-2.5 !border-2 !border-background hover:!scale-125 transition-transform',
+                  '!w-2.5 !h-2.5 !border-2 !border-background transition-transform hover:!scale-125 [&.connecting]:!scale-125 [&.valid]:!ring-2 [&.valid]:!ring-emerald-500',
                   PORT_TYPE_COLORS[port.type] ?? '!bg-foreground',
                 )}
               />
@@ -1666,6 +1666,15 @@ function WorkflowEditorScreen() {
 
   const onConnect = useMemo<OnConnect>(
     () => (connection: Connection) => {
+      const getSchema = (nodeId: string) => {
+        const node = nodesRef.current.find((item) => item.id === nodeId)
+        if (!node) return undefined
+        return schemaMapRef.current.get(node.data.type)
+      }
+      if (!isValidEditorConnection(connection, getSchema)) {
+        setNotice('该连线无效，已阻止连接')
+        return
+      }
       // #region agent log
       sendAgentDebugLog({
         runId: 'pre-fix',
@@ -1681,6 +1690,9 @@ function WorkflowEditorScreen() {
       })
       // #endregion
       setEdges((currentEdges) => {
+        if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
+          return currentEdges
+        }
         const withoutExisting = currentEdges.filter(
           (edge) => !(edge.target === connection.target && edge.targetHandle === connection.targetHandle),
         )
@@ -1689,6 +1701,55 @@ function WorkflowEditorScreen() {
       setNotice(null)
     },
     [setEdges],
+  )
+
+  const onReconnect = useMemo<OnReconnect>(
+    () => (oldEdge, newConnection) => {
+      const getSchema = (nodeId: string) => {
+        const node = nodesRef.current.find((item) => item.id === nodeId)
+        if (!node) return undefined
+        return schemaMapRef.current.get(node.data.type)
+      }
+      if (!isValidEditorConnection(newConnection, getSchema)) {
+        setNotice('该连线无效，已阻止重连')
+        return
+      }
+      if (!newConnection.source || !newConnection.target || !newConnection.sourceHandle || !newConnection.targetHandle) {
+        return
+      }
+
+      setEdges((currentEdges) => {
+        const filtered = currentEdges.filter((edge) => {
+          if (edge.id === oldEdge.id) return false
+          return !(edge.target === newConnection.target && edge.targetHandle === newConnection.targetHandle)
+        })
+        return [
+          ...filtered,
+          {
+            ...oldEdge,
+            source: newConnection.source,
+            target: newConnection.target,
+            sourceHandle: newConnection.sourceHandle,
+            targetHandle: newConnection.targetHandle,
+            animated: false,
+          },
+        ]
+      })
+      setNotice(null)
+    },
+    [setEdges],
+  )
+
+  const isValidConnection = useMemo<IsValidConnection<Connection>>(
+    () => (connection) => {
+      const getSchema = (nodeId: string) => {
+        const node = nodesRef.current.find((item) => item.id === nodeId)
+        if (!node) return undefined
+        return schemaMapRef.current.get(node.data.type)
+      }
+      return isValidEditorConnection(connection, getSchema)
+    },
+    [],
   )
 
   const persistGraph = useCallback(async (
@@ -2216,6 +2277,9 @@ function WorkflowEditorScreen() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              onReconnect={onReconnect}
+              isValidConnection={isValidConnection}
+              edgesReconnectable
               onNodeClick={() => setSelectedEdgeId(null)}
               onPaneClick={() => setSelectedEdgeId(null)}
               onEdgeClick={(_, edge) => setSelectedEdgeId(edge.id)}
@@ -2230,6 +2294,7 @@ function WorkflowEditorScreen() {
               preventScrolling
               colorMode={theme}
               className="bg-background"
+              connectionLineStyle={{ strokeWidth: 3, stroke: 'hsl(var(--primary))' }}
               defaultEdgeOptions={{ style: { strokeWidth: 3, stroke: 'hsl(var(--foreground))' } }}
             >
               <Background gap={20} size={2} color="hsl(var(--foreground))" variant={BackgroundVariant.Dots} style={{ opacity: 0.15 }} />

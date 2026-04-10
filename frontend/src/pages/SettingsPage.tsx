@@ -1,21 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { FolderSearch, Plus, Trash2 } from 'lucide-react'
 
 import { getConfig, updateConfig } from '@/api/config'
 import { DirPicker } from '@/components/DirPicker'
 import { useConfigStore } from '@/store/configStore'
-import type { AppConfig, ConfiguredPathCategory, ConfiguredPathOption } from '@/types'
+import type { AppConfig } from '@/types'
 
 interface FormState {
   scanInputDirs: string[]
   outputDirs: NonNullable<AppConfig['output_dirs']>
-  pathOptions: ConfiguredPathOption[]
 }
 
 type PickerTarget =
   | { kind: 'scan'; index: number }
   | { kind: 'output'; key: keyof NonNullable<AppConfig['output_dirs']> }
-  | { kind: 'path_option'; index: number }
 
 const INITIAL_FORM: FormState = {
   scanInputDirs: [''],
@@ -26,7 +24,6 @@ const INITIAL_FORM: FormState = {
     other: '',
     mixed: '',
   },
-  pathOptions: [],
 }
 
 const OUTPUT_DIR_LABELS: Record<keyof NonNullable<AppConfig['output_dirs']>, string> = {
@@ -37,17 +34,6 @@ const OUTPUT_DIR_LABELS: Record<keyof NonNullable<AppConfig['output_dirs']>, str
   mixed: '混合输出目录',
 }
 
-const PATH_OPTION_CATEGORY_LABELS: Record<ConfiguredPathCategory, string> = {
-  scan: '扫描目录',
-  target: '目标目录',
-  output: '输出目录',
-  general: '通用目录',
-}
-
-function buildPathOptionID() {
-  return `path-${Date.now()}-${Math.floor(Math.random() * 100000)}`
-}
-
 export default function SettingsPage() {
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [isLoading, setIsLoading] = useState(true)
@@ -56,7 +42,12 @@ export default function SettingsPage() {
   const [success, setSuccess] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>({ kind: 'scan', index: 0 })
-  const { sourceDir, load: loadConfigStore } = useConfigStore()
+  const { scanInputDirs, load: loadConfigStore } = useConfigStore()
+
+  const pickerInitialPath = useMemo(() => {
+    const first = scanInputDirs.find((item) => item.trim() !== '')
+    return first ?? '/'
+  }, [scanInputDirs])
 
   useEffect(() => {
     let active = true
@@ -67,11 +58,7 @@ export default function SettingsPage() {
         if (!active) return
 
         setForm({
-          scanInputDirs: response.data.scan_input_dirs?.length
-            ? response.data.scan_input_dirs
-            : response.data.source_dir
-              ? [response.data.source_dir]
-              : [''],
+          scanInputDirs: response.data.scan_input_dirs?.length ? response.data.scan_input_dirs : [''],
           outputDirs: {
             video: response.data.output_dirs?.video ?? '',
             manga: response.data.output_dirs?.manga ?? '',
@@ -79,7 +66,6 @@ export default function SettingsPage() {
             other: response.data.output_dirs?.other ?? '',
             mixed: response.data.output_dirs?.mixed ?? '',
           },
-          pathOptions: response.data.path_options ?? [],
         })
         setError(null)
       } catch (loadError) {
@@ -91,7 +77,9 @@ export default function SettingsPage() {
     }
 
     void loadConfig()
-    return () => { active = false }
+    return () => {
+      active = false
+    }
   }, [])
 
   useEffect(() => {
@@ -103,31 +91,14 @@ export default function SettingsPage() {
       if (pickerTarget.kind === 'scan') {
         const nextScanDirs = [...prev.scanInputDirs]
         nextScanDirs[pickerTarget.index] = path
-        return {
-          ...prev,
-          scanInputDirs: nextScanDirs,
-        }
-      }
-
-      if (pickerTarget.kind === 'output') {
-        return {
-          ...prev,
-          outputDirs: {
-            ...prev.outputDirs,
-            [pickerTarget.key]: path,
-          },
-        }
-      }
-
-      const nextPathOptions = [...prev.pathOptions]
-      const current = nextPathOptions[pickerTarget.index]
-      nextPathOptions[pickerTarget.index] = {
-        ...current,
-        path,
+        return { ...prev, scanInputDirs: nextScanDirs }
       }
       return {
         ...prev,
-        pathOptions: nextPathOptions,
+        outputDirs: {
+          ...prev.outputDirs,
+          [pickerTarget.key]: path,
+        },
       }
     })
     setPickerOpen(false)
@@ -151,30 +122,6 @@ export default function SettingsPage() {
     }))
   }
 
-  function addPathOption() {
-    setForm((prev) => ({
-      ...prev,
-      pathOptions: [
-        ...prev.pathOptions,
-        { id: buildPathOptionID(), name: '', path: '', category: 'general' },
-      ],
-    }))
-  }
-
-  function removePathOption(index: number) {
-    setForm((prev) => ({
-      ...prev,
-      pathOptions: prev.pathOptions.filter((_, i) => i !== index),
-    }))
-  }
-
-  function updatePathOption(index: number, patch: Partial<ConfiguredPathOption>) {
-    setForm((prev) => ({
-      ...prev,
-      pathOptions: prev.pathOptions.map((item, i) => (i === index ? { ...item, ...patch } : item)),
-    }))
-  }
-
   async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
     setIsSaving(true)
@@ -183,19 +130,9 @@ export default function SettingsPage() {
 
     try {
       const cleanedScanInputDirs = form.scanInputDirs.map((item) => item.trim()).filter((item) => item.length > 0)
-      const cleanedPathOptions = form.pathOptions
-        .map((item) => ({
-          ...item,
-          id: item.id.trim(),
-          name: item.name.trim(),
-          path: item.path.trim(),
-        }))
-        .filter((item) => item.id !== '' || item.name !== '' || item.path !== '')
-
       await updateConfig({
         scan_input_dirs: cleanedScanInputDirs,
         output_dirs: form.outputDirs,
-        path_options: cleanedPathOptions,
       })
       await loadConfigStore(true)
       setSuccess('配置已保存')
@@ -260,7 +197,7 @@ export default function SettingsPage() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-black tracking-widest">分类输出目录</label>
-            <p className="mt-1 text-xs font-bold text-muted-foreground">保留用于现有分类输出场景。</p>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">业务可配置路径仅保留扫描输入目录和分类输出目录。</p>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             {Object.entries(OUTPUT_DIR_LABELS).map(([key, label]) => (
@@ -298,75 +235,8 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="space-y-4 border-2 border-foreground bg-card p-6 shadow-hard">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <label className="block text-sm font-black tracking-widest">路径选项库</label>
-              <p className="mt-1 text-xs font-bold text-muted-foreground">
-                可在扫描配置、节点配置中复用；使用处仍支持切换为自定义路径。
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={addPathOption}
-              className="flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
-            >
-              <Plus className="h-4 w-4" />
-              添加路径选项
-            </button>
-          </div>
-          <div className="space-y-3">
-            {form.pathOptions.length === 0 && (
-              <p className="border-2 border-dashed border-foreground px-4 py-5 text-sm font-bold text-muted-foreground">暂无路径选项。</p>
-            )}
-            {form.pathOptions.map((item, index) => (
-              <div key={item.id || index} className="space-y-3 border-2 border-foreground bg-muted/20 p-4">
-                <div className="grid gap-3 md:grid-cols-[1fr,1.2fr,0.8fr,auto]">
-                  <input
-                    value={item.name}
-                    onChange={(event) => updatePathOption(index, { name: event.target.value })}
-                    className="w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
-                    placeholder="名称，例如：默认扫描目录"
-                  />
-                  <div className="flex gap-2">
-                    <input
-                      value={item.path}
-                      onChange={(event) => updatePathOption(index, { path: event.target.value })}
-                      className="w-full border-2 border-foreground bg-background px-3 py-2 text-xs font-mono font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
-                      placeholder="/data/path"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPickerTarget({ kind: 'path_option', index })
-                        setPickerOpen(true)
-                      }}
-                      className="shrink-0 border-2 border-foreground bg-background px-3 py-2 text-foreground transition-all hover:bg-foreground hover:text-background"
-                    >
-                      <FolderSearch className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <select
-                    value={item.category}
-                    onChange={(event) => updatePathOption(index, { category: event.target.value as ConfiguredPathCategory })}
-                    className="w-full border-2 border-foreground bg-background px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-foreground focus:ring-offset-1"
-                  >
-                    {Object.entries(PATH_OPTION_CATEGORY_LABELS).map(([category, label]) => (
-                      <option key={category} value={category}>{label}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => removePathOption(index)}
-                    className="shrink-0 border-2 border-red-900 bg-red-100 px-3 py-2 text-red-900 transition-all hover:bg-red-900 hover:text-red-100"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-                <p className="text-[10px] font-bold text-muted-foreground">ID：{item.id}</p>
-              </div>
-            ))}
-          </div>
+        <div className="border-2 border-dashed border-foreground bg-muted/10 px-4 py-4 text-xs font-bold text-muted-foreground">
+          部署级根目录（如 SOURCE_DIR / TARGET_DIR）为只读信息，需通过 Docker 挂载与环境变量修改，应用运行中不可改。
         </div>
 
         {error && <p className="border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">{error}</p>}
@@ -385,8 +255,8 @@ export default function SettingsPage() {
 
       <DirPicker
         open={pickerOpen}
-        initialPath={sourceDir}
-        title={pickerTarget.kind === 'scan' ? '选择扫描输入目录' : pickerTarget.kind === 'output' ? '选择输出目录' : '选择路径'}
+        initialPath={pickerInitialPath}
+        title={pickerTarget.kind === 'scan' ? '选择扫描输入目录' : '选择输出目录'}
         onConfirm={addDir}
         onCancel={() => setPickerOpen(false)}
       />

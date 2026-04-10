@@ -17,13 +17,6 @@ type SQLiteConfigRepository struct {
 	db *sql.DB
 }
 
-var validPathOptionCategories = map[string]struct{}{
-	"scan":    {},
-	"target":  {},
-	"output":  {},
-	"general": {},
-}
-
 func NewConfigRepository(db *sql.DB) ConfigRepository {
 	return &SQLiteConfigRepository{db: db}
 }
@@ -102,12 +95,10 @@ func (r *SQLiteConfigRepository) GetAppConfig(ctx context.Context) (*AppConfig, 
 		return &cfg, nil
 	}
 
-	var cfg AppConfig
-	if err := json.Unmarshal([]byte(rawValue), &cfg); err != nil {
+	cfg, err := mapLegacyAppConfigJSON([]byte(rawValue))
+	if err != nil {
 		return nil, fmt.Errorf("configRepo.GetAppConfig unmarshal: %w", err)
 	}
-
-	cfg = normalizeAppConfig(cfg)
 	if cfg.Version <= 0 {
 		cfg.Version = version
 	}
@@ -163,11 +154,12 @@ ON CONFLICT(id) DO UPDATE SET
 	if err := setConfigValue(ctx, tx, "scan_cron", normalized.ScanCron); err != nil {
 		return fmt.Errorf("configRepo.SaveAppConfig set scan_cron: %w", err)
 	}
-	if err := setConfigValue(ctx, tx, "source_dir", normalized.SourceDir); err != nil {
-		return fmt.Errorf("configRepo.SaveAppConfig set source_dir: %w", err)
+	outputDirsJSON, err := json.Marshal(normalized.OutputDirs)
+	if err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig marshal output_dirs: %w", err)
 	}
-	if err := setConfigValue(ctx, tx, "target_dir", normalized.TargetDir); err != nil {
-		return fmt.Errorf("configRepo.SaveAppConfig set target_dir: %w", err)
+	if err := setConfigValue(ctx, tx, "output_dirs", string(outputDirsJSON)); err != nil {
+		return fmt.Errorf("configRepo.SaveAppConfig set output_dirs: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -203,17 +195,8 @@ func (r *SQLiteConfigRepository) EnsureAppConfig(ctx context.Context) error {
 func mapLegacyConfig(values map[string]string) AppConfig {
 	cfg := defaultAppConfig()
 
-	if value, ok := values["source_dir"]; ok {
-		cfg.SourceDir = strings.TrimSpace(value)
-	}
 	if value, ok := values["scan_cron"]; ok {
 		cfg.ScanCron = strings.TrimSpace(value)
-	}
-	if value, ok := values["target_dir"]; ok {
-		cfg.TargetDir = strings.TrimSpace(value)
-	}
-	if cfg.TargetDir != "" {
-		cfg.TargetDirs = []string{cfg.TargetDir}
 	}
 
 	rawScanInputDirs, hasScanInputDirs := values["scan_input_dirs"]
@@ -223,11 +206,26 @@ func mapLegacyConfig(values map[string]string) AppConfig {
 			cfg.ScanInputDirs = cleanPathList(dirs)
 		}
 	}
-	if len(cfg.ScanInputDirs) == 0 && cfg.SourceDir != "" {
-		cfg.ScanInputDirs = []string{cfg.SourceDir}
+	var legacySourceDir string
+	if value, ok := values["source_dir"]; ok {
+		legacySourceDir = strings.TrimSpace(value)
+	}
+	if len(cfg.ScanInputDirs) == 0 && legacySourceDir != "" {
+		cfg.ScanInputDirs = []string{legacySourceDir}
 	}
 
-	cfg.OutputDirs = fillDefaultOutputDirs(cfg.OutputDirs, cfg.TargetDir)
+	var legacyTargetDir string
+	if value, ok := values["target_dir"]; ok {
+		legacyTargetDir = strings.TrimSpace(value)
+	}
+	if rawOutputDirs, ok := values["output_dirs"]; ok && strings.TrimSpace(rawOutputDirs) != "" {
+		var outputDirs AppConfigOutputDirs
+		if err := json.Unmarshal([]byte(rawOutputDirs), &outputDirs); err == nil {
+			cfg.OutputDirs = outputDirs
+		}
+	}
+
+	cfg.OutputDirs = fillDefaultOutputDirs(cfg.OutputDirs, legacyTargetDir)
 
 	return cfg
 }
@@ -237,10 +235,6 @@ func defaultAppConfig() AppConfig {
 		Version:       1,
 		ScanInputDirs: []string{},
 		ScanCron:      "",
-		SourceDir:     "",
-		TargetDir:     "",
-		TargetDirs:    []string{},
-		PathOptions:   []AppConfigPathOption{},
 		OutputDirs: AppConfigOutputDirs{
 			Video: "",
 			Manga: "",
@@ -259,19 +253,7 @@ func normalizeAppConfig(value AppConfig) AppConfig {
 	}
 
 	normalized.ScanCron = strings.TrimSpace(value.ScanCron)
-	normalized.SourceDir = strings.TrimSpace(value.SourceDir)
-	normalized.TargetDir = strings.TrimSpace(value.TargetDir)
-	normalized.TargetDirs = cleanPathList(value.TargetDirs)
-	if len(normalized.TargetDirs) == 0 && normalized.TargetDir != "" {
-		normalized.TargetDirs = []string{normalized.TargetDir}
-	}
-	if normalized.TargetDir == "" && len(normalized.TargetDirs) > 0 {
-		normalized.TargetDir = normalized.TargetDirs[0]
-	}
 	normalized.ScanInputDirs = cleanPathList(value.ScanInputDirs)
-	if len(normalized.ScanInputDirs) == 0 && normalized.SourceDir != "" {
-		normalized.ScanInputDirs = []string{normalized.SourceDir}
-	}
 
 	normalized.OutputDirs = AppConfigOutputDirs{
 		Video: strings.TrimSpace(value.OutputDirs.Video),
@@ -280,39 +262,13 @@ func normalizeAppConfig(value AppConfig) AppConfig {
 		Other: strings.TrimSpace(value.OutputDirs.Other),
 		Mixed: strings.TrimSpace(value.OutputDirs.Mixed),
 	}
-	normalized.PathOptions = normalizePathOptions(value.PathOptions)
-	normalized.OutputDirs = fillDefaultOutputDirs(normalized.OutputDirs, normalized.TargetDir)
 
 	return normalized
 }
 
 func normalizeAppConfigForSave(value AppConfig) (AppConfig, error) {
-	rawPathOptions := value.PathOptions
 	normalized := normalizeAppConfig(value)
 	var err error
-
-	normalized.SourceDir, err = normalizeOptionalAbsPath(normalized.SourceDir)
-	if err != nil {
-		return AppConfig{}, fmt.Errorf("%w: source_dir: %v", ErrInvalidConfig, err)
-	}
-	normalized.TargetDir, err = normalizeOptionalAbsPath(normalized.TargetDir)
-	if err != nil {
-		return AppConfig{}, fmt.Errorf("%w: target_dir: %v", ErrInvalidConfig, err)
-	}
-	normalized.TargetDirs = cleanPathList(normalized.TargetDirs)
-	for index, item := range normalized.TargetDirs {
-		normalizedItem, normalizeErr := normalizeOptionalAbsPath(item)
-		if normalizeErr != nil {
-			return AppConfig{}, fmt.Errorf("%w: target_dirs[%d]: %v", ErrInvalidConfig, index, normalizeErr)
-		}
-		normalized.TargetDirs[index] = normalizedItem
-	}
-	if len(normalized.TargetDirs) == 0 && normalized.TargetDir != "" {
-		normalized.TargetDirs = []string{normalized.TargetDir}
-	}
-	if normalized.TargetDir == "" && len(normalized.TargetDirs) > 0 {
-		normalized.TargetDir = normalized.TargetDirs[0]
-	}
 
 	normalized.ScanInputDirs = cleanPathList(normalized.ScanInputDirs)
 	for index, item := range normalized.ScanInputDirs {
@@ -343,12 +299,7 @@ func normalizeAppConfigForSave(value AppConfig) (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, fmt.Errorf("%w: output_dirs.mixed: %v", ErrInvalidConfig, err)
 	}
-	normalized.PathOptions, err = normalizePathOptionsForSave(rawPathOptions)
-	if err != nil {
-		return AppConfig{}, err
-	}
 
-	normalized.OutputDirs = fillDefaultOutputDirs(normalized.OutputDirs, normalized.TargetDir)
 	return normalized, nil
 }
 
@@ -399,76 +350,33 @@ func cleanPathList(raw []string) []string {
 	return cleaned
 }
 
-func normalizePathOptions(raw []AppConfigPathOption) []AppConfigPathOption {
-	if len(raw) == 0 {
-		return []AppConfigPathOption{}
+func mapLegacyAppConfigJSON(raw []byte) (AppConfig, error) {
+	type legacyAppConfig struct {
+		Version       int                 `json:"version"`
+		ScanInputDirs []string            `json:"scan_input_dirs"`
+		ScanCron      string              `json:"scan_cron"`
+		OutputDirs    AppConfigOutputDirs `json:"output_dirs"`
+		SourceDir     string              `json:"source_dir"`
+		TargetDir     string              `json:"target_dir"`
 	}
 
-	cleaned := make([]AppConfigPathOption, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-	for _, item := range raw {
-		id := strings.TrimSpace(item.ID)
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		cleaned = append(cleaned, AppConfigPathOption{
-			ID:       id,
-			Name:     strings.TrimSpace(item.Name),
-			Path:     strings.TrimSpace(item.Path),
-			Category: strings.TrimSpace(item.Category),
-		})
+	var payload legacyAppConfig
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return AppConfig{}, err
 	}
 
-	return cleaned
-}
-
-func normalizePathOptionsForSave(raw []AppConfigPathOption) ([]AppConfigPathOption, error) {
-	if len(raw) == 0 {
-		return []AppConfigPathOption{}, nil
+	cfg := AppConfig{
+		Version:       payload.Version,
+		ScanInputDirs: payload.ScanInputDirs,
+		ScanCron:      payload.ScanCron,
+		OutputDirs:    payload.OutputDirs,
 	}
-
-	normalized := make([]AppConfigPathOption, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-	for index, item := range raw {
-		normalizedItem := AppConfigPathOption{
-			ID:       strings.TrimSpace(item.ID),
-			Name:     strings.TrimSpace(item.Name),
-			Path:     strings.TrimSpace(item.Path),
-			Category: strings.TrimSpace(item.Category),
-		}
-
-		if normalizedItem.ID == "" {
-			return nil, fmt.Errorf("%w: path_options[%d].id is required", ErrInvalidConfig, index)
-		}
-		if _, ok := seen[normalizedItem.ID]; ok {
-			return nil, fmt.Errorf("%w: path_options[%d].id duplicated", ErrInvalidConfig, index)
-		}
-		seen[normalizedItem.ID] = struct{}{}
-		if normalizedItem.Name == "" {
-			return nil, fmt.Errorf("%w: path_options[%d].name is required", ErrInvalidConfig, index)
-		}
-		if normalizedItem.Category == "" {
-			return nil, fmt.Errorf("%w: path_options[%d].category is required", ErrInvalidConfig, index)
-		}
-		if _, ok := validPathOptionCategories[normalizedItem.Category]; !ok {
-			return nil, fmt.Errorf("%w: path_options[%d].category is invalid", ErrInvalidConfig, index)
-		}
-		normalizedPath, err := normalizeOptionalAbsPath(normalizedItem.Path)
-		if err != nil || normalizedPath == "" {
-			if err != nil {
-				return nil, fmt.Errorf("%w: path_options[%d].path: %v", ErrInvalidConfig, index, err)
-			}
-			return nil, fmt.Errorf("%w: path_options[%d].path is required", ErrInvalidConfig, index)
-		}
-		normalizedItem.Path = normalizedPath
-		normalized = append(normalized, normalizedItem)
+	cfg = normalizeAppConfig(cfg)
+	if len(cfg.ScanInputDirs) == 0 && strings.TrimSpace(payload.SourceDir) != "" {
+		cfg.ScanInputDirs = []string{strings.TrimSpace(payload.SourceDir)}
 	}
-
-	return normalized, nil
+	cfg.OutputDirs = fillDefaultOutputDirs(cfg.OutputDirs, payload.TargetDir)
+	return cfg, nil
 }
 
 func normalizeOptionalAbsPath(raw string) (string, error) {

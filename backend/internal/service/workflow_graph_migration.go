@@ -66,6 +66,9 @@ func normalizeWorkflowGraphJSON(raw string) (string, bool, error) {
 			changed = true
 			continue
 		}
+		if migrateNodePathConfig(&node) {
+			changed = true
+		}
 
 		if len(node.Inputs) > 0 {
 			cleanInputs := make(map[string]repository.NodeInputSpec, len(node.Inputs))
@@ -152,4 +155,62 @@ func normalizeWorkflowGraphJSON(raw string) (string, bool, error) {
 
 func isStepResultsPort(name string) bool {
 	return strings.HasPrefix(strings.TrimSpace(name), "step_results")
+}
+
+func migrateNodePathConfig(node *repository.WorkflowGraphNode) bool {
+	if node == nil || node.Config == nil {
+		return false
+	}
+
+	changed := false
+	legacyPath := ""
+	if value := normalizeWorkflowPath(stringConfig(node.Config, "target_dir")); value != "" {
+		legacyPath = value
+	}
+	if legacyPath == "" {
+		if value := normalizeWorkflowPath(stringConfig(node.Config, "output_dir")); value != "" {
+			legacyPath = value
+		}
+	}
+
+	if strings.TrimSpace(stringConfig(node.Config, "path_ref_type")) == "" {
+		switch strings.TrimSpace(node.Type) {
+		case "move-node":
+			node.Config["path_ref_type"] = workflowPathRefTypeOutput
+			node.Config["path_ref_key"] = "mixed"
+			changed = true
+		case "compress-node":
+			node.Config["path_ref_type"] = workflowPathRefTypeOutput
+			node.Config["path_ref_key"] = "mixed"
+			changed = true
+		case "thumbnail-node":
+			node.Config["path_ref_type"] = workflowPathRefTypeOutput
+			node.Config["path_ref_key"] = "video"
+			changed = true
+		}
+	}
+
+	if legacyPath != "" {
+		node.Config["path_ref_type"] = workflowPathRefTypeCustom
+		node.Config["path_ref_key"] = legacyPath
+		changed = true
+	}
+
+	legacyKeys := []string{
+		"target_dir",
+		"targetDir",
+		"output_dir",
+		"target_dir_source",
+		"output_dir_source",
+		"target_dir_option_id",
+		"output_dir_option_id",
+	}
+	for _, key := range legacyKeys {
+		if _, ok := node.Config[key]; ok {
+			delete(node.Config, key)
+			changed = true
+		}
+	}
+
+	return changed
 }

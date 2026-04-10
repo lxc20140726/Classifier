@@ -62,8 +62,6 @@ func TestConfigHandler(t *testing.T) {
 	t.Run("get returns stored config", func(t *testing.T) {
 		err := repo.SaveAppConfig(context.Background(), &repository.AppConfig{
 			ScanInputDirs: []string{"/media/source", "/media/source-2"},
-			SourceDir:     "/media/source",
-			TargetDir:     "/media/target",
 			OutputDirs: repository.AppConfigOutputDirs{
 				Video: "/media/target/video",
 				Manga: "/media/target/manga",
@@ -91,12 +89,6 @@ func TestConfigHandler(t *testing.T) {
 			t.Fatalf("json.Unmarshal() error = %v", err)
 		}
 
-		if payload.Data.SourceDir != "/media/source" {
-			t.Fatalf("source_dir = %q, want /media/source", payload.Data.SourceDir)
-		}
-		if payload.Data.TargetDir != "/media/target" {
-			t.Fatalf("target_dir = %q, want /media/target", payload.Data.TargetDir)
-		}
 		if !reflect.DeepEqual(payload.Data.ScanInputDirs, []string{"/media/source", "/media/source-2"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/media/source /media/source-2]", payload.Data.ScanInputDirs)
 		}
@@ -105,7 +97,7 @@ func TestConfigHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("put saves structured config and syncs legacy keys", func(t *testing.T) {
+	t.Run("put saves structured config and no longer rewrites legacy keys", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
 			"scan_input_dirs":["/mnt/source","/mnt/source-2"],
 			"scan_cron":"*/15 * * * *",
@@ -138,37 +130,8 @@ func TestConfigHandler(t *testing.T) {
 		if storedConfig.ScanCron != "*/15 * * * *" {
 			t.Fatalf("scan_cron = %q, want */15 * * * *", storedConfig.ScanCron)
 		}
-
-		sourceDir, err := repo.Get(context.Background(), "source_dir")
-		if err != nil {
-			t.Fatalf("repo.Get(source_dir) error = %v", err)
-		}
-		if sourceDir != "/mnt/source" {
-			t.Fatalf("source_dir = %q, want /mnt/source", sourceDir)
-		}
-
-		targetDir, err := repo.Get(context.Background(), "target_dir")
-		if err != nil {
-			t.Fatalf("repo.Get(target_dir) error = %v", err)
-		}
-		if targetDir != "/mnt/target" {
-			t.Fatalf("target_dir = %q, want /mnt/target", targetDir)
-		}
-
-		rawScanInputDirs, err := repo.Get(context.Background(), "scan_input_dirs")
-		if err != nil {
-			t.Fatalf("repo.Get(scan_input_dirs) error = %v", err)
-		}
-		if rawScanInputDirs != `["/mnt/source","/mnt/source-2"]` {
-			t.Fatalf("scan_input_dirs = %q, want %q", rawScanInputDirs, `["/mnt/source","/mnt/source-2"]`)
-		}
-
-		rawScanCron, err := repo.Get(context.Background(), "scan_cron")
-		if err != nil {
-			t.Fatalf("repo.Get(scan_cron) error = %v", err)
-		}
-		if rawScanCron != "*/15 * * * *" {
-			t.Fatalf("scan_cron = %q, want */15 * * * *", rawScanCron)
+		if storedConfig.OutputDirs.Video != "/mnt/target/video" {
+			t.Fatalf("output_dirs.video = %q, want /mnt/target/video", storedConfig.OutputDirs.Video)
 		}
 	})
 
@@ -185,7 +148,7 @@ func TestConfigHandler(t *testing.T) {
 	})
 
 	t.Run("put invalid json returns 400", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{"source_dir"`))
+		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{"scan_input_dirs"`))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
@@ -237,124 +200,12 @@ func TestConfigHandler(t *testing.T) {
 			t.Fatalf("json.Unmarshal() error = %v", err)
 		}
 
-		if payload.Data.SourceDir != "/legacy/source" {
-			t.Fatalf("source_dir = %q, want /legacy/source", payload.Data.SourceDir)
-		}
-		if payload.Data.TargetDir != "/legacy/target" {
-			t.Fatalf("target_dir = %q, want /legacy/target", payload.Data.TargetDir)
-		}
 		expectedVideoDir := filepath.Join("/legacy/target", "video")
 		if payload.Data.OutputDirs.Video != expectedVideoDir {
 			t.Fatalf("output_dirs.video = %q, want %q", payload.Data.OutputDirs.Video, expectedVideoDir)
 		}
 		if !reflect.DeepEqual(payload.Data.ScanInputDirs, []string{"/legacy/source", "/legacy/source-2"}) {
 			t.Fatalf("scan_input_dirs = %#v, want [/legacy/source /legacy/source-2]", payload.Data.ScanInputDirs)
-		}
-		if payload.Data.ScanCron != "" {
-			t.Fatalf("scan_cron = %q, want empty", payload.Data.ScanCron)
-		}
-	})
-
-	t.Run("put partial payload preserves existing scan fields", func(t *testing.T) {
-		err := repo.SaveAppConfig(context.Background(), &repository.AppConfig{
-			ScanInputDirs: []string{"/seed/source"},
-			ScanCron:      "0 * * * *",
-			SourceDir:     "/seed/source",
-			TargetDir:     "/seed/target",
-			PathOptions: []repository.AppConfigPathOption{
-				{ID: "seed-scan", Name: "扫描目录", Path: "/seed/source", Category: "scan"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("repo.SaveAppConfig() error = %v", err)
-		}
-
-		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
-			"target_dir":"/seed/new-target",
-			"output_dirs":{"video":"/seed/new-target/video"}
-		}`))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
-		}
-
-		storedConfig, getErr := repo.GetAppConfig(context.Background())
-		if getErr != nil {
-			t.Fatalf("repo.GetAppConfig() error = %v", getErr)
-		}
-		if storedConfig.SourceDir != "/seed/source" {
-			t.Fatalf("source_dir = %q, want /seed/source", storedConfig.SourceDir)
-		}
-		if storedConfig.ScanCron != "0 * * * *" {
-			t.Fatalf("scan_cron = %q, want 0 * * * *", storedConfig.ScanCron)
-		}
-		if !reflect.DeepEqual(storedConfig.ScanInputDirs, []string{"/seed/source"}) {
-			t.Fatalf("scan_input_dirs = %#v, want [/seed/source]", storedConfig.ScanInputDirs)
-		}
-		if !reflect.DeepEqual(storedConfig.PathOptions, []repository.AppConfigPathOption{
-			{ID: "seed-scan", Name: "扫描目录", Path: "/seed/source", Category: "scan"},
-		}) {
-			t.Fatalf("path_options = %#v, want seed options", storedConfig.PathOptions)
-		}
-	})
-
-	t.Run("put supports path_options patch and keeps scan/output fields", func(t *testing.T) {
-		err := repo.SaveAppConfig(context.Background(), &repository.AppConfig{
-			ScanInputDirs: []string{"/seed/source", "/seed/source-2"},
-			SourceDir:     "/seed/source",
-			OutputDirs: repository.AppConfigOutputDirs{
-				Video: "/seed/out/video",
-			},
-		})
-		if err != nil {
-			t.Fatalf("repo.SaveAppConfig() error = %v", err)
-		}
-
-		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
-			"path_options": [
-				{"id":"scan-1","name":"扫描目录A","path":"/seed/source","category":"scan"},
-				{"id":"general-1","name":"通用目录","path":"/seed/general","category":"general"}
-			]
-		}`))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
-		}
-
-		storedConfig, getErr := repo.GetAppConfig(context.Background())
-		if getErr != nil {
-			t.Fatalf("repo.GetAppConfig() error = %v", getErr)
-		}
-		if !reflect.DeepEqual(storedConfig.ScanInputDirs, []string{"/seed/source", "/seed/source-2"}) {
-			t.Fatalf("scan_input_dirs = %#v, want unchanged", storedConfig.ScanInputDirs)
-		}
-		if storedConfig.OutputDirs.Video != "/seed/out/video" {
-			t.Fatalf("output_dirs.video = %q, want /seed/out/video", storedConfig.OutputDirs.Video)
-		}
-		if !reflect.DeepEqual(storedConfig.PathOptions, []repository.AppConfigPathOption{
-			{ID: "scan-1", Name: "扫描目录A", Path: "/seed/source", Category: "scan"},
-			{ID: "general-1", Name: "通用目录", Path: "/seed/general", Category: "general"},
-		}) {
-			t.Fatalf("path_options = %#v, want patched options", storedConfig.PathOptions)
-		}
-	})
-
-	t.Run("put legacy payload without path_options remains compatible", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPut, "/config", bytes.NewBufferString(`{
-			"scan_input_dirs":["/compat/source"]
-		}`))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
 		}
 	})
 }

@@ -100,21 +100,25 @@ func categoryRouterExtractItems(inputs map[string]*TypedValue) ([]ProcessingItem
 func categoryRouterToItems(raw any) ([]ProcessingItem, bool) {
 	switch value := raw.(type) {
 	case ProcessingItem:
-		return []ProcessingItem{value}, true
+		return []ProcessingItem{processingItemNormalize(value)}, true
 	case *ProcessingItem:
 		if value == nil {
 			return nil, false
 		}
-		return []ProcessingItem{*value}, true
+		return []ProcessingItem{processingItemNormalize(*value)}, true
 	case []ProcessingItem:
-		return append([]ProcessingItem(nil), value...), true
+		out := make([]ProcessingItem, 0, len(value))
+		for _, item := range value {
+			out = append(out, processingItemNormalize(item))
+		}
+		return out, true
 	case []*ProcessingItem:
 		out := make([]ProcessingItem, 0, len(value))
 		for _, item := range value {
 			if item == nil {
 				continue
 			}
-			out = append(out, *item)
+			out = append(out, processingItemNormalize(*item))
 		}
 		return out, true
 	case []any:
@@ -139,15 +143,16 @@ func categoryRouterToItems(raw any) ([]ProcessingItem, bool) {
 func categoryRouterToItem(raw any) (ProcessingItem, bool) {
 	switch value := raw.(type) {
 	case ProcessingItem:
-		return value, true
+		return processingItemNormalize(value), true
 	case *ProcessingItem:
 		if value == nil {
 			return ProcessingItem{}, false
 		}
-		return *value, true
+		return processingItemNormalize(*value), true
 	case map[string]any:
 		item := ProcessingItem{
 			SourcePath:         anyString(value["source_path"]),
+			CurrentPath:        anyString(value["current_path"]),
 			FolderID:           anyString(value["folder_id"]),
 			FolderName:         anyString(value["folder_name"]),
 			TargetName:         anyString(value["target_name"]),
@@ -158,7 +163,7 @@ func categoryRouterToItem(raw any) (ProcessingItem, bool) {
 			SourceKind:         anyString(value["source_kind"]),
 			OriginalSourcePath: anyString(value["original_source_path"]),
 		}
-		return item, true
+		return processingItemNormalize(item), true
 	default:
 		return ProcessingItem{}, false
 	}

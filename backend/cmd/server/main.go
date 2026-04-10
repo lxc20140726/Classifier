@@ -70,6 +70,7 @@ func main() {
 	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, scannerSvc)
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, snapshotRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
 	workflowRunnerSvc.SetProcessingReviewRepository(processingReviewRepo)
+	workflowRunnerSvc.SetConfigRepository(configRepo)
 	scheduledWorkflowSvc := service.NewScheduledWorkflowService(scheduledWorkflowRepo, workflowRunnerSvc, scanJobStarterSvc)
 	scheduledWorkflowScheduler := service.NewScheduledWorkflowScheduler(scheduledWorkflowRepo, scheduledWorkflowSvc)
 	if err := service.NormalizeWorkflowDefinitionGraphs(context.Background(), workflowDefRepo); err != nil {

@@ -67,13 +67,13 @@ func TestFolderSplitterExecutorMixedSplitFirstLevel(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("len(items) = %d, want 2", len(items))
 	}
-	if items[0].SourcePath != "/root/mixed/child-a" || items[0].Category != "video" {
+	if items[0].SourcePath != "/root/mixed/child-a" || items[0].CurrentPath != "/root/mixed/child-a" || items[0].Category != "video" {
 		t.Fatalf("items[0] = %#v, want child-a video", items[0])
 	}
 	if items[0].RootPath != "/root/mixed" || items[0].RelativePath != "child-a" || items[0].SourceKind != ProcessingItemSourceKindDirectory {
 		t.Fatalf("items[0] root/relative/source_kind = %q/%q/%q, want /root/mixed/child-a/directory", items[0].RootPath, items[0].RelativePath, items[0].SourceKind)
 	}
-	if items[1].SourcePath != "/root/mixed/child-b" || items[1].Category != "photo" {
+	if items[1].SourcePath != "/root/mixed/child-b" || items[1].CurrentPath != "/root/mixed/child-b" || items[1].Category != "photo" {
 		t.Fatalf("items[1] = %#v, want child-b photo", items[1])
 	}
 	if items[1].RootPath != "/root/mixed" || items[1].RelativePath != "child-b" || items[1].SourceKind != ProcessingItemSourceKindDirectory {
@@ -623,22 +623,28 @@ func TestCompressNodeExecutorOutputsArchiveItemsAndCompatibility(t *testing.T) {
 	if items[0].SourcePath != sourcePath {
 		t.Fatalf("items[0].SourcePath = %q, want %q", items[0].SourcePath, sourcePath)
 	}
+	if items[0].CurrentPath != sourcePath {
+		t.Fatalf("items[0].CurrentPath = %q, want %q", items[0].CurrentPath, sourcePath)
+	}
 
 	archiveItems, ok := output.Outputs["archive_items"].Value.([]ProcessingItem)
 	if !ok || len(archiveItems) != 1 {
 		t.Fatalf("archive_items output type/len = %T/%d, want []ProcessingItem/1", output.Outputs["archive_items"].Value, len(archiveItems))
 	}
 	archiveItem := archiveItems[0]
-	if archiveItem.SourcePath == sourcePath {
-		t.Fatalf("archive_items[0].SourcePath should point to archive file, got source path %q", archiveItem.SourcePath)
+	if archiveItem.SourcePath != sourcePath {
+		t.Fatalf("archive_items[0].SourcePath = %q, want original source %q", archiveItem.SourcePath, sourcePath)
 	}
-	if got, want := archiveItem.ParentPath, filepath.Dir(archiveItem.SourcePath); got != want {
+	if archiveItem.CurrentPath == sourcePath {
+		t.Fatalf("archive_items[0].CurrentPath should point to archive file, got current path %q", archiveItem.CurrentPath)
+	}
+	if got, want := archiveItem.ParentPath, filepath.Dir(archiveItem.CurrentPath); got != want {
 		t.Fatalf("archive_items[0].ParentPath = %q, want %q", got, want)
 	}
-	if got, want := archiveItem.FolderName, filepath.Base(archiveItem.SourcePath); got != want {
+	if got, want := archiveItem.FolderName, filepath.Base(archiveItem.CurrentPath); got != want {
 		t.Fatalf("archive_items[0].FolderName = %q, want %q", got, want)
 	}
-	if got, want := archiveItem.TargetName, filepath.Base(archiveItem.SourcePath); got != want {
+	if got, want := archiveItem.TargetName, filepath.Base(archiveItem.CurrentPath); got != want {
 		t.Fatalf("archive_items[0].TargetName = %q, want %q", got, want)
 	}
 	if archiveItem.FolderID != "folder-1" {
@@ -664,7 +670,7 @@ func TestCompressNodeExecutorOutputsArchiveItemsAndCompatibility(t *testing.T) {
 	if !ok || len(stepResults) != 1 {
 		t.Fatalf("step_results output type/len = %T/%d, want []ProcessingStepResult/1", output.Outputs["step_results"].Value, len(stepResults))
 	}
-	if got, want := stepResults[0].TargetPath, normalizeWorkflowPath(archiveItem.SourcePath); got != want {
+	if got, want := stepResults[0].TargetPath, normalizeWorkflowPath(archiveItem.CurrentPath); got != want {
 		t.Fatalf("step_results[0].TargetPath = %q, want %q", got, want)
 	}
 
@@ -757,8 +763,8 @@ func TestCompressNodeIntegrationArchiveItemsAndLegacyItems(t *testing.T) {
 		if !pathExists(t, movedPath) {
 			t.Fatalf("moved archive %q should exist", movedPath)
 		}
-		if pathExists(t, archiveItems[0].SourcePath) {
-			t.Fatalf("original archive path %q should not exist after move", archiveItems[0].SourcePath)
+		if pathExists(t, archiveItems[0].CurrentPath) {
+			t.Fatalf("original archive path %q should not exist after move", archiveItems[0].CurrentPath)
 		}
 	})
 
@@ -816,12 +822,12 @@ func TestCompressNodeIntegrationArchiveItemsAndLegacyItems(t *testing.T) {
 		if len(movedItems) != 1 {
 			t.Fatalf("len(movedItems) = %d, want 1", len(movedItems))
 		}
-		movedSourcePath := movedItems[0].SourcePath
-		if filepath.Base(movedSourcePath) != "album" {
-			t.Fatalf("moved folder name = %q, want album", filepath.Base(movedSourcePath))
+		movedCurrentPath := movedItems[0].CurrentPath
+		if filepath.Base(movedCurrentPath) != "album" {
+			t.Fatalf("moved folder name = %q, want album", filepath.Base(movedCurrentPath))
 		}
-		if !pathExists(t, movedSourcePath) {
-			t.Fatalf("moved folder %q should exist", movedSourcePath)
+		if !pathExists(t, movedCurrentPath) {
+			t.Fatalf("moved folder %q should exist", movedCurrentPath)
 		}
 		if pathExists(t, sourcePath) {
 			t.Fatalf("source folder %q should not exist after move", sourcePath)
@@ -922,6 +928,102 @@ func TestThumbnailNodeHelpersAndFfmpegMissing(t *testing.T) {
 	})
 }
 
+func TestThumbnailNodeExecutorUsesCurrentPathAndBusinessErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("directory_input_prefers_current_path", func(t *testing.T) {
+		t.Parallel()
+
+		adapter := fs.NewMockAdapter()
+		adapter.AddDir("/moved/album", []fs.DirEntry{{Name: "movie.mkv", Size: 100}})
+
+		executor := newThumbnailNodeExecutor(adapter, nil)
+		executor.lookPath = func(string) (string, error) {
+			return "/usr/bin/ffmpeg", nil
+		}
+		executor.runFFmpeg = func(context.Context, string, ...string) ([]byte, error) {
+			return nil, nil
+		}
+
+		out, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{
+				SourcePath:  "/source/album",
+				CurrentPath: "/moved/album",
+				FolderName:  "album",
+				TargetName:  "album",
+				SourceKind:  ProcessingItemSourceKindDirectory,
+			}}),
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		results := out.Outputs["step_results"].Value.([]ProcessingStepResult)
+		if len(results) != 1 {
+			t.Fatalf("len(step_results) = %d, want 1", len(results))
+		}
+		if results[0].SourcePath != "/moved/album" {
+			t.Fatalf("step_results[0].SourcePath = %q, want /moved/album", results[0].SourcePath)
+		}
+		if results[0].TargetPath != "/moved/album/album.jpg" {
+			t.Fatalf("step_results[0].TargetPath = %q, want /moved/album/album.jpg", results[0].TargetPath)
+		}
+	})
+
+	t.Run("non_video_file_returns_business_error", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		filePath := filepath.Join(root, "album.txt")
+		if err := os.WriteFile(filePath, []byte("text"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", filePath, err)
+		}
+
+		executor := newThumbnailNodeExecutor(fs.NewOSAdapter(), nil)
+		executor.lookPath = func(string) (string, error) {
+			return "/usr/bin/ffmpeg", nil
+		}
+
+		_, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{CurrentPath: filePath, SourcePath: "/source/album"}}),
+		})
+		if err == nil {
+			t.Fatalf("Execute() error = nil, want business error")
+		}
+		if !stringsContains(err.Error(), "当前处理项不包含可生成缩略图的视频源") {
+			t.Fatalf("error = %q, want business error message", err.Error())
+		}
+		if stringsContains(err.Error(), "items input is required") {
+			t.Fatalf("error = %q, should not be empty input error", err.Error())
+		}
+	})
+
+	t.Run("directory_without_video_returns_business_error", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		dirPath := filepath.Join(root, "album")
+		mustMkdirAll(t, dirPath)
+		if err := os.WriteFile(filepath.Join(dirPath, "001.jpg"), []byte("img"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", filepath.Join(dirPath, "001.jpg"), err)
+		}
+
+		executor := newThumbnailNodeExecutor(fs.NewOSAdapter(), nil)
+		executor.lookPath = func(string) (string, error) {
+			return "/usr/bin/ffmpeg", nil
+		}
+
+		_, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{CurrentPath: dirPath, SourcePath: "/source/album", SourceKind: ProcessingItemSourceKindDirectory}}),
+		})
+		if err == nil {
+			t.Fatalf("Execute() error = nil, want business error")
+		}
+		if !stringsContains(err.Error(), "当前处理项不包含可生成缩略图的视频源") {
+			t.Fatalf("error = %q, want business error message", err.Error())
+		}
+	})
+}
+
 func TestThumbnailNodeExecutorPersistsCoverImagePath(t *testing.T) {
 	t.Parallel()
 
@@ -952,12 +1054,12 @@ func TestThumbnailNodeExecutorPersistsCoverImagePath(t *testing.T) {
 		return nil, nil
 	}
 
-	_, err := executor.Execute(ctx, NodeExecutionInput{
-		Node: repository.WorkflowGraphNode{Config: map[string]any{"output_dir": "/out"}},
-		Inputs: testInputs(map[string]any{
-			"item": ProcessingItem{FolderID: folder.ID, SourcePath: "/source/album", FolderName: "album", Category: "video"},
-		}),
-	})
+		_, err := executor.Execute(ctx, NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{Config: map[string]any{"output_dir": "/out"}},
+			Inputs: testInputs(map[string]any{
+				"item": ProcessingItem{FolderID: folder.ID, SourcePath: "/source/album", CurrentPath: "/source/album", FolderName: "album", Category: "video", SourceKind: ProcessingItemSourceKindDirectory},
+			}),
+		})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -1005,9 +1107,9 @@ func TestThumbnailNodeExecutorRollbackRemovesFilesAndClearsCover(t *testing.T) {
 			ID:   "snapshot-thumbnail-rb-1",
 			Kind: "post",
 			OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, map[string]TypedValue{
-				"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
-				"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: thumbPath, NodeType: "thumbnail-node", Status: "succeeded"}}},
-			})),
+		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
+		"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: thumbPath, NodeType: "thumbnail-node", Status: "succeeded"}}},
+	})),
 		}},
 	})
 	if err != nil {
@@ -1053,7 +1155,7 @@ func TestEngineV2_AC_ROLL2_ThumbnailNodeRollbackTypedFormat(t *testing.T) {
 	}
 
 	encodedOutputs, err := typedValueMapToJSON(map[string]TypedValue{
-		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
+		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album", CurrentPath: "/source/album"}}},
 		"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: thumbPath, NodeType: "thumbnail-node", Status: "succeeded"}}},
 	}, NewTypeRegistry())
 	if err != nil {

@@ -233,9 +233,6 @@ func (s *ScheduledWorkflowService) BootstrapLegacyScanCron(ctx context.Context, 
 		return nil
 	}
 	sourceDirs := normalizeScanSourceDirs(cfg.ScanInputDirs)
-	if len(sourceDirs) == 0 && strings.TrimSpace(cfg.SourceDir) != "" {
-		sourceDirs = []string{strings.TrimSpace(cfg.SourceDir)}
-	}
 	if len(sourceDirs) == 0 {
 		return nil
 	}

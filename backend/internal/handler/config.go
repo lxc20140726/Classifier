@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -28,14 +30,15 @@ type appConfigOutputDirsPatch struct {
 }
 
 type appConfigPatchRequest struct {
-	Version       *int                              `json:"version"`
-	ScanInputDirs *[]string                         `json:"scan_input_dirs"`
-	ScanCron      *string                           `json:"scan_cron"`
-	SourceDir     *string                           `json:"source_dir"`
-	TargetDir     *string                           `json:"target_dir"`
-	TargetDirs    *[]string                         `json:"target_dirs"`
-	OutputDirs    *appConfigOutputDirsPatch         `json:"output_dirs"`
-	PathOptions   *[]repository.AppConfigPathOption `json:"path_options"`
+	Version         *int                      `json:"version"`
+	ScanInputDirs   *[]string                 `json:"scan_input_dirs"`
+	ScanCron        *string                   `json:"scan_cron"`
+	OutputDirs      *appConfigOutputDirsPatch `json:"output_dirs"`
+	SourceDir       *json.RawMessage          `json:"source_dir"`
+	TargetDir       *json.RawMessage          `json:"target_dir"`
+	TargetDirs      *json.RawMessage          `json:"target_dirs"`
+	PathOptions     *json.RawMessage          `json:"path_options"`
+	DeprecatedField map[string]json.RawMessage
 }
 
 func NewConfigHandler(configRepo repository.ConfigRepository, syncer ConfigSyncer) *ConfigHandler {
@@ -67,6 +70,7 @@ func (h *ConfigHandler) Put(c *gin.Context) {
 
 	payload := *existing
 	applyAppConfigPatch(&payload, patch)
+	logDeprecatedConfigFields(patch)
 
 	if payload.ScanCron != "" {
 		if _, err := cron.ParseStandard(payload.ScanCron); err != nil {
@@ -113,15 +117,6 @@ func applyAppConfigPatch(target *repository.AppConfig, patch appConfigPatchReque
 	if patch.ScanCron != nil {
 		target.ScanCron = *patch.ScanCron
 	}
-	if patch.SourceDir != nil {
-		target.SourceDir = *patch.SourceDir
-	}
-	if patch.TargetDir != nil {
-		target.TargetDir = *patch.TargetDir
-	}
-	if patch.TargetDirs != nil {
-		target.TargetDirs = *patch.TargetDirs
-	}
 	if patch.OutputDirs != nil {
 		if patch.OutputDirs.Video != nil {
 			target.OutputDirs.Video = *patch.OutputDirs.Video
@@ -139,7 +134,24 @@ func applyAppConfigPatch(target *repository.AppConfig, patch appConfigPatchReque
 			target.OutputDirs.Mixed = *patch.OutputDirs.Mixed
 		}
 	}
-	if patch.PathOptions != nil {
-		target.PathOptions = *patch.PathOptions
+}
+
+func logDeprecatedConfigFields(patch appConfigPatchRequest) {
+	fields := make([]string, 0, 4)
+	if patch.SourceDir != nil {
+		fields = append(fields, "source_dir")
 	}
+	if patch.TargetDir != nil {
+		fields = append(fields, "target_dir")
+	}
+	if patch.TargetDirs != nil {
+		fields = append(fields, "target_dirs")
+	}
+	if patch.PathOptions != nil {
+		fields = append(fields, "path_options")
+	}
+	if len(fields) == 0 {
+		return
+	}
+	log.Printf("config handler received deprecated fields (ignored): %v", fields)
 }

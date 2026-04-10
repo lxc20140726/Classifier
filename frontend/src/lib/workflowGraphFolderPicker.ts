@@ -2,8 +2,10 @@ import type { WorkflowGraph, WorkflowGraphNode } from '@/types'
 
 interface FolderPickerConfig {
   source_mode?: unknown
+  saved_folder_id?: unknown
   saved_folder_ids?: unknown
   folder_ids?: unknown
+  path?: unknown
   paths?: unknown
 }
 
@@ -57,39 +59,49 @@ function normalizeFolderIds(raw: unknown): string[] {
   return raw.filter((item): item is string => typeof item === 'string')
 }
 
+function normalizeFirstFolderID(config: FolderPickerConfig | undefined): string {
+  if (!config) return ''
+  if (typeof config.saved_folder_id === 'string') return config.saved_folder_id
+  const saved = normalizeFolderIds(config.saved_folder_ids)
+  if (saved.length > 0) return saved[0]
+  const legacy = normalizeFolderIds(config.folder_ids)
+  if (legacy.length > 0) return legacy[0]
+  return ''
+}
+
 function isEnabledFolderPicker(node: WorkflowGraphNode): boolean {
   return node.type === 'folder-picker' && node.enabled
 }
 
 export interface FolderPickerLaunchCheckResult {
   enabledPickerCount: number
-  initialSelectedFolderIds: string[]
+  initialSelectedFolderId: string
 }
 
 export function checkLaunchableFolderPickers(graphJson: string): FolderPickerLaunchCheckResult {
   const graph = parseGraphJson(graphJson)
   const enabledPickers = graph.nodes.filter(isEnabledFolderPicker)
 
-  const initialSelectedFolderIds = enabledPickers.length > 0
-    ? normalizeFolderIds((enabledPickers[0].config as FolderPickerConfig | undefined)?.saved_folder_ids)
-    : []
+  const initialSelectedFolderId = enabledPickers.length > 0
+    ? normalizeFirstFolderID(enabledPickers[0].config as FolderPickerConfig | undefined)
+    : ''
 
   return {
     enabledPickerCount: enabledPickers.length,
-    initialSelectedFolderIds,
+    initialSelectedFolderId,
   }
 }
 
-export function applyFolderSelectionToEnabledPickers(graphJson: string, selectedFolderIds: string[]): string {
+export function applyFolderSelectionToEnabledPickers(graphJson: string, selectedFolderId: string): string {
   const graph = parseGraphJson(graphJson)
   const enabledPickers = graph.nodes.filter(isEnabledFolderPicker)
   if (enabledPickers.length === 0) {
     throw new Error('该工作流缺少文件夹选择器节点，无法直接启动')
   }
 
-  const normalizedFolderIds = normalizeFolderIds(selectedFolderIds)
-  if (normalizedFolderIds.length === 0) {
-    throw new Error('请至少选择一条文件夹记录')
+  const normalizedFolderId = selectedFolderId.trim()
+  if (normalizedFolderId === '') {
+    throw new Error('请选择一条文件夹记录')
   }
 
   const nextNodes = graph.nodes.map((node) => {
@@ -100,8 +112,10 @@ export function applyFolderSelectionToEnabledPickers(graphJson: string, selected
       config: {
         ...currentConfig,
         source_mode: 'folders',
-        saved_folder_ids: normalizedFolderIds,
-        folder_ids: normalizedFolderIds,
+        saved_folder_id: normalizedFolderId,
+        saved_folder_ids: [],
+        folder_ids: [],
+        path: '',
         paths: [],
       },
     }

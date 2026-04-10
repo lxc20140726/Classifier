@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChevronRight, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, RotateCcw, X } from 'lucide-react'
 
-import { revertSnapshot, type RevertResult } from '@/api/snapshots'
 import { listAuditLogs } from '@/api/auditLogs'
 import { ApiRequestError } from '@/api/client'
+import { revertSnapshot, type RevertResult } from '@/api/snapshots'
 import { cn } from '@/lib/utils'
 import { useSnapshotStore } from '@/store/snapshotStore'
 import type { AuditLog, Snapshot } from '@/types'
@@ -21,13 +21,32 @@ interface DrawerState {
   failureDetail: RevertResult | null
 }
 
-const OP_LABELS: Record<string, string> = {
-  classify: '分类记录',
-  move: '移动记录',
-  rename: '重命名记录',
+interface MetricPoint {
+  files?: number
+  sizeBytes?: number
 }
 
-const AUDIT_RESULT_LABELS: Record<string, string> = {
+interface MetricDisplay {
+  before: MetricPoint | null
+  after: MetricPoint
+}
+
+interface TimelineEvent {
+  id: string
+  createdAt: string
+  title: string
+  resultLabel: string
+  resultClass: string
+  sourceLabel: string | null
+  keyChanges: Array<[string, string]>
+  errorMsg: string | null
+  metricCurrent: MetricPoint | null
+  metricAfter: MetricPoint | null
+  metricDisplay: MetricDisplay | null
+  snapshot: Snapshot | null
+}
+
+const RESULT_LABELS: Record<string, string> = {
   success: '成功',
   succeeded: '成功',
   moved: '已移动',
@@ -35,9 +54,10 @@ const AUDIT_RESULT_LABELS: Record<string, string> = {
   skipped: '已跳过',
   partial: '部分完成',
   failed: '失败',
+  reverted: '已回退',
 }
 
-const AUDIT_RESULT_CLASSES: Record<string, string> = {
+const RESULT_CLASSES: Record<string, string> = {
   success: 'bg-green-300 text-black border-2 border-black',
   succeeded: 'bg-green-300 text-black border-2 border-black',
   moved: 'bg-primary text-primary-foreground border-2 border-black',
@@ -45,15 +65,16 @@ const AUDIT_RESULT_CLASSES: Record<string, string> = {
   skipped: 'bg-muted text-muted-foreground border-2 border-black',
   partial: 'bg-yellow-300 text-black border-2 border-black',
   failed: 'bg-red-300 text-red-950 border-2 border-black',
+  reverted: 'bg-muted text-muted-foreground border-2 border-black',
 }
 
-const STATUS_LABELS: Record<Snapshot['status'], string> = {
+const SNAPSHOT_STATUS_LABELS: Record<Snapshot['status'], string> = {
   pending: '待完成',
   committed: '已提交',
   reverted: '已回退',
 }
 
-const STATUS_CLASSES: Record<Snapshot['status'], string> = {
+const SNAPSHOT_STATUS_CLASSES: Record<Snapshot['status'], string> = {
   pending: 'bg-yellow-300 text-black border-2 border-black',
   committed: 'bg-primary text-primary-foreground border-2 border-black',
   reverted: 'bg-muted text-muted-foreground border-2 border-black',
@@ -69,82 +90,303 @@ function parseTime(value: string): number {
   return Number.isNaN(ts) ? 0 : ts
 }
 
-function isProcessingAudit(log: AuditLog): boolean {
-  const action = log.action.trim().toLowerCase()
-  if (action.startsWith('phase4.processing.')) return true
-  if (!action.startsWith('workflow.')) return false
-
-  return (
-    action.startsWith('workflow.move-node') ||
-    action.startsWith('workflow.rename-node') ||
-    action.startsWith('workflow.compress-node') ||
-    action.startsWith('workflow.thumbnail-node') ||
-    action.startsWith('workflow.audit-log')
-  )
+function normalizeResult(value: string): string {
+  return value.trim().toLowerCase()
 }
 
-function resolveAuditActionLabel(action: string): string {
-  const normalized = action.trim().toLowerCase()
-  if (normalized.startsWith('workflow.move-node.rollback')) return '回滚记录（移动）'
-  if (normalized.startsWith('workflow.rename-node.rollback')) return '回滚记录（重命名）'
-  if (normalized.startsWith('workflow.compress-node.rollback')) return '回滚记录（压缩）'
-  if (normalized.startsWith('workflow.thumbnail-node.rollback')) return '回滚记录（缩略图）'
-  if (normalized.startsWith('workflow.move-node')) return '处理记录（移动）'
-  if (normalized.startsWith('workflow.rename-node')) return '处理记录（重命名）'
-  if (normalized.startsWith('workflow.compress-node')) return '处理记录（压缩）'
-  if (normalized.startsWith('workflow.thumbnail-node')) return '处理记录（缩略图）'
-  if (normalized.startsWith('workflow.audit-log')) return '处理记录（审计）'
-  if (normalized.startsWith('phase4.processing.')) return '处理记录'
+function formatBytes(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return '未知'
+  if (sizeBytes === 0) return '0 B'
 
-  return '处理记录'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = sizeBytes
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  const digits = size >= 100 || unitIndex === 0 ? 0 : 1
+  return `${size.toFixed(digits)} ${units[unitIndex]}`
 }
 
-function renderDetail(detail: Record<string, unknown> | null): Array<[string, string]> {
-  if (detail == null) return []
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+  return value as Record<string, unknown>
+}
 
-  const entries: Array<[string, string]> = []
-  const sourceDir = typeof detail.source_dir === 'string' ? detail.source_dir : null
-  const relativePath = typeof detail.relative_path === 'string' ? detail.relative_path : null
-  const category = typeof detail.category === 'string' ? detail.category : null
-  const categorySource = typeof detail.category_source === 'string' ? detail.category_source : null
-  const beforeCategory = typeof detail.before_category === 'string' ? detail.before_category : null
-  const beforeCategorySource =
-    typeof detail.before_category_source === 'string' ? detail.before_category_source : null
-  const afterCategory = typeof detail.after_category === 'string' ? detail.after_category : null
-  const afterCategorySource =
-    typeof detail.after_category_source === 'string' ? detail.after_category_source : null
-  const targetDir = typeof detail.target_dir === 'string' ? detail.target_dir : null
-  const sourcePath = typeof detail.source_path === 'string' ? detail.source_path : null
-  const folderPath = typeof detail.folder_path === 'string' ? detail.folder_path : null
-  const workflowRunId = typeof detail.workflow_run_id === 'string' ? detail.workflow_run_id : null
-  const nodeRunId = typeof detail.node_run_id === 'string' ? detail.node_run_id : null
-  const nodeType = typeof detail.node_type === 'string' ? detail.node_type : null
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
 
-  if (sourceDir) entries.push(['扫描目录', sourceDir])
-  if (relativePath) entries.push(['相对路径', relativePath])
-  if (category) entries.push(['分类结果', category])
-  if (categorySource) entries.push(['分类来源', categorySource])
-  if (beforeCategory) {
-    entries.push([
-      '变更前分类',
-      beforeCategorySource ? `${beforeCategory}（${beforeCategorySource}）` : beforeCategory,
+function asNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return null
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (trimmed === '') continue
+    out.push(trimmed)
+  }
+  return out
+}
+
+function metricHasValue(metric: MetricPoint | null): boolean {
+  if (metric == null) return false
+  return metric.files != null || metric.sizeBytes != null
+}
+
+function metricEquals(a: MetricPoint | null, b: MetricPoint | null): boolean {
+  if (!metricHasValue(a) && !metricHasValue(b)) return true
+  return a?.files === b?.files && a?.sizeBytes === b?.sizeBytes
+}
+
+function mergeMetric(base: MetricPoint | null, patch: MetricPoint | null): MetricPoint | null {
+  if (!metricHasValue(base) && !metricHasValue(patch)) return null
+  return {
+    files: patch?.files ?? base?.files,
+    sizeBytes: patch?.sizeBytes ?? base?.sizeBytes,
+  }
+}
+
+function renderMetricLines(metric: MetricDisplay): string[] {
+  const lines: string[] = []
+  const beforeFiles = metric.before?.files
+  const afterFiles = metric.after.files
+  const beforeSize = metric.before?.sizeBytes
+  const afterSize = metric.after.sizeBytes
+
+  if (afterFiles != null) {
+    if (beforeFiles != null && beforeFiles !== afterFiles) {
+      lines.push(`文件数量：${beforeFiles} -> ${afterFiles}`)
+    } else if (beforeFiles == null) {
+      lines.push(`文件数量：${afterFiles}`)
+    }
+  }
+
+  if (afterSize != null) {
+    if (beforeSize != null && beforeSize !== afterSize) {
+      lines.push(`总大小：${formatBytes(beforeSize)} -> ${formatBytes(afterSize)}`)
+    } else if (beforeSize == null) {
+      lines.push(`总大小：${formatBytes(afterSize)}`)
+    }
+  }
+
+  return lines
+}
+
+function buildSnapshotEvent(snapshot: Snapshot): TimelineEvent {
+  const detail = asRecord(snapshot.detail)
+  const operation = snapshot.operation_type.trim().toLowerCase()
+
+  let title = '业务操作'
+  if (operation === 'classify') title = '扫描与分类'
+  if (operation === 'move') title = '移动'
+  if (operation === 'rename') title = '重命名'
+
+  const keyChanges: Array<[string, string]> = []
+
+  const category = asString(detail?.category)
+  const beforeCategory = asString(detail?.before_category)
+  const afterCategory = asString(detail?.after_category)
+  if (beforeCategory && afterCategory && beforeCategory !== afterCategory) {
+    keyChanges.push(['分类变化', `${beforeCategory} -> ${afterCategory}`])
+  } else if (category) {
+    keyChanges.push(['分类结果', category])
+  }
+
+  const sourceDir = asString(detail?.source_dir)
+  if (sourceDir) {
+    keyChanges.push(['扫描目录', sourceDir])
+  }
+
+  const relativePath = asString(detail?.relative_path)
+  if (relativePath) {
+    keyChanges.push(['相对路径', relativePath])
+  }
+
+  const pathChanges = (snapshot.after ?? [])
+    .filter((record) => record.original_path !== record.current_path)
+    .slice(0, 3)
+
+  for (const change of pathChanges) {
+    keyChanges.push(['路径变化', `${change.original_path} -> ${change.current_path}`])
+  }
+
+  const sourceLabelParts: string[] = []
+  const workflowRunID = asString(detail?.workflow_run_id)
+  if (workflowRunID) {
+    sourceLabelParts.push('工作流')
+  }
+  const nodeType = asString(detail?.node_type)
+  if (nodeType) {
+    sourceLabelParts.push(`节点 ${nodeType}`)
+  }
+
+  const metricCurrent: MetricPoint = {}
+  const totalFiles = asNumber(detail?.total_files)
+  const totalSize = asNumber(detail?.total_size)
+  if (totalFiles != null) metricCurrent.files = totalFiles
+  if (totalSize != null) metricCurrent.sizeBytes = totalSize
+
+  return {
+    id: `snapshot-${snapshot.id}`,
+    createdAt: snapshot.created_at,
+    title,
+    resultLabel: SNAPSHOT_STATUS_LABELS[snapshot.status],
+    resultClass: SNAPSHOT_STATUS_CLASSES[snapshot.status],
+    sourceLabel: sourceLabelParts.length > 0 ? sourceLabelParts.join(' / ') : null,
+    keyChanges,
+    errorMsg: null,
+    metricCurrent: metricHasValue(metricCurrent) ? metricCurrent : null,
+    metricAfter: null,
+    metricDisplay: null,
+    snapshot,
+  }
+}
+
+function buildAuditEvent(audit: AuditLog): TimelineEvent | null {
+  const action = audit.action.trim().toLowerCase()
+  const result = normalizeResult(audit.result)
+  const detail = asRecord(audit.detail)
+
+  const isFailed = result === 'failed' || audit.error_msg.trim() !== ''
+
+  let title: string | null = null
+  if (action === 'scan') {
+    title = isFailed ? '扫描' : null
+  } else if (action === 'move') {
+    title = isFailed ? '移动' : null
+  } else if (action.startsWith('workflow.processing.review_approved')) {
+    title = '审核决策（通过）'
+  } else if (action.startsWith('workflow.processing.review_rolled_back')) {
+    title = '审核决策（回退）'
+  } else if (action.startsWith('workflow.processing.review_pending')) {
+    title = '审核决策（待处理）'
+  } else if (action.endsWith('.rollback')) {
+    title = '回退'
+  } else if (action.startsWith('workflow.compress-node')) {
+    title = '压缩'
+  } else if (action.startsWith('workflow.thumbnail-node')) {
+    title = '缩略图生成'
+  } else if (action.startsWith('workflow.move-node') || action.startsWith('phase4.processing.move-node')) {
+    title = '移动'
+  } else if (action.startsWith('workflow.rename-node')) {
+    title = '重命名'
+  } else if (action.startsWith('workflow.classification-writer') || action.includes('classifier')) {
+    title = isFailed ? '分类' : null
+  }
+
+  if (title == null) {
+    return null
+  }
+
+  const keyChanges: Array<[string, string]> = []
+
+  const sourcePath = asString(detail?.source_path)
+  const targetPath = asString(detail?.target_path)
+  if (sourcePath && targetPath && sourcePath !== targetPath) {
+    keyChanges.push(['路径变化', `${sourcePath} -> ${targetPath}`])
+  }
+
+  const beforeCategory = asString(detail?.before_category)
+  const afterCategory = asString(detail?.after_category)
+  if (beforeCategory && afterCategory && beforeCategory !== afterCategory) {
+    keyChanges.push(['分类变化', `${beforeCategory} -> ${afterCategory}`])
+  }
+
+  const archives = asStringList(detail?.archive_paths)
+  if (archives.length > 0) {
+    keyChanges.push(['压缩产物', `${archives.length} 个`])
+  }
+
+  const thumbnails = asStringList(detail?.thumbnail_paths)
+  if (thumbnails.length > 0) {
+    keyChanges.push(['缩略图产物', `${thumbnails.length} 个`])
+  }
+
+  const diff = asRecord(detail?.diff)
+  const pathChanged = diff?.path_changed === true
+  const nameChanged = diff?.name_changed === true
+  if (pathChanged || nameChanged) {
+    keyChanges.push([
+      'review 变化',
+      [pathChanged ? '路径变更' : '', nameChanged ? '名称变更' : ''].filter(Boolean).join('，'),
     ])
   }
-  if (afterCategory) {
-    entries.push([
-      '变更后分类',
-      afterCategorySource ? `${afterCategory}（${afterCategorySource}）` : afterCategory,
-    ])
-  }
-  if (targetDir) entries.push(['输出目录', targetDir])
-  if (sourcePath) entries.push(['原始路径', sourcePath])
-  if (folderPath) entries.push(['目录路径', folderPath])
-  if (workflowRunId) entries.push(['来源', '工作流'])
-  if (workflowRunId) entries.push(['工作流运行ID', workflowRunId])
-  if (nodeType) entries.push(['节点类型', nodeType])
-  if (nodeRunId) entries.push(['节点运行ID', nodeRunId])
 
-  return entries
+  const newArtifacts = asStringList(diff?.new_artifacts)
+  if (newArtifacts.length > 0) {
+    keyChanges.push(['新增产物', `${newArtifacts.length} 个`])
+  }
+
+  const sourceLabelParts: string[] = []
+  if (audit.workflow_run_id.trim() !== '') {
+    sourceLabelParts.push('工作流')
+  }
+  if (audit.node_type.trim() !== '') {
+    sourceLabelParts.push(`节点 ${audit.node_type.trim()}`)
+  } else {
+    const detailNodeType = asString(detail?.node_type)
+    if (detailNodeType) {
+      sourceLabelParts.push(`节点 ${detailNodeType}`)
+    }
+  }
+
+  const metricCurrent: MetricPoint = {}
+  const metricAfter: MetricPoint = {}
+
+  const directFiles = asNumber(detail?.total_files)
+  const directSize = asNumber(detail?.total_size)
+  if (directFiles != null) metricCurrent.files = directFiles
+  if (directSize != null) metricCurrent.sizeBytes = directSize
+
+  const before = asRecord(detail?.before)
+  const after = asRecord(detail?.after)
+  const beforeKeyFiles = asNumber(before?.key_files_count)
+  const afterKeyFiles = asNumber(after?.key_files_count)
+  if (afterKeyFiles != null) {
+    metricAfter.files = afterKeyFiles
+  } else if (beforeKeyFiles != null) {
+    metricCurrent.files = beforeKeyFiles
+  }
+
+  if (archives.length > 0) {
+    metricAfter.files = archives.length
+  }
+
+  const normalizedResult = result || 'success'
+  const resultLabel = RESULT_LABELS[normalizedResult] ?? (audit.result.trim() || '已记录')
+  const resultClass = RESULT_CLASSES[normalizedResult] ?? 'bg-muted text-muted-foreground border-2 border-black'
+
+  return {
+    id: `audit-${audit.id}`,
+    createdAt: audit.created_at,
+    title,
+    resultLabel,
+    resultClass,
+    sourceLabel: sourceLabelParts.length > 0 ? sourceLabelParts.join(' / ') : null,
+    keyChanges,
+    errorMsg: audit.error_msg.trim() === '' ? null : audit.error_msg,
+    metricCurrent: metricHasValue(metricCurrent) ? metricCurrent : null,
+    metricAfter: metricHasValue(metricAfter) ? metricAfter : null,
+    metricDisplay: null,
+    snapshot: null,
+  }
 }
 
 function RevertFailurePanel({ detail }: { detail: RevertResult }) {
@@ -181,7 +423,7 @@ function RevertFailurePanel({ detail }: { detail: RevertResult }) {
         </div>
       )}
 
-      <p className="text-xs font-bold text-red-700">✓ 回退失败不会导致文件丢失，所有文件保持在回退前位置。</p>
+      <p className="text-xs font-bold text-red-700">回退失败不会导致文件丢失，所有文件保持在回退前位置。</p>
     </div>
   )
 }
@@ -229,9 +471,9 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
 
     void (async () => {
       try {
-        const response = await listAuditLogs({ folderId, page: 1, limit: 200 })
+        const response = await listAuditLogs({ folderId, page: 1, limit: 300 })
         if (cancelled) return
-        setAuditLogs((response.data ?? []).filter(isProcessingAudit))
+        setAuditLogs(response.data ?? [])
       } catch (error) {
         if (cancelled) return
         setAuditLogs([])
@@ -279,21 +521,50 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
   }
 
   const error = state.localError ?? storeError
-  const timelineItems = useMemo(() => {
-    const snapshotItems = snapshots.map((snapshot) => ({
-      id: `snapshot-${snapshot.id}`,
-      createdAt: snapshot.created_at,
-      kind: 'snapshot' as const,
-      snapshot,
-    }))
-    const auditItems = auditLogs.map((audit) => ({
-      id: `audit-${audit.id}`,
-      createdAt: audit.created_at,
-      kind: 'audit' as const,
-      audit,
-    }))
 
-    return [...snapshotItems, ...auditItems].sort((a, b) => parseTime(b.createdAt) - parseTime(a.createdAt))
+  const timelineItems = useMemo(() => {
+    const rawEvents: TimelineEvent[] = []
+
+    for (const snapshot of snapshots) {
+      rawEvents.push(buildSnapshotEvent(snapshot))
+    }
+
+    for (const audit of auditLogs) {
+      const event = buildAuditEvent(audit)
+      if (event != null) {
+        rawEvents.push(event)
+      }
+    }
+
+    rawEvents.sort((a, b) => parseTime(a.createdAt) - parseTime(b.createdAt))
+
+    let lastKnownMetric: MetricPoint | null = null
+    const withMetricDisplay = rawEvents.map((event) => {
+      let metricDisplay: MetricDisplay | null = null
+
+      if (metricHasValue(event.metricCurrent)) {
+        const merged = mergeMetric(lastKnownMetric, event.metricCurrent)
+        if (!metricEquals(lastKnownMetric, merged)) {
+          metricDisplay = { before: lastKnownMetric, after: merged ?? {} }
+        } else if (lastKnownMetric == null) {
+          metricDisplay = { before: null, after: merged ?? {} }
+        }
+        lastKnownMetric = merged
+      } else if (metricHasValue(event.metricAfter)) {
+        const merged = mergeMetric(lastKnownMetric, event.metricAfter)
+        if (!metricEquals(lastKnownMetric, merged)) {
+          metricDisplay = { before: lastKnownMetric, after: merged ?? {} }
+        }
+        lastKnownMetric = merged
+      }
+
+      return {
+        ...event,
+        metricDisplay,
+      }
+    })
+
+    return withMetricDisplay.sort((a, b) => parseTime(b.createdAt) - parseTime(a.createdAt))
   }, [auditLogs, snapshots])
 
   return (
@@ -312,29 +583,27 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
           'fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l-4 border-foreground bg-background shadow-[-8px_0_0_rgba(0,0,0,1)] transition-transform duration-300 ease-out',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
-        aria-label="快照时间线"
+        aria-label="文件夹业务时间线"
       >
         <div className="border-b-2 border-foreground bg-primary px-6 py-5 text-primary-foreground">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.24em]">Snapshots</p>
+              <p className="text-xs font-bold uppercase tracking-[0.24em]">Timeline</p>
               <h2 className="mt-2 text-xl font-black tracking-tight">文件夹操作时间线</h2>
-              <p className="mt-1 text-sm font-medium">
-                按时间查看分类、移动和回退记录。
-              </p>
+              <p className="mt-1 text-sm font-medium">按真实业务动作查看处理过程与关键变化。</p>
             </div>
             <button
               type="button"
               onClick={onClose}
               className="border-2 border-transparent p-2 transition-all hover:border-primary-foreground hover:bg-foreground hover:text-background"
-              aria-label="关闭快照抽屉"
+              aria-label="关闭时间线抽屉"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-6 bg-background">
+        <div className="flex-1 overflow-y-auto bg-background px-6 py-6">
           {error && !state.failureDetail && (
             <div className="mb-6 border-2 border-foreground bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
               {error}
@@ -352,101 +621,15 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
 
           {!isLoading && !isAuditLoading && !error && timelineItems.length === 0 && (
             <div className="border-2 border-dashed border-foreground px-4 py-12 text-center text-sm font-bold text-muted-foreground">
-              这个文件夹还没有快照记录。
+              这个文件夹还没有可展示的业务事件。
             </div>
           )}
 
           {timelineItems.length > 0 && (
             <ol className="relative space-y-8 pl-8 before:absolute before:left-[15px] before:top-2 before:h-[calc(100%-0.5rem)] before:w-0.5 before:bg-foreground">
               {timelineItems.map((item) => {
-                if (item.kind === 'snapshot') {
-                  const snapshot = item.snapshot
-                  const detailItems = renderDetail(snapshot.detail)
-                  const operationLabel = OP_LABELS[snapshot.operation_type] ?? snapshot.operation_type
-                  const isReverting = state.revertingId === snapshot.id
-
-                  return (
-                    <li key={item.id} className="relative">
-                      <span className="absolute left-[-32px] top-1.5 h-4 w-4 rounded-full border-2 border-foreground bg-primary" />
-                      <div className="border-2 border-foreground bg-card p-5 shadow-hard transition-all hover:-translate-y-1 hover:shadow-hard-hover">
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="space-y-2">
-                            <div className="flex flex-wrap items-center gap-3">
-                              <span className="text-base font-black tracking-tight">{operationLabel}</span>
-                              <span
-                                className={cn(
-                                  'px-2 py-0.5 text-xs font-bold',
-                                  STATUS_CLASSES[snapshot.status],
-                                )}
-                              >
-                                {STATUS_LABELS[snapshot.status]}
-                              </span>
-                            </div>
-                            <p className="text-xs font-mono font-bold text-muted-foreground">{formatDate(snapshot.created_at)}</p>
-                            <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-muted-foreground">
-                              <span>前状态 {snapshot.before.length} 条</span>
-                              {snapshot.after != null && <span>后状态 {snapshot.after.length} 条</span>}
-                            </div>
-                          </div>
-
-                          {snapshot.status === 'committed' && (
-                            <button
-                              type="button"
-                              disabled={state.revertingId !== null}
-                              onClick={() => void handleRevert(snapshot.id)}
-                              className="inline-flex items-center gap-1.5 border-2 border-foreground bg-background px-3 py-2 text-xs font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
-                            >
-                              <RotateCcw className="h-4 w-4" />
-                              {isReverting ? '回退中...' : '回退到此节点'}
-                            </button>
-                          )}
-                        </div>
-
-                        {state.failureDetail && state.revertingId === null && snapshot.id === state.lastAttemptedId && (
-                          <RevertFailurePanel detail={state.failureDetail} />
-                        )}
-
-                        {detailItems.length > 0 && (
-                          <dl className="mt-5 grid gap-3 border-2 border-foreground bg-muted/30 p-4 text-xs sm:grid-cols-2">
-                            {detailItems.map(([label, value]) => (
-                              <div key={`${snapshot.id}-${label}`}>
-                                <dt className="font-bold text-muted-foreground">{label}</dt>
-                                <dd className="mt-1 break-all font-mono font-medium text-foreground">{value}</dd>
-                              </div>
-                            ))}
-                          </dl>
-                        )}
-
-                        {snapshot.after != null && snapshot.after.length > 0 && (
-                          <div className="mt-5 space-y-3 text-xs">
-                            <p className="font-black text-foreground">路径变化</p>
-                            {snapshot.after.slice(0, 3).map((record, index) => (
-                              <div key={`${snapshot.id}-${record.current_path}-${index}`} className="border-2 border-foreground bg-background px-3 py-3 font-mono">
-                                <div className="break-all text-muted-foreground">{record.original_path}</div>
-                                <div className="my-2 flex items-center gap-1 font-bold text-primary">
-                                  <ChevronRight className="h-4 w-4" />
-                                  <span>变更后</span>
-                                </div>
-                                <div className="break-all font-bold text-foreground">{record.current_path}</div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </li>
-                  )
-                }
-
-                const audit = item.audit
-                const result = audit.result.trim().toLowerCase()
-                const resultLabel = AUDIT_RESULT_LABELS[result] ?? (audit.result.trim() || '已记录')
-                const resultClass = AUDIT_RESULT_CLASSES[result] ?? 'bg-muted text-muted-foreground border-2 border-black'
-                const operationLabel = resolveAuditActionLabel(audit.action)
-                const detail = audit.detail != null ? { ...audit.detail } : {}
-                if (audit.folder_path !== '') {
-                  detail.folder_path = audit.folder_path
-                }
-                const detailItems = renderDetail(detail)
+                const isReverting = item.snapshot != null && state.revertingId === item.snapshot.id
+                const metricLines = item.metricDisplay != null ? renderMetricLines(item.metricDisplay) : []
 
                 return (
                   <li key={item.id} className="relative">
@@ -455,24 +638,44 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div className="space-y-2">
                           <div className="flex flex-wrap items-center gap-3">
-                            <span className="text-base font-black tracking-tight">{operationLabel}</span>
-                            <span
-                              className={cn(
-                                'px-2 py-0.5 text-xs font-bold',
-                                resultClass,
-                              )}
-                            >
-                              {resultLabel}
-                            </span>
+                            <span className="text-base font-black tracking-tight">{item.title}</span>
+                            <span className={cn('px-2 py-0.5 text-xs font-bold', item.resultClass)}>{item.resultLabel}</span>
                           </div>
-                          <p className="text-xs font-mono font-bold text-muted-foreground">{formatDate(audit.created_at)}</p>
+                          <p className="text-xs font-mono font-bold text-muted-foreground">{formatDate(item.createdAt)}</p>
+                          {item.sourceLabel && (
+                            <p className="text-xs font-bold text-muted-foreground">来源：{item.sourceLabel}</p>
+                          )}
                         </div>
+
+                        {item.snapshot?.status === 'committed' && (
+                          <button
+                            type="button"
+                            disabled={state.revertingId !== null}
+                            onClick={() => void handleRevert(item.snapshot.id)}
+                            className="inline-flex items-center gap-1.5 border-2 border-foreground bg-background px-3 py-2 text-xs font-bold transition-all hover:-translate-y-0.5 hover:bg-foreground hover:text-background hover:shadow-hard disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                            {isReverting ? '回退中...' : '回退到此节点'}
+                          </button>
+                        )}
                       </div>
 
-                      {detailItems.length > 0 && (
+                      {state.failureDetail && item.snapshot != null && state.revertingId === null && item.snapshot.id === state.lastAttemptedId && (
+                        <RevertFailurePanel detail={state.failureDetail} />
+                      )}
+
+                      {metricLines.length > 0 && (
+                        <div className="mt-5 space-y-2 border-2 border-foreground bg-muted/30 p-4 text-xs font-bold text-foreground">
+                          {metricLines.map((line) => (
+                            <p key={`${item.id}-${line}`}>{line}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      {item.keyChanges.length > 0 && (
                         <dl className="mt-5 grid gap-3 border-2 border-foreground bg-muted/30 p-4 text-xs sm:grid-cols-2">
-                          {detailItems.map(([label, value]) => (
-                            <div key={`${audit.id}-${label}`}>
+                          {item.keyChanges.map(([label, value], index) => (
+                            <div key={`${item.id}-${label}-${index}`}>
                               <dt className="font-bold text-muted-foreground">{label}</dt>
                               <dd className="mt-1 break-all font-mono font-medium text-foreground">{value}</dd>
                             </div>
@@ -480,9 +683,9 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
                         </dl>
                       )}
 
-                      {audit.error_msg !== '' && (
+                      {item.errorMsg && (
                         <div className="mt-5 border-2 border-foreground bg-red-100 px-3 py-2 text-xs font-bold text-red-900">
-                          {audit.error_msg}
+                          {item.errorMsg}
                         </div>
                       )}
                     </div>

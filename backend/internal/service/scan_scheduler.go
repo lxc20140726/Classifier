@@ -62,9 +62,6 @@ func (s *ScanScheduler) Sync(ctx context.Context) error {
 	}
 
 	sourceDirs := normalizeScanSourceDirs(cfg.ScanInputDirs)
-	if len(sourceDirs) == 0 && strings.TrimSpace(cfg.SourceDir) != "" {
-		sourceDirs = []string{strings.TrimSpace(cfg.SourceDir)}
-	}
 	if len(sourceDirs) == 0 {
 		s.clear()
 		return nil

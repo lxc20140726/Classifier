@@ -37,6 +37,7 @@ type ClassifiedEntry struct {
 
 type ProcessingItem struct {
 	SourcePath         string      `json:"source_path"`
+	CurrentPath        string      `json:"current_path"`
 	FolderID           string      `json:"folder_id"`
 	FolderName         string      `json:"folder_name"`
 	TargetName         string      `json:"target_name"`

@@ -108,6 +108,7 @@ func folderSplitterBuildSelfItem(entry ClassifiedEntry, rootPath string) Process
 	relativePath := folderSplitterRelativePath(normalizedRoot, normalizedPath)
 	return ProcessingItem{
 		SourcePath:         normalizedPath,
+		CurrentPath:        normalizedPath,
 		FolderID:           entry.FolderID,
 		FolderName:         entry.Name,
 		TargetName:         entry.Name,
