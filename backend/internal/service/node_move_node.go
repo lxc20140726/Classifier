@@ -185,7 +185,7 @@ func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbac
 			folderID = strings.TrimSpace(input.Folder.ID)
 		}
 		if folderID == "" && e.folders != nil {
-			if folder, err := e.folders.GetByPath(ctx, entry.TargetPath); err == nil && folder != nil {
+			if folder, err := e.folders.GetCurrentByPath(ctx, entry.TargetPath); err == nil && folder != nil {
 				folderID = strings.TrimSpace(folder.ID)
 			}
 		}
@@ -195,7 +195,17 @@ func (e *phase4MoveNodeExecutor) Rollback(ctx context.Context, input NodeRollbac
 				return fmt.Errorf("move folder back %q to %q: %w", entry.TargetPath, entry.SourcePath, err)
 			}
 			if e.folders != nil && folderID != "" {
-				if err := e.folders.UpdatePath(ctx, folderID, entry.SourcePath); err != nil {
+				sourceDir := filepath.Dir(entry.SourcePath)
+				relativePath := filepath.Base(entry.SourcePath)
+				if input.Folder != nil {
+					sourceDir = input.Folder.SourceDir
+					relativePath = relativePathFromSourceDir(input.Folder.SourceDir, entry.SourcePath)
+					if relativePath == "" || strings.HasPrefix(relativePath, "..") {
+						sourceDir = filepath.Dir(entry.SourcePath)
+						relativePath = filepath.Base(entry.SourcePath)
+					}
+				}
+				if err := e.folders.UpdatePath(ctx, folderID, entry.SourcePath, sourceDir, relativePath); err != nil {
 					return fmt.Errorf("update folder path for %q: %w", folderID, err)
 				}
 			}
@@ -272,7 +282,9 @@ func (e *phase4MoveNodeExecutor) executeLegacyMove(
 		}
 		folderID := strings.TrimSpace(item.FolderID)
 		if e.folders != nil && folderID != "" {
-			if err := e.folders.UpdatePath(ctx, folderID, finalPath); err != nil {
+			sourceDir := filepath.Dir(finalPath)
+			relativePath := filepath.Base(finalPath)
+			if err := e.folders.UpdatePath(ctx, folderID, finalPath, sourceDir, relativePath); err != nil {
 				return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: update folder path for %q: %w", e.Type(), folderID, err)
 			}
 		}

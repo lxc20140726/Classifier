@@ -10,12 +10,17 @@ type FolderRepository interface {
 	Upsert(ctx context.Context, f *Folder) error
 	GetByID(ctx context.Context, id string) (*Folder, error)
 	GetByPath(ctx context.Context, path string) (*Folder, error)
+	GetCurrentByPath(ctx context.Context, path string) (*Folder, error)
+	GetByHistoricalPath(ctx context.Context, path string) (*Folder, error)
+	GetCurrentBySourceAndRelativePath(ctx context.Context, sourceDir, relativePath string) (*Folder, error)
+	ResolveScanTarget(ctx context.Context, path, sourceDir, relativePath string) (*Folder, FolderScanMatchType, error)
+	RecordObservation(ctx context.Context, folderID, path, sourceDir, relativePath string, observedAt time.Time) error
 	ListByPathPrefix(ctx context.Context, prefix string) ([]*Folder, error)
 	List(ctx context.Context, filter FolderListFilter) ([]*Folder, int, error)
 	ListWorkflowSummariesByFolderIDs(ctx context.Context, folderIDs []string) (map[string]FolderWorkflowSummary, error)
 	UpdateCategory(ctx context.Context, id, category, source string) error
 	UpdateStatus(ctx context.Context, id, status string) error
-	UpdatePath(ctx context.Context, id, newPath string) error
+	UpdatePath(ctx context.Context, id, newPath, sourceDir, relativePath string) error
 	UpdateCoverImagePath(ctx context.Context, id, coverImagePath string) error
 	IsSuppressedPath(ctx context.Context, path string) (bool, error)
 	Suppress(ctx context.Context, id, currentPath, originalPath string) error

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/liqiye/classifier/internal/repository"
 )
@@ -43,6 +44,33 @@ func (r *subtreeAggregatorFakeFolderRepo) GetByPath(_ context.Context, path stri
 	return folder, nil
 }
 
+func (r *subtreeAggregatorFakeFolderRepo) GetCurrentByPath(ctx context.Context, path string) (*repository.Folder, error) {
+	return r.GetByPath(ctx, path)
+}
+
+func (r *subtreeAggregatorFakeFolderRepo) GetByHistoricalPath(_ context.Context, _ string) (*repository.Folder, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (r *subtreeAggregatorFakeFolderRepo) GetCurrentBySourceAndRelativePath(_ context.Context, _ string, _ string) (*repository.Folder, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (r *subtreeAggregatorFakeFolderRepo) ResolveScanTarget(_ context.Context, path, _ string, _ string) (*repository.Folder, repository.FolderScanMatchType, error) {
+	folder, err := r.GetByPath(context.Background(), path)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, repository.FolderScanMatchTypeNewDiscovery, nil
+		}
+		return nil, "", err
+	}
+	return folder, repository.FolderScanMatchTypeCurrentPathMatch, nil
+}
+
+func (r *subtreeAggregatorFakeFolderRepo) RecordObservation(_ context.Context, _ string, _ string, _ string, _ string, _ time.Time) error {
+	return nil
+}
+
 func (r *subtreeAggregatorFakeFolderRepo) List(_ context.Context, _ repository.FolderListFilter) ([]*repository.Folder, int, error) {
 	return nil, 0, nil
 }
@@ -66,7 +94,7 @@ func (r *subtreeAggregatorFakeFolderRepo) UpdateCategory(_ context.Context, id, 
 func (r *subtreeAggregatorFakeFolderRepo) UpdateStatus(_ context.Context, _ string, _ string) error {
 	return nil
 }
-func (r *subtreeAggregatorFakeFolderRepo) UpdatePath(_ context.Context, _ string, _ string) error {
+func (r *subtreeAggregatorFakeFolderRepo) UpdatePath(_ context.Context, _ string, _ string, _ string, _ string) error {
 	return nil
 }
 func (r *subtreeAggregatorFakeFolderRepo) UpdateCoverImagePath(_ context.Context, _ string, _ string) error {

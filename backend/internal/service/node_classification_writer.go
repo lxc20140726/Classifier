@@ -106,7 +106,7 @@ func (e *classificationWriterNodeExecutor) persistEntry(ctx context.Context, inp
 		folder.ID = uuid.NewString()
 	}
 
-	existing, err := e.folders.GetByPath(ctx, path)
+	existing, err := e.folders.GetCurrentByPath(ctx, path)
 	if err == nil && existing != nil {
 		folder.ID = existing.ID
 		if folder.TotalFiles == 0 {

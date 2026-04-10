@@ -119,7 +119,7 @@ func (e *subtreeAggregatorNodeExecutor) syncSourceDirSummaryClassification(ctx c
 	var rootFolder *repository.Folder
 	sourceDir := ""
 	for _, candidate := range candidates {
-		folder, err := e.folders.GetByPath(ctx, candidate)
+		folder, err := e.folders.GetCurrentByPath(ctx, candidate)
 		if err != nil {
 			if errors.Is(err, repository.ErrNotFound) {
 				continue
@@ -334,7 +334,7 @@ func (e *subtreeAggregatorNodeExecutor) ensureFolderForTree(ctx context.Context,
 		return nil, fmt.Errorf("folder path is required")
 	}
 
-	existing, err := e.folders.GetByPath(ctx, tree.Path)
+	existing, err := e.folders.GetCurrentByPath(ctx, tree.Path)
 	if err == nil {
 		return existing, nil
 	}

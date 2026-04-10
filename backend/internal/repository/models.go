@@ -29,6 +29,26 @@ type Folder struct {
 	WorkflowSummary   FolderWorkflowSummary `json:"workflow_summary"`
 }
 
+type FolderPathObservation struct {
+	ID           string    `db:"id"`
+	FolderID     string    `db:"folder_id"`
+	Path         string    `db:"path"`
+	SourceDir    string    `db:"source_dir"`
+	RelativePath string    `db:"relative_path"`
+	IsCurrent    bool      `db:"is_current"`
+	FirstSeenAt  time.Time `db:"first_seen_at"`
+	LastSeenAt   time.Time `db:"last_seen_at"`
+}
+
+type FolderScanMatchType string
+
+const (
+	FolderScanMatchTypeNewDiscovery        FolderScanMatchType = "new_discovery"
+	FolderScanMatchTypeCurrentPathMatch    FolderScanMatchType = "current_path_match"
+	FolderScanMatchTypeHistoricalPathMatch FolderScanMatchType = "historical_path_match"
+	FolderScanMatchTypeSourceRelativeMatch FolderScanMatchType = "source_relative_match"
+)
+
 type WorkflowStageSummary struct {
 	Status        string     `json:"status"`
 	WorkflowRunID string     `json:"workflow_run_id,omitempty"`

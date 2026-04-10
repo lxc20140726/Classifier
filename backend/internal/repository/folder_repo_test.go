@@ -293,7 +293,7 @@ func TestFolderRepositoryUpdatesAndDelete(t *testing.T) {
 		t.Fatalf("UpdateStatus() error = %v", err)
 	}
 
-	if err := repo.UpdatePath(ctx, folder.ID, "/media/new-path"); err != nil {
+	if err := repo.UpdatePath(ctx, folder.ID, "/media/new-path", "/media", "new-path"); err != nil {
 		t.Fatalf("UpdatePath() error = %v", err)
 	}
 
@@ -345,7 +345,7 @@ func TestFolderRepositoryNotFoundMutations(t *testing.T) {
 	}{
 		{name: "UpdateCategory missing", fn: func() error { return repo.UpdateCategory(ctx, "missing", "photo", "auto") }},
 		{name: "UpdateStatus missing", fn: func() error { return repo.UpdateStatus(ctx, "missing", "done") }},
-		{name: "UpdatePath missing", fn: func() error { return repo.UpdatePath(ctx, "missing", "/new") }},
+		{name: "UpdatePath missing", fn: func() error { return repo.UpdatePath(ctx, "missing", "/new", "/media", "new") }},
 		{name: "UpdateCoverImagePath missing", fn: func() error { return repo.UpdateCoverImagePath(ctx, "missing", "/cover.jpg") }},
 		{name: "Delete missing", fn: func() error { return repo.Delete(ctx, "missing") }},
 	}
@@ -357,5 +357,109 @@ func TestFolderRepositoryNotFoundMutations(t *testing.T) {
 				t.Fatalf("error = %v, want ErrNotFound", err)
 			}
 		})
+	}
+}
+
+func TestFolderRepositoryPathObservationsAndHistory(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewFolderRepository(database)
+	ctx := context.Background()
+
+	folder := &Folder{
+		ID:             "folder-history",
+		Path:           "/media/original",
+		SourceDir:      "/media",
+		RelativePath:   "original",
+		Name:           "original",
+		Category:       "photo",
+		CategorySource: "auto",
+		Status:         "pending",
+	}
+	if err := repo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	if err := repo.UpdatePath(ctx, folder.ID, "/archive/original", "/archive", "original"); err != nil {
+		t.Fatalf("UpdatePath() error = %v", err)
+	}
+
+	current, err := repo.GetCurrentByPath(ctx, "/archive/original")
+	if err != nil {
+		t.Fatalf("GetCurrentByPath(new) error = %v", err)
+	}
+	if current.ID != folder.ID {
+		t.Fatalf("GetCurrentByPath(new).ID = %q, want %q", current.ID, folder.ID)
+	}
+
+	historical, err := repo.GetByHistoricalPath(ctx, "/media/original")
+	if err != nil {
+		t.Fatalf("GetByHistoricalPath(old) error = %v", err)
+	}
+	if historical.ID != folder.ID {
+		t.Fatalf("GetByHistoricalPath(old).ID = %q, want %q", historical.ID, folder.ID)
+	}
+
+	if _, err := repo.GetCurrentByPath(ctx, "/media/original"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetCurrentByPath(old) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFolderRepositoryResolveScanTarget(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewFolderRepository(database)
+	ctx := context.Background()
+
+	folder := &Folder{
+		ID:             "folder-resolve",
+		Path:           "/library/a",
+		SourceDir:      "/library",
+		RelativePath:   "a",
+		Name:           "a",
+		Category:       "other",
+		CategorySource: "auto",
+		Status:         "pending",
+	}
+	if err := repo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	got, matchType, err := repo.ResolveScanTarget(ctx, "/library/a", "/library", "a")
+	if err != nil {
+		t.Fatalf("ResolveScanTarget(current) error = %v", err)
+	}
+	if got.ID != folder.ID || matchType != FolderScanMatchTypeCurrentPathMatch {
+		t.Fatalf("ResolveScanTarget(current) = (%v, %q), want (%q, %q)", got != nil, matchType, folder.ID, FolderScanMatchTypeCurrentPathMatch)
+	}
+
+	if err := repo.UpdatePath(ctx, folder.ID, "/archive/a", "/archive", "a"); err != nil {
+		t.Fatalf("UpdatePath() error = %v", err)
+	}
+
+	got, matchType, err = repo.ResolveScanTarget(ctx, "/library/a", "/library", "zzz")
+	if err != nil {
+		t.Fatalf("ResolveScanTarget(history) error = %v", err)
+	}
+	if got.ID != folder.ID || matchType != FolderScanMatchTypeHistoricalPathMatch {
+		t.Fatalf("ResolveScanTarget(history) = (%v, %q), want (%q, %q)", got != nil, matchType, folder.ID, FolderScanMatchTypeHistoricalPathMatch)
+	}
+
+	got, matchType, err = repo.ResolveScanTarget(ctx, "/library/new-name", "/archive", "a")
+	if err != nil {
+		t.Fatalf("ResolveScanTarget(source+relative) error = %v", err)
+	}
+	if got.ID != folder.ID || matchType != FolderScanMatchTypeSourceRelativeMatch {
+		t.Fatalf("ResolveScanTarget(source+relative) = (%v, %q), want (%q, %q)", got != nil, matchType, folder.ID, FolderScanMatchTypeSourceRelativeMatch)
+	}
+
+	got, matchType, err = repo.ResolveScanTarget(ctx, "/library/brand-new", "/library", "brand-new")
+	if err != nil {
+		t.Fatalf("ResolveScanTarget(new) error = %v", err)
+	}
+	if got != nil || matchType != FolderScanMatchTypeNewDiscovery {
+		t.Fatalf("ResolveScanTarget(new) = (%v, %q), want (nil, %q)", got, matchType, FolderScanMatchTypeNewDiscovery)
 	}
 }

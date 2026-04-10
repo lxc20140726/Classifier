@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/liqiye/classifier/internal/fs"
@@ -186,7 +188,14 @@ func (s *SnapshotService) Revert(ctx context.Context, snapshotID string) (*Rever
 			}, fmt.Errorf("snapshot.Revert load folder %q: %w", snapshot.FolderID, err)
 		}
 
-		if err := s.folders.UpdatePath(ctx, folder.ID, state.OriginalPath); err != nil {
+		nextSourceDir := folder.SourceDir
+		nextRelativePath := relativePathFromSourceDir(folder.SourceDir, state.OriginalPath)
+		if nextRelativePath == "" || strings.HasPrefix(nextRelativePath, "..") {
+			nextSourceDir = filepath.Dir(state.OriginalPath)
+			nextRelativePath = filepath.Base(state.OriginalPath)
+		}
+
+		if err := s.folders.UpdatePath(ctx, folder.ID, state.OriginalPath, nextSourceDir, nextRelativePath); err != nil {
 			return &RevertResult{
 				OK:           false,
 				ErrorMessage: fmt.Sprintf("回退文件系统成功，但更新数据库路径失败：%s", err.Error()),

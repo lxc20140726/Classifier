@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type SQLiteFolderRepository struct {
@@ -21,6 +23,13 @@ const (
 	workflowStageStatusWaitingInput = "waiting_input"
 	workflowStageStatusPartial      = "partial"
 	workflowStageStatusRolledBack   = "rolled_back"
+	folderObservationSelectColumns  = "id, folder_id, path, source_dir, relative_path, is_current, first_seen_at, last_seen_at"
+	folderSelectColumns             = `id, path, source_dir, relative_path, name, category, category_source, status,
+	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
+	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at`
+	folderSelectColumnsWithAliasF = `f.id, f.path, f.source_dir, f.relative_path, f.name, f.category, f.category_source, f.status,
+	f.image_count, f.video_count, f.other_file_count, f.has_other_files, f.total_files, f.total_size, f.marked_for_move,
+	f.deleted_at, f.delete_staging_path, f.cover_image_path, f.scanned_at, f.updated_at`
 )
 
 func NewFolderRepository(db *sql.DB) FolderRepository {
@@ -28,12 +37,27 @@ func NewFolderRepository(db *sql.DB) FolderRepository {
 }
 
 func (r *SQLiteFolderRepository) Upsert(ctx context.Context, f *Folder) error {
+	if f == nil {
+		return fmt.Errorf("folderRepo.Upsert: folder is required")
+	}
+
+	now := f.ScannedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("folderRepo.Upsert begin tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
 	query := `
 INSERT INTO folders (
 	id, path, source_dir, relative_path, name, category, category_source, status,
 	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
 	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET
 	path = excluded.path,
 	source_dir = excluded.source_dir,
@@ -52,10 +76,11 @@ ON CONFLICT(id) DO UPDATE SET
 	deleted_at = excluded.deleted_at,
 	delete_staging_path = excluded.delete_staging_path,
 	cover_image_path = excluded.cover_image_path,
+	scanned_at = excluded.scanned_at,
 	updated_at = CURRENT_TIMESTAMP
 `
 
-	_, err := r.db.ExecContext(
+	if _, err := tx.ExecContext(
 		ctx,
 		query,
 		f.ID,
@@ -76,9 +101,19 @@ ON CONFLICT(id) DO UPDATE SET
 		nullableTime(f.DeletedAt),
 		nullableString(f.DeleteStagingPath),
 		strings.TrimSpace(f.CoverImagePath),
-	)
-	if err != nil {
+		now.Format("2006-01-02 15:04:05"),
+	); err != nil {
 		return fmt.Errorf("folderRepo.Upsert: %w", err)
+	}
+
+	if strings.TrimSpace(f.Path) != "" {
+		if err := r.recordObservationTx(ctx, tx, f.ID, f.Path, f.SourceDir, f.RelativePath, now); err != nil {
+			return fmt.Errorf("folderRepo.Upsert record observation: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("folderRepo.Upsert commit: %w", err)
 	}
 
 	return nil
@@ -86,13 +121,11 @@ ON CONFLICT(id) DO UPDATE SET
 
 func (r *SQLiteFolderRepository) GetByID(ctx context.Context, id string) (*Folder, error) {
 	folder, err := scanFolder(
-		r.db.QueryRowContext(ctx, `
-SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
+		r.db.QueryRowContext(ctx, fmt.Sprintf(`
+SELECT %s
 FROM folders
 WHERE id = ?
-`, id),
+`, folderSelectColumns), id),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("folderRepo.GetByID: %w", err)
@@ -102,20 +135,99 @@ WHERE id = ?
 }
 
 func (r *SQLiteFolderRepository) GetByPath(ctx context.Context, path string) (*Folder, error) {
+	return r.GetCurrentByPath(ctx, path)
+}
+
+func (r *SQLiteFolderRepository) GetCurrentByPath(ctx context.Context, path string) (*Folder, error) {
 	folder, err := scanFolder(
-		r.db.QueryRowContext(ctx, `
-SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
+		r.db.QueryRowContext(ctx, fmt.Sprintf(`
+SELECT %s
 FROM folders
 WHERE path = ? AND deleted_at IS NULL
-`, path),
+`, folderSelectColumns), path),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("folderRepo.GetByPath: %w", err)
+		return nil, fmt.Errorf("folderRepo.GetCurrentByPath: %w", err)
 	}
 
 	return folder, nil
+}
+
+func (r *SQLiteFolderRepository) GetByHistoricalPath(ctx context.Context, path string) (*Folder, error) {
+	folder, err := scanFolder(
+		r.db.QueryRowContext(ctx, fmt.Sprintf(`
+SELECT %s
+FROM folders f
+JOIN folder_path_observations o ON o.folder_id = f.id
+WHERE o.path = ? AND f.deleted_at IS NULL
+ORDER BY o.last_seen_at DESC, o.first_seen_at DESC
+LIMIT 1
+`, folderSelectColumnsWithAliasF), path),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("folderRepo.GetByHistoricalPath: %w", err)
+	}
+
+	return folder, nil
+}
+
+func (r *SQLiteFolderRepository) GetCurrentBySourceAndRelativePath(ctx context.Context, sourceDir, relativePath string) (*Folder, error) {
+	folder, err := scanFolder(
+		r.db.QueryRowContext(ctx, fmt.Sprintf(`
+SELECT %s
+FROM folders f
+JOIN folder_path_observations o ON o.folder_id = f.id
+WHERE o.source_dir = ? AND o.relative_path = ? AND o.is_current = 1 AND f.deleted_at IS NULL
+LIMIT 1
+`, folderSelectColumnsWithAliasF), sourceDir, relativePath),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("folderRepo.GetCurrentBySourceAndRelativePath: %w", err)
+	}
+
+	return folder, nil
+}
+
+func (r *SQLiteFolderRepository) ResolveScanTarget(ctx context.Context, path, sourceDir, relativePath string) (*Folder, FolderScanMatchType, error) {
+	if folder, err := r.GetCurrentByPath(ctx, path); err == nil {
+		return folder, FolderScanMatchTypeCurrentPathMatch, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, "", fmt.Errorf("folderRepo.ResolveScanTarget current path: %w", err)
+	}
+
+	if folder, err := r.GetByHistoricalPath(ctx, path); err == nil {
+		return folder, FolderScanMatchTypeHistoricalPathMatch, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, "", fmt.Errorf("folderRepo.ResolveScanTarget historical path: %w", err)
+	}
+
+	if sourceDir != "" || relativePath != "" {
+		if folder, err := r.GetCurrentBySourceAndRelativePath(ctx, sourceDir, relativePath); err == nil {
+			return folder, FolderScanMatchTypeSourceRelativeMatch, nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return nil, "", fmt.Errorf("folderRepo.ResolveScanTarget source+relative: %w", err)
+		}
+	}
+
+	return nil, FolderScanMatchTypeNewDiscovery, nil
+}
+
+func (r *SQLiteFolderRepository) RecordObservation(ctx context.Context, folderID, path, sourceDir, relativePath string, observedAt time.Time) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("folderRepo.RecordObservation begin tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	if err := r.recordObservationTx(ctx, tx, folderID, path, sourceDir, relativePath, observedAt); err != nil {
+		return fmt.Errorf("folderRepo.RecordObservation: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("folderRepo.RecordObservation commit: %w", err)
+	}
+
+	return nil
 }
 
 func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilter) ([]*Folder, int, error) {
@@ -173,12 +285,10 @@ func (r *SQLiteFolderRepository) List(ctx context.Context, filter FolderListFilt
 
 	rows, err := r.db.QueryContext(
 		ctx,
-		`SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
-FROM folders`+whereClause+`
+		fmt.Sprintf(`SELECT %s
+FROM folders%s
 ORDER BY updated_at DESC
-LIMIT ? OFFSET ?`,
+LIMIT ? OFFSET ?`, folderSelectColumns, whereClause),
 		listArgs...,
 	)
 	if err != nil {
@@ -333,12 +443,10 @@ func (r *SQLiteFolderRepository) ListByPathPrefix(ctx context.Context, prefix st
 
 	rows, err := r.db.QueryContext(
 		ctx,
-		`SELECT id, path, source_dir, relative_path, name, category, category_source, status,
-	image_count, video_count, other_file_count, has_other_files, total_files, total_size, marked_for_move,
-	deleted_at, delete_staging_path, cover_image_path, scanned_at, updated_at
+		fmt.Sprintf(`SELECT %s
 FROM folders
 WHERE deleted_at IS NULL AND (path = ? OR path LIKE ? OR path LIKE ?)
-ORDER BY LENGTH(path) ASC, path ASC`,
+ORDER BY LENGTH(path) ASC, path ASC`, folderSelectColumns),
 		trimmedPrefix,
 		trimmedPrefix+"/%",
 		trimmedPrefix+`\%`,
@@ -400,11 +508,19 @@ func (r *SQLiteFolderRepository) UpdateStatus(ctx context.Context, id, status st
 	return nil
 }
 
-func (r *SQLiteFolderRepository) UpdatePath(ctx context.Context, id, newPath string) error {
-	res, err := r.db.ExecContext(
+func (r *SQLiteFolderRepository) UpdatePath(ctx context.Context, id, newPath, sourceDir, relativePath string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("folderRepo.UpdatePath begin tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	res, err := tx.ExecContext(
 		ctx,
-		"UPDATE folders SET path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		"UPDATE folders SET path = ?, source_dir = ?, relative_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 		newPath,
+		sourceDir,
+		relativePath,
 		id,
 	)
 	if err != nil {
@@ -413,6 +529,14 @@ func (r *SQLiteFolderRepository) UpdatePath(ctx context.Context, id, newPath str
 
 	if err := assertRowsAffected(res); err != nil {
 		return fmt.Errorf("folderRepo.UpdatePath: %w", err)
+	}
+
+	if err := r.recordObservationTx(ctx, tx, id, newPath, sourceDir, relativePath, time.Now().UTC()); err != nil {
+		return fmt.Errorf("folderRepo.UpdatePath record observation: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("folderRepo.UpdatePath commit: %w", err)
 	}
 
 	return nil
@@ -440,7 +564,11 @@ func (r *SQLiteFolderRepository) IsSuppressedPath(ctx context.Context, path stri
 	var exists int
 	err := r.db.QueryRowContext(
 		ctx,
-		"SELECT 1 FROM folders WHERE path = ? AND deleted_at IS NOT NULL LIMIT 1",
+		`SELECT 1
+FROM folders f
+JOIN folder_path_observations o ON o.folder_id = f.id
+WHERE o.path = ? AND o.is_current = 1 AND f.deleted_at IS NOT NULL
+LIMIT 1`,
 		path,
 	).Scan(&exists)
 	if err != nil {
@@ -488,7 +616,17 @@ func (r *SQLiteFolderRepository) Unsuppress(ctx context.Context, id string) erro
 }
 
 func (r *SQLiteFolderRepository) Delete(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, "DELETE FROM folders WHERE id = ?", id)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("folderRepo.Delete begin tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM folder_path_observations WHERE folder_id = ?", id); err != nil {
+		return fmt.Errorf("folderRepo.Delete observations: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx, "DELETE FROM folders WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("folderRepo.Delete: %w", err)
 	}
@@ -497,7 +635,106 @@ func (r *SQLiteFolderRepository) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("folderRepo.Delete: %w", err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("folderRepo.Delete commit: %w", err)
+	}
+
 	return nil
+}
+
+func (r *SQLiteFolderRepository) recordObservationTx(ctx context.Context, tx *sql.Tx, folderID, path, sourceDir, relativePath string, observedAt time.Time) error {
+	trimmedFolderID := strings.TrimSpace(folderID)
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedFolderID == "" || trimmedPath == "" {
+		return nil
+	}
+
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+
+	existing, err := scanFolderPathObservation(
+		tx.QueryRowContext(ctx, fmt.Sprintf(`
+SELECT %s
+FROM folder_path_observations
+WHERE folder_id = ? AND path = ?
+LIMIT 1
+`, folderObservationSelectColumns), trimmedFolderID, trimmedPath),
+	)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, "UPDATE folder_path_observations SET is_current = 0 WHERE folder_id = ? AND is_current = 1", trimmedFolderID); err != nil {
+		return fmt.Errorf("clear current observation: %w", err)
+	}
+
+	firstSeenAt := observedAt
+	observationID := uuid.NewString()
+	if existing != nil {
+		firstSeenAt = existing.FirstSeenAt
+		observationID = existing.ID
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO folder_path_observations (
+	id, folder_id, path, source_dir, relative_path, is_current, first_seen_at, last_seen_at
+) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	source_dir = excluded.source_dir,
+	relative_path = excluded.relative_path,
+	is_current = 1,
+	first_seen_at = excluded.first_seen_at,
+	last_seen_at = excluded.last_seen_at`,
+		observationID,
+		trimmedFolderID,
+		trimmedPath,
+		strings.TrimSpace(sourceDir),
+		strings.TrimSpace(relativePath),
+		firstSeenAt.Format("2006-01-02 15:04:05"),
+		observedAt.Format("2006-01-02 15:04:05"),
+	); err != nil {
+		return fmt.Errorf("upsert observation: %w", err)
+	}
+
+	return nil
+}
+
+func scanFolderPathObservation(scanner interface{ Scan(dest ...any) error }) (*FolderPathObservation, error) {
+	observation := &FolderPathObservation{}
+	var isCurrent int
+	var firstSeenAt any
+	var lastSeenAt any
+
+	err := scanner.Scan(
+		&observation.ID,
+		&observation.FolderID,
+		&observation.Path,
+		&observation.SourceDir,
+		&observation.RelativePath,
+		&isCurrent,
+		&firstSeenAt,
+		&lastSeenAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	observation.IsCurrent = intToBool(isCurrent)
+	observation.FirstSeenAt, err = parseDBTime(firstSeenAt)
+	if err != nil {
+		return nil, fmt.Errorf("scanFolderPathObservation parse first_seen_at: %w", err)
+	}
+	observation.LastSeenAt, err = parseDBTime(lastSeenAt)
+	if err != nil {
+		return nil, fmt.Errorf("scanFolderPathObservation parse last_seen_at: %w", err)
+	}
+
+	return observation, nil
 }
 
 func scanFolder(scanner interface{ Scan(dest ...any) error }) (*Folder, error) {
@@ -611,4 +848,10 @@ func assertRowsAffected(res sql.Result) error {
 	}
 
 	return nil
+}
+
+func rollbackTx(tx *sql.Tx) {
+	if tx != nil {
+		_ = tx.Rollback()
+	}
 }

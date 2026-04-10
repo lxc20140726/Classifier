@@ -140,7 +140,7 @@ func TestSnapshotServiceRevertMovesPathBackUpdatesFolderAndMarksReverted(t *test
 		t.Fatalf("CommitAfter() error = %v", err)
 	}
 
-	if err := folderRepo.UpdatePath(context.Background(), folder.ID, "/library/revert-current"); err != nil {
+	if err := folderRepo.UpdatePath(context.Background(), folder.ID, "/library/revert-current", "/library", "revert-current"); err != nil {
 		t.Fatalf("UpdatePath() error = %v", err)
 	}
 

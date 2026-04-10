@@ -96,8 +96,8 @@ func TestScan(t *testing.T) {
 					t.Fatalf("GetByPath(%q) error = %v", path, err)
 				}
 
-				if folder.ID != deterministicFolderID(path) {
-					t.Fatalf("folder.ID = %q, want %q", folder.ID, deterministicFolderID(path))
+				if folder.ID == "" {
+					t.Fatalf("folder.ID is empty")
 				}
 
 				if folder.Category != "photo" {
@@ -337,7 +337,7 @@ func TestScan(t *testing.T) {
 				hiddenPath := filepath.Join(sourceDir, "hidden")
 				hiddenTime := time.Now().UTC()
 				if err := repo.Upsert(context.Background(), &repository.Folder{
-					ID:             deterministicFolderID(hiddenPath),
+					ID:             "suppressed-hidden-folder",
 					Path:           hiddenPath,
 					SourceDir:      sourceDir,
 					RelativePath:   "hidden",
@@ -361,13 +361,76 @@ func TestScan(t *testing.T) {
 			}
 
 			if gotCount != tc.wantCount {
-				t.Fatalf("Scan() count = %d, want %d", gotCount, tc.wantCount)
+				logs, _, _ := auditRepo.List(context.Background(), repository.AuditListFilter{Page: 1, Limit: 20})
+				if len(logs) > 0 {
+					t.Fatalf("Scan() count = %d, want %d, err = %v, first audit = action:%s result:%s error:%s detail:%s", gotCount, tc.wantCount, err, logs[0].Action, logs[0].Result, logs[0].ErrorMsg, string(logs[0].Detail))
+				}
+				t.Fatalf("Scan() count = %d, want %d, err = %v, audits empty", gotCount, tc.wantCount, err)
 			}
 
 			if tc.assert != nil && err == nil {
 				tc.assert(t, repo, sourceDir)
 			}
 		})
+	}
+}
+
+func TestScanReusesFolderIdentityAcrossHistoricalPathMatches(t *testing.T) {
+	t.Parallel()
+
+	database := newServiceTestDB(t)
+	repo := repository.NewFolderRepository(database)
+	adapter := newTestFSAdapter()
+	jobRepo := repository.NewJobRepository(database)
+	snapshotRepo := repository.NewSnapshotRepository(database)
+	auditRepo := repository.NewAuditRepository(database)
+	auditSvc := NewAuditService(auditRepo)
+	snapshotSvc := NewSnapshotService(adapter, snapshotRepo, repo)
+	scanner := NewScannerService(adapter, repo, jobRepo, snapshotSvc, auditSvc, nil)
+
+	sourceDir := "/library"
+	firstPath := filepath.Join(sourceDir, "photos")
+	currentPath := filepath.Join("/archive", "photos")
+
+	adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "photos", IsDir: true}})
+	adapter.AddDir(firstPath, []fs.DirEntry{{Name: "a.jpg", IsDir: false}})
+	adapter.AddFile(filepath.Join(firstPath, "a.jpg"), 10)
+
+	if got, err := scanner.Scan(context.Background(), ScanInput{SourceDirs: []string{sourceDir}}); err != nil || got != 1 {
+		t.Fatalf("first Scan() = (%d, %v), want (1, nil)", got, err)
+	}
+
+	firstFolder, err := repo.GetCurrentByPath(context.Background(), firstPath)
+	if err != nil {
+		t.Fatalf("GetCurrentByPath(first) error = %v", err)
+	}
+
+	if err := repo.UpdatePath(context.Background(), firstFolder.ID, currentPath, "/archive", "photos"); err != nil {
+		t.Fatalf("UpdatePath() error = %v", err)
+	}
+
+	adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "photos", IsDir: true}})
+	adapter.AddDir(firstPath, []fs.DirEntry{{Name: "a.jpg", IsDir: false}})
+	adapter.AddFile(filepath.Join(firstPath, "a.jpg"), 10)
+
+	if got, err := scanner.Scan(context.Background(), ScanInput{SourceDirs: []string{sourceDir}}); err != nil || got != 1 {
+		t.Fatalf("second Scan() = (%d, %v), want (1, nil)", got, err)
+	}
+
+	secondFolder, err := repo.GetCurrentByPath(context.Background(), firstPath)
+	if err != nil {
+		t.Fatalf("GetCurrentByPath(firstPath again) error = %v", err)
+	}
+	if secondFolder.ID != firstFolder.ID {
+		t.Fatalf("folder ID changed from %q to %q", firstFolder.ID, secondFolder.ID)
+	}
+
+	historical, err := repo.GetByHistoricalPath(context.Background(), firstPath)
+	if err != nil {
+		t.Fatalf("GetByHistoricalPath(first) error = %v", err)
+	}
+	if historical.ID != firstFolder.ID {
+		t.Fatalf("historical folder ID = %q, want %q", historical.ID, firstFolder.ID)
 	}
 }
 

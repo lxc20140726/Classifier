@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/liqiye/classifier/internal/fs"
@@ -164,7 +165,14 @@ func (s *MoveService) moveOne(ctx context.Context, input MoveFolderInput, i, tot
 		return fmt.Errorf("moveService.MoveFolders commit snapshot %q: %w", snapshotID, err)
 	}
 
-	if err := s.folders.UpdatePath(ctx, folder.ID, dst); err != nil {
+	nextSourceDir := folder.SourceDir
+	nextRelativePath := relativePathFromSourceDir(folder.SourceDir, dst)
+	if nextRelativePath == "" || strings.HasPrefix(nextRelativePath, "..") {
+		nextSourceDir = filepath.Dir(dst)
+		nextRelativePath = filepath.Base(dst)
+	}
+
+	if err := s.folders.UpdatePath(ctx, folder.ID, dst, nextSourceDir, nextRelativePath); err != nil {
 		s.writeFailureAudit(ctx, input.JobID, folder.ID, dst, err)
 		return fmt.Errorf("moveService.MoveFolders update folder path %q: %w", folder.ID, err)
 	}

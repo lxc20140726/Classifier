@@ -8,6 +8,7 @@ import { isClassificationSummary, isProcessingSummary, parseNodePreviewSummary }
 import { cn } from '@/lib/utils'
 import { useJobStore } from '@/store/jobStore'
 import { useNotificationStore } from '@/store/notificationStore'
+import { useWorkflowDefStore } from '@/store/workflowDefStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import type {
   Job,
@@ -43,6 +44,27 @@ function buildFailedAuditLogsLink(params: Record<string, string>) {
 
 function readTargetParam(value: string | null) {
   return value?.trim() ?? ''
+}
+
+function resolveWorkflowName(
+  job: Job,
+  workflowNameMap: Record<string, string>,
+) {
+  const workflowDefId = (job.workflow_def_id ?? '').trim()
+  if (job.type === 'scan') return '扫描任务'
+  if (workflowDefId !== '') {
+    const matched = workflowNameMap[workflowDefId]
+    if (matched && matched.trim() !== '') return matched
+    return `已删除工作流（${workflowDefId}）`
+  }
+  if (job.type === 'workflow') return '已删除工作流（缺少定义ID）'
+  return '未知工作流'
+}
+
+function resolveJobCategoryLabel(jobType: string) {
+  if (jobType === 'scan') return '扫描'
+  if (jobType === 'workflow') return '工作流'
+  return `其他(${jobType})`
 }
 
 const JOB_STATUS_LABELS: Record<JobStatus, string> = {
@@ -479,7 +501,19 @@ function WorkflowRunsPanel({ job, targetWorkflowRunId }: { job: Job; targetWorkf
   )
 }
 
-function JobRow({ job, forceExpanded, targetWorkflowRunId }: { job: Job; forceExpanded?: boolean; targetWorkflowRunId?: string }) {
+function JobRow({
+  job,
+  workflowName,
+  categoryLabel,
+  forceExpanded,
+  targetWorkflowRunId,
+}: {
+  job: Job
+  workflowName: string
+  categoryLabel: string
+  forceExpanded?: boolean
+  targetWorkflowRunId?: string
+}) {
   const [expanded, setExpanded] = useState(false)
   const isExpanded = !!forceExpanded || expanded
 
@@ -498,7 +532,14 @@ function JobRow({ job, forceExpanded, targetWorkflowRunId }: { job: Job; forceEx
           </div>
         </td>
         <td className="px-4 py-4 font-mono text-xs font-bold">{job.id.slice(0, 8)}</td>
-        <td className="px-4 py-4 text-sm font-black">{job.type}</td>
+        <td className="px-4 py-4">
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-black">{workflowName}</span>
+            <span className="inline-flex w-fit items-center border-2 border-foreground/70 bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
+              {categoryLabel}
+            </span>
+          </div>
+        </td>
         <td className="px-4 py-4">
           <StatusBadge status={job.status} labels={JOB_STATUS_LABELS} styles={JOB_STATUS_STYLES} />
         </td>
@@ -522,6 +563,7 @@ function JobRow({ job, forceExpanded, targetWorkflowRunId }: { job: Job; forceEx
 
 export default function JobHistoryPage() {
   const { jobs, total, isLoading, error, fetchJobs } = useJobStore()
+  const { defs, fetchDefs } = useWorkflowDefStore()
   const runsByJobId = useWorkflowRunStore((state) => state.runsByJobId)
   const [searchParams] = useSearchParams()
 
@@ -531,6 +573,15 @@ export default function JobHistoryPage() {
   useEffect(() => {
     void fetchJobs(targetJobId ? { page: 1, limit: 100 } : undefined)
   }, [fetchJobs, targetJobId])
+
+  useEffect(() => {
+    void fetchDefs()
+  }, [fetchDefs])
+
+  const workflowNameMap = useMemo(
+    () => Object.fromEntries(defs.map((def) => [def.id, def.name])),
+    [defs],
+  )
 
   const targetNotFoundMessage = useMemo(() => {
     if (!targetJobId || isLoading) return null
@@ -577,7 +628,7 @@ export default function JobHistoryPage() {
               <tr className="border-b-2 border-foreground bg-muted/50">
                 <th className="w-12 px-4 py-4" />
                 <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">ID</th>
-                <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">类型</th>
+                <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">工作流名称</th>
                 <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">状态</th>
                 <th className="w-48 px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">进度</th>
                 <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-widest text-foreground">目录数</th>
@@ -599,6 +650,8 @@ export default function JobHistoryPage() {
                   <JobRow
                     key={job.id}
                     job={job}
+                    workflowName={resolveWorkflowName(job, workflowNameMap)}
+                    categoryLabel={resolveJobCategoryLabel(job.type)}
                     forceExpanded={targetJobId !== '' && job.id === targetJobId}
                     targetWorkflowRunId={targetJobId === job.id ? targetWorkflowRunId : ''}
                   />

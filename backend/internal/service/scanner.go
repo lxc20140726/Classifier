@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
 	"github.com/liqiye/classifier/internal/sse"
@@ -207,14 +206,25 @@ func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []strin
 func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanTarget) (*repository.Folder, error) {
 	metrics, err := s.collectFolderMetrics(ctx, target.folderPath)
 	if err != nil {
-		s.writeScanAudit(ctx, jobID, "", target.folderPath, target.sourceDir, target.relativePath, "failed", "", err)
+		s.writeScanAudit(ctx, jobID, "", target.folderPath, target.sourceDir, target.relativePath, "", "failed", "", err)
 		return nil, err
 	}
 	category := Classify(target.folderName, metrics.fileNames)
 	now := time.Now().UTC()
 
+	existing, matchType, err := s.folders.ResolveScanTarget(ctx, target.folderPath, target.sourceDir, target.relativePath)
+	if err != nil {
+		s.writeScanAudit(ctx, jobID, "", target.folderPath, target.sourceDir, target.relativePath, "", "failed", category, err)
+		return nil, fmt.Errorf("scanner.scanOne resolve target %q: %w", target.folderPath, err)
+	}
+
+	folderID := uuid.NewString()
+	if existing != nil {
+		folderID = existing.ID
+	}
+
 	folder := &repository.Folder{
-		ID:             deterministicFolderID(target.folderPath),
+		ID:             folderID,
 		Path:           target.folderPath,
 		SourceDir:      target.sourceDir,
 		RelativePath:   target.relativePath,
@@ -232,9 +242,14 @@ func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanT
 		ScannedAt:      now,
 		UpdatedAt:      now,
 	}
+	if existing != nil {
+		folder.DeletedAt = existing.DeletedAt
+		folder.DeleteStagingPath = existing.DeleteStagingPath
+		folder.CoverImagePath = existing.CoverImagePath
+	}
 
 	if err := s.folders.Upsert(ctx, folder); err != nil {
-		s.writeScanAudit(ctx, jobID, folder.ID, target.folderPath, target.sourceDir, target.relativePath, "failed", category, err)
+		s.writeScanAudit(ctx, jobID, folder.ID, target.folderPath, target.sourceDir, target.relativePath, string(matchType), "failed", category, err)
 		return nil, fmt.Errorf("scanner.scanOne upsert %q: %w", target.folderPath, err)
 	}
 
@@ -242,7 +257,7 @@ func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanT
 		return nil, err
 	}
 
-	s.writeScanAudit(ctx, jobID, folder.ID, folder.Path, folder.SourceDir, folder.RelativePath, "success", folder.Category, nil)
+	s.writeScanAudit(ctx, jobID, folder.ID, folder.Path, folder.SourceDir, folder.RelativePath, string(matchType), "success", folder.Category, nil)
 	return folder, nil
 }
 
@@ -341,7 +356,7 @@ func (s *ScannerService) recordClassificationSnapshot(ctx context.Context, jobID
 	return nil
 }
 
-func (s *ScannerService) writeScanAudit(ctx context.Context, jobID, folderID, folderPath, sourceDir, relativePath, result, category string, scanErr error) {
+func (s *ScannerService) writeScanAudit(ctx context.Context, jobID, folderID, folderPath, sourceDir, relativePath, matchType, result, category string, scanErr error) {
 	if s.audit == nil {
 		return
 	}
@@ -349,6 +364,7 @@ func (s *ScannerService) writeScanAudit(ctx context.Context, jobID, folderID, fo
 	detail, err := json.Marshal(map[string]any{
 		"source_dir":    sourceDir,
 		"relative_path": relativePath,
+		"match_type":    matchType,
 		"category":      category,
 	})
 	if err != nil {
@@ -396,14 +412,4 @@ func normalizeSourceDirs(sourceDirs []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
-}
-
-func deterministicFolderID(path string) string {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		absPath = path
-	}
-
-	h := sha1.Sum([]byte(absPath))
-	return hex.EncodeToString(h[:])
 }

@@ -1691,9 +1691,12 @@ function WorkflowEditorScreen() {
     [setEdges],
   )
 
-  const persistGraph = useCallback(async (showNotice: boolean) => {
+  const persistGraph = useCallback(async (
+    showNotice: boolean,
+    options?: { throwOnError?: boolean },
+  ): Promise<{ changed: boolean }> => {
     const currentWorkflowDef = workflowDefRef.current
-    if (!currentWorkflowDef) return
+    if (!currentWorkflowDef) return { changed: false }
 
     setIsSaving(true)
     if (showNotice) {
@@ -1737,12 +1740,17 @@ function WorkflowEditorScreen() {
       })
       // #endregion
       if (showNotice) setNotice('工作流已保存')
+      return { changed: graphJson !== currentWorkflowDef.graph_json }
     } catch (saveError) {
       if (saveError instanceof ApiRequestError) {
         setError(saveError.message)
       } else {
         setError(saveError instanceof Error ? saveError.message : '保存失败')
       }
+      if (options?.throwOnError) {
+        throw saveError
+      }
+      return { changed: false }
     } finally {
       setIsSaving(false)
     }
@@ -1956,6 +1964,20 @@ function WorkflowEditorScreen() {
     setError(null)
     setNotice(null)
     try {
+      let autoSaved = false
+      try {
+        const saveResult = await persistGraph(false, { throwOnError: true })
+        autoSaved = saveResult.changed
+      } catch (saveError) {
+        if (saveError instanceof ApiRequestError) {
+          setError(`运行前保存失败：${saveError.message}`)
+        } else {
+          const message = saveError instanceof Error ? saveError.message : '保存失败'
+          setError(`运行前保存失败：${message}`)
+        }
+        return
+      }
+
       const liveGraph = nodesToGraph(nodesRef.current, edgesRef.current, workflowNodesRef.current, schemaMapRef.current)
       const savedGraph = safeParseGraph(workflowDefRef.current?.graph_json ?? '')
       // #region agent log
@@ -1988,7 +2010,7 @@ function WorkflowEditorScreen() {
       })
       // #endregion
       void bindLatestLaunch(workflowDefId, res.job_id)
-      setNotice('工作流已启动')
+      setNotice(autoSaved ? '检测到未保存改动，已自动保存并启动' : '工作流已启动')
     } catch (runError) {
       if (runError instanceof ApiRequestError) {
         setError(runError.message)
@@ -2040,7 +2062,7 @@ function WorkflowEditorScreen() {
               <button
                 type="button"
                 onClick={() => void handleRunWorkflow()}
-                disabled={isRunning}
+                disabled={isRunning || isSaving}
                 className="inline-flex items-center gap-2 border-2 border-foreground bg-background px-4 py-2 text-sm font-bold text-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
               >
                 {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
