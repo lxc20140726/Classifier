@@ -1,11 +1,19 @@
 import { useEffect } from 'react'
 
+import { notifyFolderActivityUpdated } from '@/lib/folderActivityEvents'
 import { useActivityStore } from '@/store/activityStore'
 import { useFolderStore } from '@/store/folderStore'
 import { useJobStore } from '@/store/jobStore'
+import { useLiveClassificationStore } from '@/store/liveClassificationStore'
 import { useNotificationStore } from '@/store/notificationStore'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
-import type { JobDoneEvent, ScanProgressEvent, WorkflowNodeEvent, WorkflowRunUpdatedEvent } from '@/types'
+import type {
+  FolderClassificationLiveEvent,
+  JobDoneEvent,
+  ScanProgressEvent,
+  WorkflowNodeEvent,
+  WorkflowRunUpdatedEvent,
+} from '@/types'
 
 interface JobProgressEvent extends ScanProgressEvent {
   failed?: number
@@ -27,7 +35,9 @@ export function useSSE() {
       }
       folderRefreshTimer = window.setTimeout(() => {
         folderRefreshTimer = null
-        void useFolderStore.getState().fetchFolders()
+        void useFolderStore.getState().fetchFolders().finally(() => {
+          notifyFolderActivityUpdated()
+        })
       }, 300)
     }
 
@@ -44,23 +54,28 @@ export function useSSE() {
           job_id: payload.job_id,
           source_dirs: payload.source_dirs,
         })
+        useLiveClassificationStore.getState().handleScanStarted({ job_id: payload.job_id })
       })
 
       eventSource.addEventListener('scan.progress', (event) => {
         const payload = JSON.parse(event.data) as ScanProgressEvent
         useFolderStore.getState().handleScanProgress(payload)
+        useLiveClassificationStore.getState().handleScanProgress(payload)
       })
 
       eventSource.addEventListener('scan.error', (event) => {
         const payload = JSON.parse(event.data) as JobErrorEvent
         useFolderStore.getState().handleScanError(payload)
+        useLiveClassificationStore.getState().handleScanError(payload)
       })
 
       eventSource.addEventListener('scan.done', () => {
         const store = useFolderStore.getState()
         store.handleScanDone()
+        useLiveClassificationStore.getState().handleScanDone()
         void store.fetchFolders()
         void useActivityStore.getState().fetchLogs({ limit: 20 })
+        notifyFolderActivityUpdated()
       })
 
       eventSource.addEventListener('job.progress', (event) => {
@@ -90,6 +105,7 @@ export function useSSE() {
         })
         void useFolderStore.getState().fetchFolders()
         void useActivityStore.getState().fetchLogs({ limit: 20 })
+        notifyFolderActivityUpdated()
       })
 
       eventSource.addEventListener('job.error', (event) => {
@@ -107,27 +123,38 @@ export function useSSE() {
       eventSource.addEventListener('workflow_run.node_started', (event) => {
         const payload = JSON.parse(event.data) as WorkflowNodeEvent
         useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'running' })
+        useLiveClassificationStore.getState().handleWorkflowNodeEvent(payload, 'classifying')
       })
 
       eventSource.addEventListener('workflow_run.node_done', (event) => {
         const payload = JSON.parse(event.data) as WorkflowNodeEvent
         useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'succeeded' })
+        useLiveClassificationStore.getState().handleWorkflowNodeEvent(payload, 'classifying')
       })
 
       eventSource.addEventListener('workflow_run.node_failed', (event) => {
         const payload = JSON.parse(event.data) as WorkflowNodeEvent
         useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'failed' })
+        useLiveClassificationStore.getState().handleWorkflowNodeEvent(payload, 'failed')
       })
 
       eventSource.addEventListener('workflow_run.node_pending', (event) => {
         const payload = JSON.parse(event.data) as WorkflowNodeEvent
         useWorkflowRunStore.getState().handleNodeEvent({ ...payload, status: 'waiting_input' })
+        useLiveClassificationStore.getState().handleWorkflowNodeEvent(payload, 'waiting_input')
       })
 
       eventSource.addEventListener('workflow_run.updated', (event) => {
         const payload = JSON.parse(event.data) as WorkflowRunUpdatedEvent
         useWorkflowRunStore.getState().handleRunUpdated(payload)
-        if (payload.status === 'succeeded' || payload.status === 'waiting_input' || payload.status === 'rolled_back' || payload.status === 'partial') {
+        useLiveClassificationStore.getState().handleWorkflowRunUpdated(payload)
+        if (
+          payload.status === 'succeeded'
+          || payload.status === 'waiting_input'
+          || payload.status === 'rolled_back'
+          || payload.status === 'partial'
+          || payload.status === 'failed'
+        ) {
           scheduleFolderRefresh()
         }
       })
@@ -139,6 +166,11 @@ export function useSSE() {
         void useJobStore.getState().fetchJobs()
         scheduleFolderRefresh()
       }
+
+      eventSource.addEventListener('folder.classification.updated', (event) => {
+        const payload = JSON.parse(event.data) as FolderClassificationLiveEvent
+        useLiveClassificationStore.getState().handleFolderClassificationUpdated(payload)
+      })
 
       eventSource.addEventListener('workflow_run.review_pending', refreshRunReviews)
       eventSource.addEventListener('workflow_run.review_updated', refreshRunReviews)

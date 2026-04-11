@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	dbpkg "github.com/liqiye/classifier/internal/db"
 	"github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
+	"github.com/liqiye/classifier/internal/sse"
 )
 
 type testFSAdapter struct {
@@ -231,6 +233,54 @@ func TestScan(t *testing.T) {
 			},
 		},
 		{
+			name: "suppresses existing records under excluded output directories",
+			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
+				t.Helper()
+
+				albumPath := filepath.Join(sourceDir, "album")
+				outputPath := filepath.Join(sourceDir, "video")
+				outputFilePath := filepath.Join(outputPath, "clip.mp4")
+				adapter.AddDir(sourceDir, []fs.DirEntry{
+					{Name: "album", IsDir: true},
+					{Name: "video", IsDir: true},
+				})
+				adapter.AddDir(albumPath, []fs.DirEntry{{Name: "a.jpg", IsDir: false}})
+				adapter.AddDir(outputPath, []fs.DirEntry{{Name: "clip.mp4", IsDir: false}})
+				adapter.AddFile(filepath.Join(albumPath, "a.jpg"), 120)
+				adapter.AddFile(outputFilePath, 220)
+			},
+			wantCount: 1,
+			assert: func(t *testing.T, repo repository.FolderRepository, sourceDir string) {
+				t.Helper()
+
+				outputPath := filepath.Join(sourceDir, "video")
+				outputFilePath := filepath.Join(outputPath, "clip.mp4")
+
+				outputFolder, err := repo.GetByID(context.Background(), "existing-output-folder")
+				if err != nil {
+					t.Fatalf("GetByID(existing-output-folder) error = %v", err)
+				}
+				if outputFolder.DeletedAt == nil {
+					t.Fatalf("expected excluded output directory record to be suppressed")
+				}
+
+				outputFile, err := repo.GetByID(context.Background(), "existing-output-file")
+				if err != nil {
+					t.Fatalf("GetByID(existing-output-file) error = %v", err)
+				}
+				if outputFile.DeletedAt == nil {
+					t.Fatalf("expected excluded output file record to be suppressed")
+				}
+
+				if _, err := repo.GetByPath(context.Background(), outputPath); err == nil {
+					t.Fatalf("expected output directory to be hidden from current list")
+				}
+				if _, err := repo.GetByPath(context.Background(), outputFilePath); err == nil {
+					t.Fatalf("expected output file record to be hidden from current list")
+				}
+			},
+		},
+		{
 			name: "parent directory becomes mixed from photo and video subtrees",
 			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
 				t.Helper()
@@ -380,6 +430,37 @@ func TestScan(t *testing.T) {
 					t.Fatalf("seed suppressed folder error = %v", err)
 				}
 			}
+			if tc.name == "suppresses existing records under excluded output directories" {
+				now := time.Now().UTC()
+				if err := repo.Upsert(context.Background(), &repository.Folder{
+					ID:             "existing-output-folder",
+					Path:           filepath.Join(sourceDir, "video"),
+					SourceDir:      sourceDir,
+					RelativePath:   "video",
+					Name:           "video",
+					Category:       "mixed",
+					CategorySource: "workflow",
+					Status:         "pending",
+					ScannedAt:      now,
+					UpdatedAt:      now,
+				}); err != nil {
+					t.Fatalf("seed output folder error = %v", err)
+				}
+				if err := repo.Upsert(context.Background(), &repository.Folder{
+					ID:             "existing-output-file",
+					Path:           filepath.Join(sourceDir, "video", "clip.mp4"),
+					SourceDir:      sourceDir,
+					RelativePath:   filepath.Join("video", "clip.mp4"),
+					Name:           "clip.mp4",
+					Category:       "video",
+					CategorySource: "workflow",
+					Status:         "pending",
+					ScannedAt:      now,
+					UpdatedAt:      now,
+				}); err != nil {
+					t.Fatalf("seed output file error = %v", err)
+				}
+			}
 			snapshotRepo := repository.NewSnapshotRepository(database)
 			auditRepo := repository.NewAuditRepository(database)
 			auditSvc := NewAuditService(auditRepo)
@@ -388,6 +469,9 @@ func TestScan(t *testing.T) {
 			scanInput := ScanInput{SourceDirs: []string{sourceDir}}
 			if tc.name == "skips configured output directories during scan" {
 				scanInput.ExcludeDirs = []string{filepath.Join(sourceDir, "output")}
+			}
+			if tc.name == "suppresses existing records under excluded output directories" {
+				scanInput.ExcludeDirs = []string{filepath.Join(sourceDir, "video")}
 			}
 			gotCount, err := scanner.Scan(context.Background(), scanInput)
 			if (err != nil) != tc.wantErr {
@@ -465,6 +549,232 @@ func TestScanReusesFolderIdentityAcrossHistoricalPathMatches(t *testing.T) {
 	}
 	if historical.ID != firstFolder.ID {
 		t.Fatalf("historical folder ID = %q, want %q", historical.ID, firstFolder.ID)
+	}
+}
+
+func TestScanPublishesFolderClassificationUpdatedEvent(t *testing.T) {
+	t.Parallel()
+
+	database := newServiceTestDB(t)
+	repo := repository.NewFolderRepository(database)
+	adapter := newTestFSAdapter()
+	jobRepo := repository.NewJobRepository(database)
+	snapshotRepo := repository.NewSnapshotRepository(database)
+	auditRepo := repository.NewAuditRepository(database)
+	auditSvc := NewAuditService(auditRepo)
+	snapshotSvc := NewSnapshotService(adapter, snapshotRepo, repo)
+	broker := sse.NewBroker()
+	events := broker.Subscribe()
+	defer broker.Unsubscribe(events)
+
+	sourceDir := "/library"
+	albumPath := filepath.Join(sourceDir, "album")
+	adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "album", IsDir: true}})
+	adapter.AddDir(albumPath, []fs.DirEntry{{Name: "a.jpg", IsDir: false}})
+	adapter.AddFile(filepath.Join(albumPath, "a.jpg"), 12)
+
+	scanner := NewScannerService(adapter, repo, jobRepo, snapshotSvc, auditSvc, broker)
+	if _, err := scanner.Scan(context.Background(), ScanInput{SourceDirs: []string{sourceDir}}); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	timeout := time.After(3 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting folder.classification.updated event")
+		case evt := <-events:
+			if evt.Type != "folder.classification.updated" {
+				continue
+			}
+			var payload struct {
+				FolderID             string `json:"folder_id"`
+				JobID                string `json:"job_id"`
+				WorkflowRunID        string `json:"workflow_run_id"`
+				FolderName           string `json:"folder_name"`
+				FolderPath           string `json:"folder_path"`
+				SourceDir            string `json:"source_dir"`
+				RelativePath         string `json:"relative_path"`
+				Category             string `json:"category"`
+				CategorySource       string `json:"category_source"`
+				ClassificationStatus string `json:"classification_status"`
+				NodeID               string `json:"node_id"`
+				NodeType             string `json:"node_type"`
+				Error                string `json:"error"`
+				UpdatedAt            string `json:"updated_at"`
+			}
+			if err := json.Unmarshal(evt.Data, &payload); err != nil {
+				t.Fatalf("json.Unmarshal(event) error = %v", err)
+			}
+			if payload.JobID != "" {
+				t.Fatalf("job_id = %q, want empty", payload.JobID)
+			}
+			if payload.WorkflowRunID != "" {
+				t.Fatalf("workflow_run_id = %q, want empty", payload.WorkflowRunID)
+			}
+			if payload.FolderName != "album" {
+				t.Fatalf("folder_name = %q, want album", payload.FolderName)
+			}
+			if payload.FolderPath != albumPath {
+				t.Fatalf("folder_path = %q, want %q", payload.FolderPath, albumPath)
+			}
+			if payload.SourceDir != filepath.Clean(sourceDir) {
+				t.Fatalf("source_dir = %q, want %q", payload.SourceDir, filepath.Clean(sourceDir))
+			}
+			if payload.RelativePath != "album" {
+				t.Fatalf("relative_path = %q, want album", payload.RelativePath)
+			}
+			if payload.Category != "photo" {
+				t.Fatalf("category = %q, want photo", payload.Category)
+			}
+			if payload.CategorySource != "auto" {
+				t.Fatalf("category_source = %q, want auto", payload.CategorySource)
+			}
+			if payload.ClassificationStatus != "scanning" {
+				t.Fatalf("classification_status = %q, want scanning", payload.ClassificationStatus)
+			}
+			if payload.NodeID != "" || payload.NodeType != "" || payload.Error != "" {
+				t.Fatalf("node_id/node_type/error = %q/%q/%q, want empty", payload.NodeID, payload.NodeType, payload.Error)
+			}
+			if payload.UpdatedAt == "" {
+				t.Fatalf("updated_at is empty")
+			}
+			if payload.FolderID == "" {
+				t.Fatalf("folder_id is empty")
+			}
+			return
+		}
+	}
+}
+
+func TestScanErrorPublishesFolderClassificationUpdatedEvent(t *testing.T) {
+	t.Parallel()
+
+	database := newServiceTestDB(t)
+	repo := repository.NewFolderRepository(database)
+	adapter := newTestFSAdapter()
+	jobRepo := repository.NewJobRepository(database)
+	snapshotRepo := repository.NewSnapshotRepository(database)
+	auditRepo := repository.NewAuditRepository(database)
+	auditSvc := NewAuditService(auditRepo)
+	snapshotSvc := NewSnapshotService(adapter, snapshotRepo, repo)
+	broker := sse.NewBroker()
+	events := broker.Subscribe()
+	defer broker.Unsubscribe(events)
+
+	sourceDir := "/library"
+	brokenPath := filepath.Join(sourceDir, "broken")
+	adapter.AddDir(sourceDir, []fs.DirEntry{{Name: "broken", IsDir: true}})
+	adapter.readErr[brokenPath] = fmt.Errorf("boom")
+
+	if err := jobRepo.Create(context.Background(), &repository.Job{
+		ID:     "job-1",
+		Type:   "scan",
+		Status: "pending",
+	}); err != nil {
+		t.Fatalf("jobRepo.Create() error = %v", err)
+	}
+
+	scanner := NewScannerService(adapter, repo, jobRepo, snapshotSvc, auditSvc, broker)
+	if _, err := scanner.Scan(context.Background(), ScanInput{
+		JobID:      "job-1",
+		SourceDirs: []string{sourceDir},
+	}); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	wantFolderID := "scan_error__library_broken"
+	seenScanError := false
+	seenFolderEvent := false
+	timeout := time.After(3 * time.Second)
+
+	for !(seenScanError && seenFolderEvent) {
+		select {
+		case <-timeout:
+			t.Fatalf("timed out waiting scan.error and folder.classification.updated events, got scan.error=%v folder.classification.updated=%v", seenScanError, seenFolderEvent)
+		case evt := <-events:
+			switch evt.Type {
+			case "scan.error":
+				var payload struct {
+					JobID      string `json:"job_id"`
+					FolderID   string `json:"folder_id"`
+					FolderPath string `json:"folder_path"`
+					SourceDir  string `json:"source_dir"`
+					Error      string `json:"error"`
+				}
+				if err := json.Unmarshal(evt.Data, &payload); err != nil {
+					t.Fatalf("json.Unmarshal(scan.error) error = %v", err)
+				}
+				if payload.JobID != "job-1" {
+					t.Fatalf("scan.error job_id = %q, want job-1", payload.JobID)
+				}
+				if payload.FolderID != wantFolderID {
+					t.Fatalf("scan.error folder_id = %q, want %q", payload.FolderID, wantFolderID)
+				}
+				if payload.FolderPath != brokenPath {
+					t.Fatalf("scan.error folder_path = %q, want %q", payload.FolderPath, brokenPath)
+				}
+				if payload.SourceDir != filepath.Clean(sourceDir) {
+					t.Fatalf("scan.error source_dir = %q, want %q", payload.SourceDir, filepath.Clean(sourceDir))
+				}
+				if payload.Error == "" {
+					t.Fatalf("scan.error error is empty")
+				}
+				seenScanError = true
+			case "folder.classification.updated":
+				var payload struct {
+					FolderID             string `json:"folder_id"`
+					JobID                string `json:"job_id"`
+					WorkflowRunID        string `json:"workflow_run_id"`
+					FolderName           string `json:"folder_name"`
+					FolderPath           string `json:"folder_path"`
+					SourceDir            string `json:"source_dir"`
+					RelativePath         string `json:"relative_path"`
+					Category             string `json:"category"`
+					CategorySource       string `json:"category_source"`
+					ClassificationStatus string `json:"classification_status"`
+					Error                string `json:"error"`
+					UpdatedAt            string `json:"updated_at"`
+				}
+				if err := json.Unmarshal(evt.Data, &payload); err != nil {
+					t.Fatalf("json.Unmarshal(folder.classification.updated) error = %v", err)
+				}
+				if payload.FolderPath != brokenPath || payload.ClassificationStatus != "failed" {
+					continue
+				}
+				if payload.FolderID != wantFolderID {
+					t.Fatalf("folder.classification.updated folder_id = %q, want %q", payload.FolderID, wantFolderID)
+				}
+				if payload.JobID != "job-1" {
+					t.Fatalf("folder.classification.updated job_id = %q, want job-1", payload.JobID)
+				}
+				if payload.WorkflowRunID != "" {
+					t.Fatalf("folder.classification.updated workflow_run_id = %q, want empty", payload.WorkflowRunID)
+				}
+				if payload.FolderName != "broken" {
+					t.Fatalf("folder.classification.updated folder_name = %q, want broken", payload.FolderName)
+				}
+				if payload.SourceDir != filepath.Clean(sourceDir) {
+					t.Fatalf("folder.classification.updated source_dir = %q, want %q", payload.SourceDir, filepath.Clean(sourceDir))
+				}
+				if payload.RelativePath != "broken" {
+					t.Fatalf("folder.classification.updated relative_path = %q, want broken", payload.RelativePath)
+				}
+				if payload.Category != "other" {
+					t.Fatalf("folder.classification.updated category = %q, want other", payload.Category)
+				}
+				if payload.CategorySource != "auto" {
+					t.Fatalf("folder.classification.updated category_source = %q, want auto", payload.CategorySource)
+				}
+				if payload.Error == "" {
+					t.Fatalf("folder.classification.updated error is empty")
+				}
+				if payload.UpdatedAt == "" {
+					t.Fatalf("folder.classification.updated updated_at is empty")
+				}
+				seenFolderEvent = true
+			}
+		}
 	}
 }
 

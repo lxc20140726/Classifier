@@ -15,8 +15,8 @@ import (
 )
 
 type ScanInput struct {
-	JobID      string
-	SourceDirs []string
+	JobID       string
+	SourceDirs  []string
 	ExcludeDirs []string
 }
 
@@ -76,6 +76,9 @@ func (s *ScannerService) Scan(ctx context.Context, input ScanInput) (int, error)
 		return 0, fmt.Errorf("scanner.Scan: source dirs are required")
 	}
 	excludeDirs := normalizeScanPaths(input.ExcludeDirs)
+	if err := s.suppressExcludedTargets(ctx, excludeDirs); err != nil {
+		return 0, fmt.Errorf("scanner.Scan suppress excluded targets: %w", err)
+	}
 
 	targets, err := s.discoverTargets(ctx, sourceDirs, excludeDirs)
 	if err != nil {
@@ -111,18 +114,22 @@ func (s *ScannerService) Scan(ctx context.Context, input ScanInput) (int, error)
 		folder, scanErr := s.scanOne(ctx, input.JobID, target, excludeDirs)
 		if scanErr != nil {
 			failed++
+			existingFolder := s.resolveScanErrorFolder(ctx, target)
 			if input.JobID != "" && s.jobs != nil {
 				_ = s.jobs.IncrementProgress(ctx, input.JobID, 0, 1)
 			}
 			s.publish("scan.error", map[string]any{
-				"job_id":      input.JobID,
-				"folder_name": target.folderName,
-				"folder_path": target.folderPath,
-				"source_dir":  target.sourceDir,
-				"done":        index + 1,
-				"total":       total,
-				"error":       scanErr.Error(),
+				"job_id":        input.JobID,
+				"folder_id":     folderIDForScanError(existingFolder, target),
+				"folder_name":   target.folderName,
+				"folder_path":   target.folderPath,
+				"source_dir":    target.sourceDir,
+				"relative_path": target.relativePath,
+				"done":          index + 1,
+				"total":         total,
+				"error":         scanErr.Error(),
 			})
+			s.publishFolderClassificationScanError(input.JobID, target, existingFolder, scanErr.Error())
 			continue
 		}
 
@@ -146,6 +153,7 @@ func (s *ScannerService) Scan(ctx context.Context, input ScanInput) (int, error)
 		}
 		s.publish("scan.progress", payload)
 		s.publish("job.progress", payload)
+		s.publishFolderClassificationUpdated(input.JobID, folder, "scanning", "", "", "")
 	}
 
 	status := "succeeded"
@@ -169,6 +177,35 @@ func (s *ScannerService) Scan(ctx context.Context, input ScanInput) (int, error)
 	s.publish("job.done", completion)
 
 	return processed, nil
+}
+
+func (s *ScannerService) suppressExcludedTargets(ctx context.Context, excludeDirs []string) error {
+	if s.folders == nil || len(excludeDirs) == 0 {
+		return nil
+	}
+
+	seenFolderIDs := make(map[string]struct{})
+	for _, excludedDir := range excludeDirs {
+		folders, err := s.folders.ListByPathPrefix(ctx, excludedDir)
+		if err != nil {
+			return fmt.Errorf("list excluded path prefix %q: %w", excludedDir, err)
+		}
+
+		for _, folder := range folders {
+			if folder == nil || folder.DeletedAt != nil {
+				continue
+			}
+			if _, ok := seenFolderIDs[folder.ID]; ok {
+				continue
+			}
+			seenFolderIDs[folder.ID] = struct{}{}
+			if err := s.folders.Suppress(ctx, folder.ID, "", ""); err != nil {
+				return fmt.Errorf("suppress excluded folder %q: %w", folder.ID, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []string, excludeDirs []string) ([]scanTarget, error) {
@@ -404,6 +441,107 @@ func (s *ScannerService) publish(eventType string, payload any) {
 	}
 
 	_ = s.broker.Publish(eventType, payload)
+}
+
+func (s *ScannerService) publishFolderClassificationUpdated(
+	jobID string,
+	folder *repository.Folder,
+	classificationStatus string,
+	nodeID string,
+	nodeType string,
+	errMsg string,
+) {
+	if s.broker == nil || folder == nil {
+		return
+	}
+
+	updatedAt := time.Now().UTC()
+
+	s.publish("folder.classification.updated", map[string]any{
+		"folder_id":             folder.ID,
+		"job_id":                strings.TrimSpace(jobID),
+		"workflow_run_id":       "",
+		"folder_name":           folder.Name,
+		"folder_path":           folder.Path,
+		"source_dir":            folder.SourceDir,
+		"relative_path":         folder.RelativePath,
+		"category":              folder.Category,
+		"category_source":       folder.CategorySource,
+		"classification_status": classificationStatus,
+		"node_id":               strings.TrimSpace(nodeID),
+		"node_type":             strings.TrimSpace(nodeType),
+		"error":                 strings.TrimSpace(errMsg),
+		"updated_at":            updatedAt.Format(time.RFC3339Nano),
+	})
+}
+
+func (s *ScannerService) publishFolderClassificationScanError(
+	jobID string,
+	target scanTarget,
+	folder *repository.Folder,
+	errMsg string,
+) {
+	if s.broker == nil {
+		return
+	}
+
+	category := "other"
+	categorySource := "auto"
+	if folder != nil {
+		if strings.TrimSpace(folder.Category) != "" {
+			category = folder.Category
+		}
+		if strings.TrimSpace(folder.CategorySource) != "" {
+			categorySource = folder.CategorySource
+		}
+	}
+
+	s.publish("folder.classification.updated", map[string]any{
+		"folder_id":             folderIDForScanError(folder, target),
+		"job_id":                strings.TrimSpace(jobID),
+		"workflow_run_id":       "",
+		"folder_name":           target.folderName,
+		"folder_path":           target.folderPath,
+		"source_dir":            target.sourceDir,
+		"relative_path":         target.relativePath,
+		"category":              category,
+		"category_source":       categorySource,
+		"classification_status": "failed",
+		"node_id":               "",
+		"node_type":             "",
+		"error":                 strings.TrimSpace(errMsg),
+		"updated_at":            time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (s *ScannerService) resolveScanErrorFolder(ctx context.Context, target scanTarget) *repository.Folder {
+	if s.folders == nil {
+		return nil
+	}
+
+	folder, _, err := s.folders.ResolveScanTarget(ctx, target.folderPath, target.sourceDir, target.relativePath)
+	if err != nil {
+		return nil
+	}
+
+	return folder
+}
+
+func folderIDForScanError(folder *repository.Folder, target scanTarget) string {
+	if folder != nil {
+		return strings.TrimSpace(folder.ID)
+	}
+
+	path := strings.TrimSpace(target.folderPath)
+	if path == "" {
+		path = strings.TrimSpace(target.folderName)
+	}
+	if path == "" {
+		return ""
+	}
+
+	replacer := strings.NewReplacer("\\", "_", "/", "_", ":", "_")
+	return "scan_error_" + replacer.Replace(path)
 }
 
 func normalizeSourceDirs(sourceDirs []string) []string {

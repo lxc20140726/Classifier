@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/liqiye/classifier/internal/fs"
+	"github.com/liqiye/classifier/internal/repository"
 )
 
 const folderTreeScannerExecutorType = "folder-tree-scanner"
@@ -68,6 +69,13 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 	for _, pattern := range excludePatterns {
 		excludeSet[strings.ToLower(pattern)] = struct{}{}
 	}
+	excludeDirs := normalizeScanPaths(workflowScanExcludeDirs(input.AppConfig))
+	if isExcludedScanPath(sourceDir, excludeDirs) {
+		return NodeExecutionOutput{
+			Outputs: map[string]TypedValue{"tree": {Type: PortTypeFolderTreeList, Value: []FolderTree{}}},
+			Status:  ExecutionSuccess,
+		}, nil
+	}
 
 	minFileCount := intConfig(input.Node.Config, "min_file_count", 0)
 	if minFileCount < 0 {
@@ -91,7 +99,10 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 		}
 
 		treePath := joinWorkflowPath(sourceDir, entry.Name)
-		tree, fileCount, err := e.buildTree(ctx, treePath, 0, maxDepth, excludeSet)
+		if isExcludedScanPath(treePath, excludeDirs) {
+			continue
+		}
+		tree, fileCount, err := e.buildTree(ctx, treePath, 0, maxDepth, excludeSet, excludeDirs)
 		if err != nil {
 			return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute build tree for %q: %w", treePath, err)
 		}
@@ -105,7 +116,7 @@ func (e *folderTreeScannerExecutor) Execute(ctx context.Context, input NodeExecu
 	// 当 source_dir 本身就是“待处理文件夹”而非“父目录”时（例如由 folder-picker 输出），
 	// 顶层可能没有子目录，此时回退为扫描 source_dir 本身，避免整个链路空跑。
 	if len(trees) == 0 && !hasTopLevelDir {
-		rootTree, fileCount, err := e.buildTree(ctx, sourceDir, 0, maxDepth, excludeSet)
+		rootTree, fileCount, err := e.buildTree(ctx, sourceDir, 0, maxDepth, excludeSet, excludeDirs)
 		if err != nil {
 			return NodeExecutionOutput{}, fmt.Errorf("folderTreeScanner.Execute build root tree for %q: %w", sourceDir, err)
 		}
@@ -124,7 +135,14 @@ func (e *folderTreeScannerExecutor) Rollback(_ context.Context, _ NodeRollbackIn
 	return nil
 }
 
-func (e *folderTreeScannerExecutor) buildTree(ctx context.Context, path string, depth, maxDepth int, excludePatterns map[string]struct{}) (FolderTree, int, error) {
+func (e *folderTreeScannerExecutor) buildTree(
+	ctx context.Context,
+	path string,
+	depth,
+	maxDepth int,
+	excludePatterns map[string]struct{},
+	excludeDirs []string,
+) (FolderTree, int, error) {
 	entries, err := e.fs.ReadDir(ctx, path)
 	if err != nil {
 		return FolderTree{}, 0, fmt.Errorf("folderTreeScanner.buildTree read dir %q: %w", path, err)
@@ -145,7 +163,10 @@ func (e *folderTreeScannerExecutor) buildTree(ctx context.Context, path string, 
 			}
 
 			childPath := joinWorkflowPath(path, entry.Name)
-			childTree, childFileCount, childErr := e.buildTree(ctx, childPath, depth+1, maxDepth, excludePatterns)
+			if isExcludedScanPath(childPath, excludeDirs) {
+				continue
+			}
+			childTree, childFileCount, childErr := e.buildTree(ctx, childPath, depth+1, maxDepth, excludePatterns, excludeDirs)
 			if childErr != nil {
 				return FolderTree{}, 0, childErr
 			}
@@ -275,4 +296,12 @@ func normalizePatterns(patterns []string) []string {
 func isExcluded(name string, excludeSet map[string]struct{}) bool {
 	_, ok := excludeSet[strings.ToLower(name)]
 	return ok
+}
+
+func workflowScanExcludeDirs(appConfig *repository.AppConfig) []string {
+	if appConfig == nil {
+		return nil
+	}
+
+	return flattenOutputDirs(appConfig.OutputDirs)
 }

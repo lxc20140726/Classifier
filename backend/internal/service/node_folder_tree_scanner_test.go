@@ -198,6 +198,51 @@ func TestFolderTreeScannerExecutorExecuteRespectsMaxDepthAndMinFileCount(t *test
 	}
 }
 
+func TestFolderTreeScannerExecutorExecuteSkipsConfiguredOutputDirs(t *testing.T) {
+	t.Parallel()
+
+	adapter := newFolderTreeScannerTestFS()
+	root := "/library"
+	albumPath := filepath.Join(root, "album")
+	videoOutputPath := filepath.Join(root, "video")
+	mixedOutputPath := filepath.Join(root, "mixed")
+
+	adapter.AddDir(root, []fs.DirEntry{
+		{Name: "album", IsDir: true},
+		{Name: "video", IsDir: true},
+		{Name: "mixed", IsDir: true},
+	})
+	adapter.AddDir(albumPath, []fs.DirEntry{{Name: "cover.jpg", IsDir: false, Size: 3}})
+	adapter.AddDir(videoOutputPath, []fs.DirEntry{{Name: "clip.mp4", IsDir: false, Size: 6}})
+	adapter.AddDir(mixedOutputPath, []fs.DirEntry{{Name: "poster.jpg", IsDir: false, Size: 2}})
+
+	executor := newFolderTreeScannerExecutor(adapter)
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{Config: map[string]any{}},
+		AppConfig: &repository.AppConfig{
+			OutputDirs: repository.AppConfigOutputDirs{
+				Video: []string{videoOutputPath},
+				Mixed: []string{mixedOutputPath},
+			},
+		},
+		Inputs: testInputs(map[string]any{"source_dir": root}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	trees, ok := out.Outputs["tree"].Value.([]FolderTree)
+	if !ok {
+		t.Fatalf("output type = %T, want []FolderTree", out.Outputs["tree"].Value)
+	}
+	if len(trees) != 1 {
+		t.Fatalf("len(trees) = %d, want 1", len(trees))
+	}
+	if trees[0].Path != normalizeWorkflowPath(albumPath) {
+		t.Fatalf("tree.Path = %q, want %q", trees[0].Path, normalizeWorkflowPath(albumPath))
+	}
+}
+
 func TestFolderTreeScannerExecutorExecuteReadErrors(t *testing.T) {
 	t.Parallel()
 

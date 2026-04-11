@@ -11,13 +11,23 @@ import {
   X,
 } from 'lucide-react'
 import gsap from 'gsap'
+import { useNavigate } from 'react-router-dom'
 
+import { updateWorkflowDef } from '@/api/workflowDefs'
+import { startWorkflowJob } from '@/api/workflowRuns'
 import { SnapshotDrawer } from '@/components/SnapshotDrawer'
+import { WorkflowRunStatusCard } from '@/components/WorkflowRunStatusCard'
+import {
+  getWorkflowFolderLaunchability,
+  launchWorkflowForFolder,
+} from '@/lib/workflowFolderLaunch'
 import { cn } from '@/lib/utils'
 import { useActivityStore } from '@/store/activityStore'
 import { useFolderStore } from '@/store/folderStore'
 import { useJobStore } from '@/store/jobStore'
-import type { Category, Folder, FolderStatus, Job, WorkflowStageStatus } from '@/types'
+import { useWorkflowDefStore } from '@/store/workflowDefStore'
+import { useWorkflowRunStore } from '@/store/workflowRunStore'
+import type { Category, Folder, FolderStatus, Job, WorkflowGraph, WorkflowStageStatus } from '@/types'
 
 const CATEGORY_LABEL: Record<Category | '', string> = {
   '': '全部分类',
@@ -116,6 +126,30 @@ function formatRelativeTime(iso: string): string {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs} 小时前`
   return `${Math.floor(hrs / 24)} 天前`
+}
+
+interface FolderWorkflowLaunchDialogState {
+  open: boolean
+  folder: Folder | null
+}
+
+function countEnabledNodes(graphJSON: string) {
+  try {
+    const parsed = JSON.parse(graphJSON) as Partial<WorkflowGraph>
+    const nodes = Array.isArray(parsed.nodes) ? parsed.nodes : []
+    return nodes.filter((node) => node && node.enabled !== false).length
+  } catch {
+    return 0
+  }
+}
+
+function buildJobHistoryLink(jobId: string, workflowRunId?: string) {
+  const query = new URLSearchParams()
+  query.set('job_id', jobId)
+  if (workflowRunId && workflowRunId.trim() !== '') {
+    query.set('workflow_run_id', workflowRunId)
+  }
+  return `/job-history?${query.toString()}`
 }
 
 function ScanProgressBanner() {
@@ -280,6 +314,7 @@ interface FolderActionProps {
   folder: Folder
   selected: boolean
   onToggleSelect: () => void
+  onLaunchWorkflow: () => void
   onSnapshot: () => void
   onUpdateCategory: (c: Category) => void
   onUpdateStatus: (s: FolderStatus) => void
@@ -291,6 +326,7 @@ function FolderCard({
   folder,
   selected,
   onToggleSelect,
+  onLaunchWorkflow,
   onSnapshot,
   onUpdateCategory,
   onUpdateStatus,
@@ -367,6 +403,13 @@ function FolderCard({
           </button>
         ) : (
           <>
+            <button
+              type="button"
+              onClick={onLaunchWorkflow}
+              className="flex-1 border-2 border-foreground bg-green-300 px-2 py-1.5 text-xs font-bold text-green-900 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
+            >
+              启动工作流
+            </button>
             <select
               value={folder.category}
               onChange={(e) => onUpdateCategory(e.target.value as Category)}
@@ -414,6 +457,7 @@ function FolderRow({
   folder,
   selected,
   onToggleSelect,
+  onLaunchWorkflow,
   onSnapshot,
   onUpdateCategory,
   onUpdateStatus,
@@ -503,6 +547,13 @@ function FolderRow({
             </button>
           ) : (
             <>
+              <button
+                type="button"
+                onClick={onLaunchWorkflow}
+                className="border-2 border-foreground bg-green-300 px-3 py-1.5 text-xs font-bold text-green-900 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
+              >
+                启动工作流
+              </button>
               <select
                 value={folder.category}
                 onChange={(e) => onUpdateCategory(e.target.value as Category)}
@@ -548,6 +599,7 @@ function FolderRow({
 }
 
 export default function FolderListPage() {
+  const navigate = useNavigate()
   const folders = useFolderStore((s) => s.folders)
   const total = useFolderStore((s) => s.total)
   const page = useFolderStore((s) => s.page)
@@ -566,9 +618,25 @@ export default function FolderListPage() {
   const updateFolderStatus = useFolderStore((s) => s.updateFolderStatus)
   const suppressFolder = useFolderStore((s) => s.suppressFolder)
   const unsuppressFolder = useFolderStore((s) => s.unsuppressFolder)
+  const startJobPolling = useJobStore((s) => s.startPolling)
+  const workflowDefs = useWorkflowDefStore((s) => s.defs)
+  const workflowDefsLoading = useWorkflowDefStore((s) => s.isLoading)
+  const workflowDefsError = useWorkflowDefStore((s) => s.error)
+  const fetchWorkflowDefs = useWorkflowDefStore((s) => s.fetchDefs)
+  const bindLatestLaunch = useWorkflowRunStore((s) => s.bindLatestLaunch)
+  const restoreLatestLaunch = useWorkflowRunStore((s) => s.restoreLatestLaunch)
+  const buildRunCardView = useWorkflowRunStore((s) => s.buildRunCardView)
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null)
+  const [launchDialog, setLaunchDialog] = useState<FolderWorkflowLaunchDialogState>({
+    open: false,
+    folder: null,
+  })
+  const [selectedWorkflowDefId, setSelectedWorkflowDefId] = useState('')
+  const [launchError, setLaunchError] = useState<string | null>(null)
+  const [launchSuccessJobId, setLaunchSuccessJobId] = useState<string | null>(null)
+  const [isLaunching, setIsLaunching] = useState(false)
   const previousListKeyRef = useRef<string>('')
 
   useEffect(() => {
@@ -608,6 +676,83 @@ export default function FolderListPage() {
       setSelectedIds(new Set(folders.map((f) => f.id)))
     }
   }
+
+  function openLaunchDialog(folder: Folder) {
+    setLaunchDialog({ open: true, folder })
+    setLaunchError(null)
+    setLaunchSuccessJobId(null)
+    setIsLaunching(false)
+    setSelectedWorkflowDefId('')
+    void fetchWorkflowDefs()
+  }
+
+  function closeLaunchDialog() {
+    setLaunchDialog({ open: false, folder: null })
+    setSelectedWorkflowDefId('')
+    setLaunchError(null)
+    setLaunchSuccessJobId(null)
+    setIsLaunching(false)
+  }
+
+  const workflowLaunchEntries = workflowDefs.map((def) => ({
+    def,
+    launchability: getWorkflowFolderLaunchability(def.graph_json),
+  }))
+  const launchableWorkflowCount = workflowLaunchEntries.filter((entry) => entry.launchability.canLaunch).length
+  const selectedWorkflowEntry = workflowLaunchEntries.find((entry) => entry.def.id === selectedWorkflowDefId) ?? null
+  const selectedWorkflowDef = selectedWorkflowEntry?.def ?? null
+  const selectedWorkflowLaunchability = selectedWorkflowEntry?.launchability ?? null
+
+  useEffect(() => {
+    if (!launchDialog.open) return
+    if (selectedWorkflowDefId.trim() !== '') return
+    const firstLaunchable = workflowLaunchEntries.find((entry) => entry.launchability.canLaunch)
+    if (firstLaunchable) {
+      setSelectedWorkflowDefId(firstLaunchable.def.id)
+    }
+  }, [launchDialog.open, selectedWorkflowDefId, workflowLaunchEntries])
+
+  useEffect(() => {
+    if (!launchDialog.open || selectedWorkflowDefId.trim() === '') return
+    void restoreLatestLaunch(selectedWorkflowDefId)
+  }, [launchDialog.open, restoreLatestLaunch, selectedWorkflowDefId])
+
+  async function handleLaunchWorkflow() {
+    if (!launchDialog.folder) return
+    if (!selectedWorkflowDef) {
+      setLaunchError('请选择一个工作流')
+      return
+    }
+
+    setIsLaunching(true)
+    setLaunchError(null)
+    setLaunchSuccessJobId(null)
+    try {
+      const result = await launchWorkflowForFolder({
+        workflowDef: selectedWorkflowDef,
+        folderId: launchDialog.folder.id,
+        updateWorkflowGraph: async (workflowDefId, graphJson) => {
+          await updateWorkflowDef(workflowDefId, { graph_json: graphJson })
+        },
+        startWorkflow: async (workflowDefId) => {
+          const res = await startWorkflowJob({ workflow_def_id: workflowDefId })
+          return res.job_id
+        },
+        bindLatestLaunch,
+      })
+      startJobPolling(result.jobId)
+      setLaunchSuccessJobId(result.jobId)
+      await fetchWorkflowDefs()
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : '启动失败')
+    } finally {
+      setIsLaunching(false)
+    }
+  }
+
+  const launchCardView = selectedWorkflowDef
+    ? buildRunCardView(selectedWorkflowDef.id, countEnabledNodes(selectedWorkflowDef.graph_json))
+    : null
 
   return (
     <>
@@ -748,6 +893,7 @@ export default function FolderListPage() {
                   folder={folder}
                   selected={selectedIds.has(folder.id)}
                   onToggleSelect={() => toggleSelect(folder.id)}
+                  onLaunchWorkflow={() => openLaunchDialog(folder)}
                   onSnapshot={() => setActiveFolderId(folder.id)}
                   onUpdateCategory={(c) => void updateFolderCategory(folder.id, c)}
                   onUpdateStatus={(s) => void updateFolderStatus(folder.id, s)}
@@ -784,6 +930,7 @@ export default function FolderListPage() {
                       folder={folder}
                       selected={selectedIds.has(folder.id)}
                       onToggleSelect={() => toggleSelect(folder.id)}
+                      onLaunchWorkflow={() => openLaunchDialog(folder)}
                       onSnapshot={() => setActiveFolderId(folder.id)}
                       onUpdateCategory={(c) => void updateFolderCategory(folder.id, c)}
                       onUpdateStatus={(s) => void updateFolderStatus(folder.id, s)}
@@ -826,6 +973,143 @@ export default function FolderListPage() {
           <RecentLogsPanel />
         </div>
       </div>
+
+      {launchDialog.open && launchDialog.folder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-3xl border-2 border-foreground bg-background p-6 shadow-hard-lg">
+            <h2 className="mb-2 text-xl font-black tracking-tight">启动工作流</h2>
+            <p className="mb-1 text-sm font-bold text-muted-foreground">
+              当前文件夹：{launchDialog.folder.name}
+            </p>
+            <p className="mb-4 truncate font-mono text-xs font-bold text-muted-foreground">
+              {launchDialog.folder.path}
+            </p>
+
+            <div className="space-y-3">
+              <p className="text-xs font-black tracking-wider">选择工作流定义</p>
+              <div className="max-h-72 space-y-2 overflow-auto border-2 border-foreground bg-muted/20 p-2">
+                {workflowDefsLoading ? (
+                  <p className="py-8 text-center text-xs font-bold text-muted-foreground">工作流加载中...</p>
+                ) : workflowDefsError ? (
+                  <p className="py-8 text-center text-xs font-bold text-red-700">{workflowDefsError}</p>
+                ) : workflowLaunchEntries.length === 0 ? (
+                  <p className="py-8 text-center text-xs font-bold text-muted-foreground">暂无工作流定义</p>
+                ) : (
+                  workflowLaunchEntries.map(({ def, launchability }) => {
+                    const disabled = !launchability.canLaunch
+                    const selected = selectedWorkflowDefId === def.id
+                    return (
+                      <button
+                        key={def.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          setSelectedWorkflowDefId(def.id)
+                          setLaunchError(null)
+                          setLaunchSuccessJobId(null)
+                        }}
+                        className={cn(
+                          'w-full border-2 px-3 py-3 text-left transition-all',
+                          selected
+                            ? 'border-foreground bg-foreground text-background shadow-hard'
+                            : 'border-foreground bg-background hover:bg-muted',
+                          disabled && 'cursor-not-allowed opacity-60 hover:bg-background',
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="truncate text-sm font-black">{def.name}</span>
+                          <span className="shrink-0 font-mono text-xs font-bold">v{def.version}</span>
+                        </div>
+                        <p
+                          className={cn(
+                            'mt-2 text-xs font-bold',
+                            selected ? 'text-background/90' : 'text-muted-foreground',
+                          )}
+                        >
+                          {launchability.canLaunch
+                            ? `可快捷启动（${launchability.enabledPickerCount} 个 folder-picker）`
+                            : (launchability.error ?? '该工作流暂不可快捷启动')}
+                        </p>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+
+            {!workflowDefsLoading && !workflowDefsError && launchableWorkflowCount === 0 && (
+              <p className="mt-4 border-2 border-amber-900 bg-amber-100 px-4 py-3 text-sm font-bold text-amber-900">
+                暂无可快捷启动的工作流
+              </p>
+            )}
+
+            {selectedWorkflowLaunchability?.canLaunch === false && (
+              <p className="mt-4 border-2 border-amber-900 bg-amber-100 px-4 py-3 text-sm font-bold text-amber-900">
+                {selectedWorkflowLaunchability.error ?? '该工作流暂不可快捷启动'}
+              </p>
+            )}
+
+            {launchError && (
+              <p className="mt-4 border-2 border-red-900 bg-red-100 px-4 py-3 text-sm font-bold text-red-900 shadow-hard">
+                {launchError}
+              </p>
+            )}
+
+            {launchSuccessJobId && (
+              <div className="mt-4 border-2 border-green-900 bg-green-100 px-4 py-3 text-sm font-bold text-green-900 shadow-hard">
+                启动成功，作业 ID：{launchSuccessJobId}
+              </div>
+            )}
+
+            {launchCardView && (
+              <div className="mt-4">
+                <WorkflowRunStatusCard
+                  view={launchCardView}
+                  title="最近一次运行状态"
+                  onOpenJobs={() => navigate(buildJobHistoryLink(launchCardView.jobId, launchCardView.workflowRunId))}
+                />
+              </div>
+            )}
+
+            <div className="mt-8 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={closeLaunchDialog}
+                disabled={isLaunching}
+                className="border-2 border-foreground bg-background px-6 py-2.5 text-sm font-bold transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-foreground disabled:hover:shadow-none disabled:hover:translate-y-0"
+              >
+                关闭
+              </button>
+
+              <div className="flex items-center gap-3">
+                {launchSuccessJobId && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(buildJobHistoryLink(launchSuccessJobId, launchCardView?.workflowRunId))}
+                    className="border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5"
+                  >
+                    查看作业
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleLaunchWorkflow()}
+                  disabled={
+                    isLaunching
+                    || !launchDialog.folder
+                    || !selectedWorkflowDef
+                    || selectedWorkflowLaunchability?.canLaunch !== true
+                  }
+                  className="inline-flex items-center gap-2 border-2 border-foreground bg-green-300 px-6 py-2.5 text-sm font-bold text-green-900 transition-all hover:bg-foreground hover:text-background hover:shadow-hard hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-green-300 disabled:hover:text-green-900 disabled:hover:shadow-none disabled:hover:translate-y-0"
+                >
+                  {isLaunching && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {isLaunching ? '启动中...' : '确认启动'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SnapshotDrawer
         open={activeFolderId !== null}

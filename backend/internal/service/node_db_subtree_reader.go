@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/liqiye/classifier/internal/fs"
 	"github.com/liqiye/classifier/internal/repository"
 )
 
@@ -14,10 +15,14 @@ const dbSubtreeReaderExecutorType = "db-subtree-reader"
 
 type dbSubtreeReaderNodeExecutor struct {
 	folders repository.FolderRepository
+	fs      fs.FSAdapter
 }
 
-func newDBSubtreeReaderExecutor(folderRepo repository.FolderRepository) *dbSubtreeReaderNodeExecutor {
-	return &dbSubtreeReaderNodeExecutor{folders: folderRepo}
+func newDBSubtreeReaderExecutor(folderRepo repository.FolderRepository, fsAdapter fs.FSAdapter) *dbSubtreeReaderNodeExecutor {
+	return &dbSubtreeReaderNodeExecutor{
+		folders: folderRepo,
+		fs:      fsAdapter,
+	}
 }
 
 func (e *dbSubtreeReaderNodeExecutor) Type() string {
@@ -65,6 +70,9 @@ func (e *dbSubtreeReaderNodeExecutor) Execute(ctx context.Context, input NodeExe
 	if !ok {
 		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: failed to build subtree for path %q", e.Type(), rootPath)
 	}
+	if err := e.dbSubtreePopulateFiles(ctx, &rootEntry); err != nil {
+		return NodeExecutionOutput{}, fmt.Errorf("%s.Execute populate files: %w", e.Type(), err)
+	}
 
 	return NodeExecutionOutput{
 		Outputs: map[string]TypedValue{
@@ -79,6 +87,57 @@ func (e *dbSubtreeReaderNodeExecutor) Resume(_ context.Context, _ NodeExecutionI
 }
 
 func (e *dbSubtreeReaderNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
+	return nil
+}
+
+func (e *dbSubtreeReaderNodeExecutor) dbSubtreePopulateFiles(ctx context.Context, root *ClassifiedEntry) error {
+	if root == nil {
+		return nil
+	}
+	if e.fs == nil {
+		return nil
+	}
+	if err := e.dbSubtreePopulateFilesForNode(ctx, root); err != nil {
+		return err
+	}
+	for i := range root.Subtree {
+		if err := e.dbSubtreePopulateFiles(ctx, &root.Subtree[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *dbSubtreeReaderNodeExecutor) dbSubtreePopulateFilesForNode(ctx context.Context, node *ClassifiedEntry) error {
+	if node == nil {
+		return nil
+	}
+
+	entries, err := e.fs.ReadDir(ctx, node.Path)
+	if err != nil {
+		return fmt.Errorf("read path %q: %w", node.Path, err)
+	}
+
+	files := make([]FileEntry, 0)
+	for _, entry := range entries {
+		if entry.IsDir {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			continue
+		}
+		files = append(files, FileEntry{
+			Name:      name,
+			Ext:       strings.ToLower(strings.TrimSpace(filepath.Ext(name))),
+			SizeBytes: entry.Size,
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Name < files[j].Name
+	})
+	node.Files = files
 	return nil
 }
 

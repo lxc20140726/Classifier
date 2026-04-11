@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 import { getJobProgress, listJobs, type JobQueryParams } from '@/api/jobs'
+import { notifyFolderActivityUpdated } from '@/lib/folderActivityEvents'
 import type { Job, JobDoneEvent, JobProgress } from '@/types'
 
 interface JobStore {
@@ -162,8 +163,21 @@ export const useJobStore = create<JobStore>((set, get) => ({
         const progress = await getJobProgress(jobId)
         get().handleJobProgress(progress)
 
+        if (progress.status === 'waiting_input') {
+          const { useActivityStore } = await import('@/store/activityStore')
+          const { useFolderStore } = await import('@/store/folderStore')
+          void useActivityStore.getState().fetchLogs({ limit: 20 })
+          void useFolderStore.getState().fetchFolders()
+          notifyFolderActivityUpdated()
+        }
+
         if (['succeeded', 'failed', 'partial', 'cancelled', 'rolled_back'].includes(progress.status)) {
           get().stopPolling(jobId)
+          const { useActivityStore } = await import('@/store/activityStore')
+          const { useFolderStore } = await import('@/store/folderStore')
+          void useActivityStore.getState().fetchLogs({ limit: 20 })
+          void useFolderStore.getState().fetchFolders()
+          notifyFolderActivityUpdated()
         } else {
           const timer = window.setTimeout(poll, 2000)
           pollingTimers.set(jobId, timer)

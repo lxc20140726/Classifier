@@ -211,7 +211,7 @@ func NewWorkflowRunnerService(
 	svc.RegisterExecutor(newSignalAggregatorExecutor())
 	svc.RegisterExecutor(newClassificationWriterExecutor(folderRepo, snapshotRepo))
 	svc.RegisterExecutor(newClassificationReaderExecutor())
-	svc.RegisterExecutor(newDBSubtreeReaderExecutor(folderRepo))
+	svc.RegisterExecutor(newDBSubtreeReaderExecutor(folderRepo, fsAdapter))
 	svc.RegisterExecutor(newFolderSplitterExecutor())
 	svc.RegisterExecutor(newCategoryRouterExecutor())
 	svc.RegisterExecutor(newMixedLeafRouterExecutor(fsAdapter))
@@ -260,11 +260,25 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 	if input.WorkflowDefID == "" {
 		return "", fmt.Errorf("workflowRunner.StartJob: workflow_def_id is required")
 	}
-	if _, err := s.workflowDefs.GetByID(ctx, input.WorkflowDefID); err != nil {
+	def, err := s.workflowDefs.GetByID(ctx, input.WorkflowDefID)
+	if err != nil {
 		return "", fmt.Errorf("workflowRunner.StartJob get workflow def %q: %w", input.WorkflowDefID, err)
 	}
 
-	folderIDsJSON, err := json.Marshal([]string{})
+	rootFolderID := ""
+	if def != nil {
+		graph, parseErr := parseWorkflowGraph(def.GraphJSON)
+		if parseErr != nil {
+			return "", fmt.Errorf("workflowRunner.StartJob parse graph for workflow def %q: %w", input.WorkflowDefID, parseErr)
+		}
+		rootFolderID = inferWorkflowRootFolderID(graph)
+	}
+
+	folderIDs := []string{}
+	if rootFolderID != "" {
+		folderIDs = append(folderIDs, rootFolderID)
+	}
+	folderIDsJSON, err := json.Marshal(folderIDs)
 	if err != nil {
 		return "", fmt.Errorf("workflowRunner.StartJob marshal folder_ids: %w", err)
 	}
@@ -284,16 +298,17 @@ func (s *WorkflowRunnerService) StartJob(ctx context.Context, input StartWorkflo
 		return "", fmt.Errorf("workflowRunner.StartJob create job: %w", err)
 	}
 
-	go s.runJob(context.Background(), jobID, input.WorkflowDefID, sourceDir)
+	go s.runJob(context.Background(), jobID, input.WorkflowDefID, sourceDir, rootFolderID)
 	return jobID, nil
 }
 
-func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID, sourceDir string) {
+func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID, sourceDir, rootFolderID string) {
 	_ = s.jobs.UpdateStatus(ctx, jobID, "running", "")
 
 	run := &repository.WorkflowRun{
 		ID:            uuid.NewString(),
 		JobID:         jobID,
+		FolderID:      strings.TrimSpace(rootFolderID),
 		SourceDir:     sourceDir,
 		WorkflowDefID: workflowDefID,
 		Status:        "pending",
@@ -330,6 +345,25 @@ func (s *WorkflowRunnerService) runJob(ctx context.Context, jobID, workflowDefID
 		}
 		_ = s.jobs.UpdateStatus(ctx, jobID, "failed", jobErr)
 	}
+}
+
+func inferWorkflowRootFolderID(graph *repository.WorkflowGraph) string {
+	if graph == nil {
+		return ""
+	}
+
+	for _, node := range graph.Nodes {
+		if !node.Enabled || strings.TrimSpace(node.Type) != folderPickerExecutorType {
+			continue
+		}
+
+		folderID := strings.TrimSpace(folderPickerParseSavedFolderID(node.Config))
+		if folderID != "" {
+			return folderID
+		}
+	}
+
+	return ""
 }
 
 func (s *WorkflowRunnerService) ListWorkflowRuns(ctx context.Context, jobID string, page, limit int) ([]*repository.WorkflowRun, int, error) {
@@ -753,6 +787,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"error":           failureMessage,
 			"error_code":      errCode,
 		})
+		s.publishFolderClassificationUpdated(ctx, run, "failed", node.ID, node.Type, failureMessage)
 		return nodeExecutionResult{
 			Err:    fmt.Errorf("workflowRunner.executeWorkflowRun input validation node %q: %s", node.ID, failureMessage),
 			NodeID: node.ID,
@@ -799,6 +834,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		"node_type":       node.Type,
 		"sequence":        nodeRun.Sequence,
 	})
+	s.publishFolderClassificationUpdated(ctx, run, "classifying", node.ID, node.Type, "")
 
 	executor, ok := s.executors[node.Type]
 	if !ok {
@@ -824,6 +860,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"node_type":       node.Type,
 			"error":           err.Error(),
 		})
+		s.publishFolderClassificationUpdated(ctx, run, "failed", node.ID, node.Type, err.Error())
 		return nodeExecutionResult{Err: err, NodeID: node.ID, Reason: err.Error()}
 	}
 
@@ -871,6 +908,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"node_type":       node.Type,
 			"error":           execErr.Error(),
 		})
+		s.publishFolderClassificationUpdated(ctx, run, "failed", node.ID, node.Type, execErr.Error())
 		return nodeExecutionResult{
 			Err:    fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %w", node.ID, execErr),
 			NodeID: node.ID,
@@ -901,6 +939,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 				"error":           finalMsg,
 				"error_code":      code,
 			})
+			s.publishFolderClassificationUpdated(ctx, run, "failed", node.ID, node.Type, finalMsg)
 			return nodeExecutionResult{
 				Err:    fmt.Errorf("workflowRunner.executeWorkflowRun output validation node %q: %s", node.ID, finalMsg),
 				NodeID: node.ID,
@@ -959,6 +998,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"node_type":       node.Type,
 			"error":           execOutput.PendingReason,
 		})
+		s.publishFolderClassificationUpdated(ctx, run, "waiting_input", node.ID, node.Type, execOutput.PendingReason)
 
 		return nodeExecutionResult{Pending: true}
 	}
@@ -983,6 +1023,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 			"error":           errMsg,
 			"error_code":      execOutput.ErrorCode,
 		})
+		s.publishFolderClassificationUpdated(ctx, run, "failed", node.ID, node.Type, errMsg)
 		return nodeExecutionResult{
 			Err:    fmt.Errorf("workflowRunner.executeWorkflowRun execute node %q: %s", node.ID, errMsg),
 			NodeID: node.ID,
@@ -1017,6 +1058,7 @@ func (s *WorkflowRunnerService) executeWorkflowNode(
 		"node_type":       node.Type,
 		"sequence":        nodeRun.Sequence,
 	})
+	s.publishFolderClassificationUpdated(ctx, run, "classifying", node.ID, node.Type, "")
 
 	return nodeExecutionResult{}
 }
@@ -1868,6 +1910,70 @@ func (s *WorkflowRunnerService) publishWorkflowRunUpdated(ctx context.Context, w
 		"resume_node_id":  resumeNodeID,
 		"error":           strings.TrimSpace(run.Error),
 	})
+
+	s.publishFolderClassificationUpdated(
+		ctx,
+		run,
+		workflowRunStatusToClassificationStatus(run.Status),
+		strings.TrimSpace(run.LastNodeID),
+		"",
+		strings.TrimSpace(run.Error),
+	)
+}
+
+func (s *WorkflowRunnerService) publishFolderClassificationUpdated(
+	ctx context.Context,
+	run *repository.WorkflowRun,
+	classificationStatus string,
+	nodeID string,
+	nodeType string,
+	errMsg string,
+) {
+	if s.broker == nil || s.folders == nil || run == nil {
+		return
+	}
+
+	folderID := strings.TrimSpace(run.FolderID)
+	if folderID == "" {
+		return
+	}
+
+	folder, err := s.folders.GetByID(ctx, folderID)
+	if err != nil || folder == nil {
+		return
+	}
+
+	updatedAt := time.Now().UTC()
+
+	s.publish("folder.classification.updated", map[string]any{
+		"folder_id":             folder.ID,
+		"job_id":                strings.TrimSpace(run.JobID),
+		"workflow_run_id":       strings.TrimSpace(run.ID),
+		"folder_name":           folder.Name,
+		"folder_path":           folder.Path,
+		"source_dir":            folder.SourceDir,
+		"relative_path":         folder.RelativePath,
+		"category":              folder.Category,
+		"category_source":       folder.CategorySource,
+		"classification_status": strings.TrimSpace(classificationStatus),
+		"node_id":               strings.TrimSpace(nodeID),
+		"node_type":             strings.TrimSpace(nodeType),
+		"error":                 strings.TrimSpace(errMsg),
+		"updated_at":            updatedAt.Format(time.RFC3339Nano),
+	})
+}
+
+func workflowRunStatusToClassificationStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "waiting_input":
+		return "waiting_input"
+	case "succeeded":
+		return "completed"
+	case "running", "pending":
+		return "classifying"
+	default:
+		return "failed"
+	}
 }
 
 func (s *WorkflowRunnerService) syncFolderStatusesByWorkflowRun(ctx context.Context, workflowRunID, runStatus string) error {

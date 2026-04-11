@@ -50,6 +50,31 @@ async function getFolders(request: import('@playwright/test').APIRequestContext)
   }
 }
 
+async function getTopLevelFolders(request: import('@playwright/test').APIRequestContext) {
+  const response = await request.get('/api/folders?limit=100&top_level_only=true')
+  expect(response.ok()).toBeTruthy()
+  const body = (await response.json()) as { data: Array<Record<string, unknown>> }
+  return body.data.map((folder) => ({
+    id: String(folder.id ?? folder.ID ?? ''),
+    name: String(folder.name ?? folder.Name ?? ''),
+    workflowSummary: (folder.workflow_summary ?? folder.WorkflowSummary ?? {}) as Record<string, unknown>,
+  }))
+}
+
+async function getClassificationWorkflowDef(request: import('@playwright/test').APIRequestContext) {
+  const response = await request.get('/api/workflow-defs?limit=100')
+  expect(response.ok()).toBeTruthy()
+  const body = (await response.json()) as {
+    data: Array<Record<string, unknown>>
+  }
+  const workflowDef = body.data.find((item) => {
+    const graphJSON = String(item.graph_json ?? item.GraphJSON ?? '')
+    return graphJSON.includes('"folder-picker"') && graphJSON.includes('"classification-writer"')
+  })
+  expect(workflowDef).toBeTruthy()
+  return workflowDef!
+}
+
 test('workflow definition CRUD works against the real backend', async ({ page }) => {
   const uniqueName = `全链路工作流-${Date.now()}`
   const updatedName = `${uniqueName}-已更新`
@@ -151,4 +176,85 @@ test('legacy removed node type fails at runtime', async ({ request }) => {
   const refreshedFolders = await getFolders(request)
   const refreshedManualFolder = refreshedFolders.data.find((folder) => folder.id === manualFolder!.id)
   expect(refreshedManualFolder?.category).toBe('pending')
+})
+
+test('classification workflow binds top-level folder summary and timeline', async ({ request }) => {
+  await scanUntilFoldersExist(request)
+
+  const topLevelFolders = await getTopLevelFolders(request)
+  const rootFolder = topLevelFolders.find((folder) => folder.name === 'series-pack')
+  expect(rootFolder).toBeTruthy()
+
+  const workflowDef = await getClassificationWorkflowDef(request)
+  const graph = JSON.parse(String(workflowDef.graph_json ?? workflowDef.GraphJSON ?? '')) as {
+    nodes: Array<{ id: string; type: string; config?: Record<string, unknown> }>
+    edges: Array<Record<string, unknown>>
+  }
+  const pickerNode = graph.nodes.find((node) => node.type === 'folder-picker')
+  expect(pickerNode).toBeTruthy()
+  pickerNode!.config = {
+    ...(pickerNode!.config ?? {}),
+    source_mode: 'folders',
+    saved_folder_id: rootFolder!.id,
+    saved_folder_ids: [rootFolder!.id],
+    folder_ids: [rootFolder!.id],
+  }
+
+  const updateResponse = await request.put(`/api/workflow-defs/${String(workflowDef.id ?? workflowDef.ID ?? '')}`, {
+    data: {
+      name: String(workflowDef.name ?? workflowDef.Name ?? ''),
+      description: String(workflowDef.description ?? workflowDef.Description ?? ''),
+      graph_json: JSON.stringify(graph),
+      is_active: Boolean(workflowDef.is_active ?? workflowDef.IsActive ?? true),
+      version: Number(workflowDef.version ?? workflowDef.Version ?? 1),
+    },
+  })
+  expect(updateResponse.ok()).toBeTruthy()
+
+  const startJobResponse = await request.post('/api/jobs', {
+    data: {
+      workflow_def_id: String(workflowDef.id ?? workflowDef.ID ?? ''),
+    },
+  })
+  expect(startJobResponse.ok()).toBeTruthy()
+  const startJobBody = (await startJobResponse.json()) as { job_id: string }
+
+  let workflowRunId = ''
+  await expect
+    .poll(async () => {
+      const response = await request.get(`/api/jobs/${startJobBody.job_id}/workflow-runs?limit=20`)
+      if (!response.ok()) return ''
+      const body = (await response.json()) as {
+        data: Array<{ id: string; status: string }>
+      }
+      workflowRunId = body.data[0]?.id ?? ''
+      return body.data[0]?.status ?? ''
+    }, { timeout: 20000 })
+    .toBe('succeeded')
+
+  await expect
+    .poll(async () => {
+      const folders = await getTopLevelFolders(request)
+      const refreshedRoot = folders.find((folder) => folder.id === rootFolder!.id)
+      const classification = (refreshedRoot?.workflowSummary.classification ?? {}) as Record<string, unknown>
+      return {
+        status: String(classification.status ?? ''),
+        workflowRunID: String(classification.workflow_run_id ?? ''),
+      }
+    }, { timeout: 20000 })
+    .toEqual({
+      status: 'succeeded',
+      workflowRunID: workflowRunId,
+    })
+
+  await expect
+    .poll(async () => {
+      const response = await request.get(`/api/audit-logs?folder_id=${rootFolder!.id}&action=workflow.run.complete&limit=20`)
+      if (!response.ok()) return []
+      const body = (await response.json()) as {
+        data: Array<{ workflow_run_id: string }>
+      }
+      return body.data.map((item) => item.workflow_run_id)
+    }, { timeout: 20000 })
+    .toContain(workflowRunId)
 })

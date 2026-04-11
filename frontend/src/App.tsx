@@ -7,6 +7,7 @@ import AuditLogsPage from '@/pages/AuditLogsPage'
 import FolderListPage from '@/pages/FolderListPage'
 import JobHistoryPage from '@/pages/JobHistoryPage'
 import JobsPage from '@/pages/JobsPage'
+import LiveClassificationPage from '@/pages/LiveClassificationPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import SettingsPage from '@/pages/SettingsPage'
 import WorkflowEditorPage from '@/pages/WorkflowEditorPage'
@@ -21,6 +22,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<FolderListPage />} />
+          <Route path="live-classification" element={<LiveClassificationPage />} />
           <Route path="audit-logs" element={<AuditLogsPage />} />
           <Route path="jobs" element={<JobsPage />} />
           <Route path="job-history" element={<JobHistoryPage />} />

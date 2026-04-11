@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle, RotateCcw, X } from 'lucide-react'
 
 import { listAuditLogs } from '@/api/auditLogs'
 import { ApiRequestError } from '@/api/client'
 import { revertSnapshot, type RevertResult } from '@/api/snapshots'
+import { subscribeFolderActivityUpdated } from '@/lib/folderActivityEvents'
 import { cn } from '@/lib/utils'
 import { useSnapshotStore } from '@/store/snapshotStore'
 import type { AuditLog, Snapshot } from '@/types'
@@ -466,10 +468,11 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
     if (!open || !folderId) return
 
     let cancelled = false
-    setIsAuditLoading(true)
-    setAuditError(null)
 
-    void (async () => {
+    const loadAuditLogs = async () => {
+      setIsAuditLoading(true)
+      setAuditError(null)
+
       try {
         const response = await listAuditLogs({ folderId, page: 1, limit: 300 })
         if (cancelled) return
@@ -483,12 +486,21 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
           setIsAuditLoading(false)
         }
       }
-    })()
+    }
+
+    void loadAuditLogs()
+
+    const unsubscribe = subscribeFolderActivityUpdated(() => {
+      if (cancelled) return
+      void fetchSnapshots(folderId)
+      void loadAuditLogs()
+    })
 
     return () => {
       cancelled = true
+      unsubscribe()
     }
-  }, [folderId, open])
+  }, [fetchSnapshots, folderId, open])
 
   async function handleRevert(snapshotId: string) {
     if (!folderId) return
@@ -578,7 +590,7 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
     return withMetricDisplay.sort((a, b) => parseTime(b.createdAt) - parseTime(a.createdAt))
   }, [auditLogs, snapshots])
 
-  return (
+  const drawerContent = (
     <>
       <div
         className={cn(
@@ -709,4 +721,10 @@ export function SnapshotDrawer({ open, folderId, onClose }: SnapshotDrawerProps)
       </aside>
     </>
   )
+
+  if (typeof document === 'undefined') {
+    return drawerContent
+  }
+
+  return createPortal(drawerContent, document.body)
 }

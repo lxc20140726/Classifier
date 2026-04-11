@@ -132,8 +132,8 @@ func TestWorkflowRunnerServiceWorkflowRunUpdatedEventOnReviewFlow(t *testing.T) 
 	nodeRunRepo := repository.NewNodeRunRepository(database)
 	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
 	broker := sse.NewBroker()
-	events := broker.Subscribe()
-	defer broker.Unsubscribe(events)
+	runEvents := broker.Subscribe()
+	defer broker.Unsubscribe(runEvents)
 
 	folder := &repository.Folder{
 		ID:             "folder-review-updated-event",
@@ -185,7 +185,7 @@ func TestWorkflowRunnerServiceWorkflowRunUpdatedEventOnReviewFlow(t *testing.T) 
 	}
 
 	run := waitWorkflowRunStatus(t, workflowRunRepo, jobID, "waiting_input")
-	waitWorkflowRunUpdatedStatus(t, events, run.ID, "waiting_input", jobID, def.ID)
+	waitWorkflowRunUpdatedStatus(t, runEvents, run.ID, "waiting_input", jobID, def.ID)
 
 	reviews, err := svc.ListProcessingReviews(ctx, run.ID)
 	if err != nil {
@@ -199,7 +199,7 @@ func TestWorkflowRunnerServiceWorkflowRunUpdatedEventOnReviewFlow(t *testing.T) 
 		t.Fatalf("ApproveProcessingReview() error = %v", err)
 	}
 
-	waitWorkflowRunUpdatedStatus(t, events, run.ID, "succeeded", jobID, def.ID)
+	waitWorkflowRunUpdatedStatus(t, runEvents, run.ID, "succeeded", jobID, def.ID)
 }
 
 func waitWorkflowRunUpdatedStatus(t *testing.T, events <-chan sse.Event, runID, status, jobID, workflowDefID string) {
@@ -241,6 +241,110 @@ func waitWorkflowRunUpdatedStatus(t *testing.T, events <-chan sse.Event, runID, 
 			return
 		}
 	}
+}
+
+func waitFolderClassificationUpdatedStatus(t *testing.T, events <-chan sse.Event, runID, folderID, status string) {
+	t.Helper()
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("timed out waiting folder.classification.updated status=%q run=%q folder=%q", status, runID, folderID)
+		case event := <-events:
+			if event.Type != "folder.classification.updated" {
+				continue
+			}
+			var payload struct {
+				FolderID             string `json:"folder_id"`
+				WorkflowRunID        string `json:"workflow_run_id"`
+				ClassificationStatus string `json:"classification_status"`
+				Category             string `json:"category"`
+				CategorySource       string `json:"category_source"`
+				UpdatedAt            string `json:"updated_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				t.Fatalf("json.Unmarshal(folder.classification.updated) error = %v", err)
+			}
+			if payload.WorkflowRunID != runID || payload.FolderID != folderID || payload.ClassificationStatus != status {
+				continue
+			}
+			if payload.Category == "" {
+				t.Fatalf("folder.classification.updated category is empty")
+			}
+			if payload.CategorySource == "" {
+				t.Fatalf("folder.classification.updated category_source is empty")
+			}
+			if payload.UpdatedAt == "" {
+				t.Fatalf("folder.classification.updated updated_at is empty")
+			}
+			return
+		}
+	}
+}
+
+func TestPublishWorkflowRunUpdatedPublishesFolderClassificationEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	broker := sse.NewBroker()
+	events := broker.Subscribe()
+	defer broker.Unsubscribe(events)
+
+	folder := &repository.Folder{
+		ID:             "folder-live-publish",
+		Path:           "/source/live-publish",
+		SourceDir:      "/source",
+		RelativePath:   "live-publish",
+		Name:           "live-publish",
+		Category:       "photo",
+		CategorySource: "workflow",
+		Status:         "pending",
+	}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+	job := &repository.Job{
+		ID:        "job-live-publish",
+		Type:      "workflow",
+		Status:    "running",
+		FolderIDs: `["folder-live-publish"]`,
+		Total:     1,
+	}
+	if err := jobRepo.Create(ctx, job); err != nil {
+		t.Fatalf("jobRepo.Create() error = %v", err)
+	}
+	run := &repository.WorkflowRun{
+		ID:            "run-live-publish",
+		JobID:         job.ID,
+		FolderID:      folder.ID,
+		WorkflowDefID: "wf-live-publish",
+		Status:        "waiting_input",
+		LastNodeID:    "node-review",
+	}
+	if err := workflowRunRepo.Create(ctx, run); err != nil {
+		t.Fatalf("workflowRunRepo.Create() error = %v", err)
+	}
+
+	svc := NewWorkflowRunnerService(
+		jobRepo,
+		folderRepo,
+		repository.NewSnapshotRepository(database),
+		repository.NewWorkflowDefinitionRepository(database),
+		workflowRunRepo,
+		repository.NewNodeRunRepository(database),
+		repository.NewNodeSnapshotRepository(database),
+		fs.NewMockAdapter(),
+		broker,
+		nil,
+	)
+
+	svc.publishWorkflowRunUpdated(ctx, run.ID)
+	waitFolderClassificationUpdatedStatus(t, events, run.ID, folder.ID, "waiting_input")
 }
 
 func TestWorkflowRunnerPrepareProcessingReviews_AutoAggregateWithoutStepResultEdges(t *testing.T) {

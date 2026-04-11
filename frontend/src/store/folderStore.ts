@@ -9,6 +9,7 @@ import {
   updateFolderStatus,
   type FolderQueryParams,
 } from '@/api/folders'
+import { notifyFolderActivityUpdated } from '@/lib/folderActivityEvents'
 import { useJobStore } from '@/store/jobStore'
 import type { Category, Folder, FolderStatus, ScanStartResponse, ScanProgressEvent } from '@/types'
 
@@ -184,6 +185,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
       set((state) => ({
         folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
       }))
+    notifyFolderActivityUpdated()
     } catch (error) {
       set({ error: error instanceof Error ? error.message : '更新分类失败' })
     }
@@ -194,6 +196,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
       set((state) => ({
         folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
       }))
+    notifyFolderActivityUpdated()
     } catch (error) {
       set({ error: error instanceof Error ? error.message : '更新状态失败' })
     }
@@ -206,6 +209,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
           folder.id === id ? { ...folder, deleted_at: new Date().toISOString() } : folder,
         ),
       }))
+    notifyFolderActivityUpdated()
     } catch (error) {
       set({ error: error instanceof Error ? error.message : '隐藏目录记录失败' })
     }
@@ -216,6 +220,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
       set((state) => ({
         folders: state.folders.map((folder) => (folder.id === id ? response.data : folder)),
       }))
+    notifyFolderActivityUpdated()
     } catch (error) {
       set({ error: error instanceof Error ? error.message : '恢复扫描失败' })
     }

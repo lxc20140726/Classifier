@@ -299,6 +299,7 @@ export interface ProcessingReviewItem {
 export interface WorkflowNodeEvent {
   job_id: string
   workflow_run_id: string
+  folder_id?: string
   node_id: string
   node_type: string
   status?: NodeRunStatus
@@ -313,6 +314,43 @@ export interface WorkflowRunUpdatedEvent {
   last_node_id?: string
   resume_node_id?: string | null
   error?: string
+}
+
+export type LiveClassificationStatus = 'scanning' | 'classifying' | 'waiting_input' | 'completed' | 'failed'
+
+export interface FolderClassificationLiveEvent {
+  folder_id: string
+  job_id: string
+  workflow_run_id: string
+  folder_name: string
+  folder_path: string
+  source_dir: string
+  relative_path: string
+  category: Category
+  category_source: CategorySource
+  classification_status: LiveClassificationStatus
+  node_id?: string
+  node_type?: string
+  error?: string
+  updated_at: string
+}
+
+export interface LiveClassificationItem {
+  folder_id: string
+  job_id: string
+  workflow_run_id: string
+  folder_name: string
+  folder_path: string
+  source_dir: string
+  relative_path: string
+  category: Category
+  category_source: CategorySource
+  classification_status: LiveClassificationStatus
+  node_id: string
+  node_type: string
+  error: string
+  entered_at: string
+  last_event_at: string
 }
 
 export interface NodeUIPosition {

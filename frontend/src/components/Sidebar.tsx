@@ -8,6 +8,7 @@ import { useThemeStore } from '@/store/themeStore'
 
 const navItems = [
   { to: '/', label: '文件夹', icon: FolderKanban, end: true },
+  { to: '/live-classification', label: '实时分类', icon: FolderKanban },
   { to: '/jobs', label: '计划任务', icon: Briefcase },
   { to: '/job-history', label: '执行历史', icon: FolderClock },
   { to: '/workflow-defs', label: '工作流', icon: GitBranch },

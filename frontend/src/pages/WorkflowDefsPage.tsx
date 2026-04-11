@@ -7,9 +7,9 @@ import { updateWorkflowDef } from '@/api/workflowDefs'
 import { startWorkflowJob } from '@/api/workflowRuns'
 import { WorkflowRunStatusCard } from '@/components/WorkflowRunStatusCard'
 import {
-  applyFolderSelectionToEnabledPickers,
-  checkLaunchableFolderPickers,
-} from '@/lib/workflowGraphFolderPicker'
+  getWorkflowFolderLaunchability,
+  launchWorkflowForFolder,
+} from '@/lib/workflowFolderLaunch'
 import { cn } from '@/lib/utils'
 import { useWorkflowRunStore } from '@/store/workflowRunStore'
 import { useWorkflowDefStore } from '@/store/workflowDefStore'
@@ -208,9 +208,10 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
 
   if (currentLaunchDef) {
     try {
-      const checkResult = checkLaunchableFolderPickers(currentLaunchDef.graph_json)
+      const checkResult = getWorkflowFolderLaunchability(currentLaunchDef.graph_json)
       enabledPickerCount = checkResult.enabledPickerCount
-      canDirectLaunch = enabledPickerCount > 0
+      canDirectLaunch = checkResult.canLaunch
+      launchCheckError = checkResult.error
     } catch (err) {
       launchCheckError = err instanceof Error ? err.message : '工作流图解析失败'
     }
@@ -275,12 +276,8 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
     setLaunchSuccessJobId(null)
     setLaunchReloadKey((prev) => prev + 1)
 
-    try {
-      const checkResult = checkLaunchableFolderPickers(def.graph_json)
-      setSelectedFolderId(checkResult.initialSelectedFolderId)
-    } catch {
-      setSelectedFolderId('')
-    }
+    const checkResult = getWorkflowFolderLaunchability(def.graph_json)
+    setSelectedFolderId(checkResult.initialSelectedFolderId)
     void restoreLatestLaunch(def.id)
   }
 
@@ -358,15 +355,20 @@ export default function WorkflowDefsPage(_props: WorkflowDefsPageProps) {
     setLaunchError(null)
     setLaunchSuccessJobId(null)
     try {
-      const nextGraphJson = applyFolderSelectionToEnabledPickers(
-        currentLaunchDef.graph_json,
-        selectedFolderId,
-      )
-      await updateWorkflowDef(currentLaunchDef.id, { graph_json: nextGraphJson })
+      const result = await launchWorkflowForFolder({
+        workflowDef: currentLaunchDef,
+        folderId: selectedFolderId,
+        updateWorkflowGraph: async (workflowDefId, graphJson) => {
+          await updateWorkflowDef(workflowDefId, { graph_json: graphJson })
+        },
+        startWorkflow: async (workflowDefId) => {
+          const res = await startWorkflowJob({ workflow_def_id: workflowDefId })
+          return res.job_id
+        },
+        bindLatestLaunch,
+      })
       await fetchDefs()
-      const res = await startWorkflowJob({ workflow_def_id: currentLaunchDef.id })
-      setLaunchSuccessJobId(res.job_id)
-      void bindLatestLaunch(currentLaunchDef.id, res.job_id)
+      setLaunchSuccessJobId(result.jobId)
     } catch (err) {
       setLaunchError(err instanceof Error ? err.message : '启动失败')
     } finally {

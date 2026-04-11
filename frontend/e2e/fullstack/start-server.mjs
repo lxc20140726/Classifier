@@ -16,6 +16,8 @@ const deleteStagingDir = path.join(runtimeRoot, 'delete-staging')
 const distDir = path.join(frontendDir, 'dist')
 const embeddedDistDir = path.join(backendDir, 'cmd/server/web/dist')
 const port = '18080'
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const goCommand = process.platform === 'win32' ? 'go.exe' : 'go'
 
 async function createFixtureTree() {
   await rm(runtimeRoot, { recursive: true, force: true })
@@ -34,6 +36,12 @@ async function createFixtureTree() {
 
   await mkdir(path.join(sourceDir, 'manga-comic'), { recursive: true })
   await writeFile(path.join(sourceDir, 'manga-comic', 'chapter1.cbz'), 'cbz')
+
+  await mkdir(path.join(sourceDir, 'series-pack', 'leaf-photo'), { recursive: true })
+  await writeFile(path.join(sourceDir, 'series-pack', 'leaf-photo', '001.jpg'), 'jpg')
+  await mkdir(path.join(sourceDir, 'series-pack', 'leaf-video'), { recursive: true })
+  await writeFile(path.join(sourceDir, 'series-pack', 'ep1.mp4'), 'mp4')
+  await writeFile(path.join(sourceDir, 'series-pack', 'leaf-video', 'ep2.mkv'), 'mkv')
 }
 
 async function syncBuiltFrontend() {
@@ -48,6 +56,7 @@ function run(command, args, cwd, extraEnv = {}) {
       cwd,
       stdio: 'inherit',
       env: { ...process.env, ...extraEnv },
+      shell: process.platform === 'win32',
     })
     child.on('exit', (code) => {
       if (code === 0) {
@@ -60,10 +69,10 @@ function run(command, args, cwd, extraEnv = {}) {
 }
 
 await createFixtureTree()
-await run('npm', ['run', 'build'], frontendDir)
+await run(npmCommand, ['run', 'build'], frontendDir)
 await syncBuiltFrontend()
 
-const server = spawn('go', ['run', './cmd/server'], {
+const server = spawn(goCommand, ['run', './cmd/server'], {
   cwd: backendDir,
   stdio: 'inherit',
   env: {

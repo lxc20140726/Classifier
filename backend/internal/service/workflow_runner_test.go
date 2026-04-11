@@ -940,6 +940,114 @@ func TestWorkflowRunnerServiceNamedSourcePortCompatibility(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunnerServiceStartJobBindsFolderPickerRootFolder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	jobRepo := repository.NewJobRepository(database)
+	folderRepo := repository.NewFolderRepository(database)
+	workflowDefRepo := repository.NewWorkflowDefinitionRepository(database)
+	workflowRunRepo := repository.NewWorkflowRunRepository(database)
+	nodeRunRepo := repository.NewNodeRunRepository(database)
+	nodeSnapshotRepo := repository.NewNodeSnapshotRepository(database)
+	auditRepo := repository.NewAuditRepository(database)
+	auditSvc := NewAuditService(auditRepo)
+
+	folder := &repository.Folder{
+		ID:             "folder-root-binding",
+		Path:           "/source/root-binding",
+		SourceDir:      "/source",
+		RelativePath:   "root-binding",
+		Name:           "root-binding",
+		Category:       "other",
+		CategorySource: "auto",
+		Status:         "pending",
+	}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "picker", Type: folderPickerExecutorType, Enabled: true, Config: map[string]any{
+				"source_mode":     "folders",
+				"saved_folder_id": folder.ID,
+			}},
+			{ID: "writer", Type: "classification-writer", Enabled: true},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+
+	def := &repository.WorkflowDefinition{ID: "wf-folder-root-binding", Name: "wf-folder-root-binding", GraphJSON: string(graphJSON), IsActive: true, Version: 1}
+	if err := workflowDefRepo.Create(ctx, def); err != nil {
+		t.Fatalf("workflowDefRepo.Create() error = %v", err)
+	}
+
+	adapter := fs.NewMockAdapter()
+	adapter.AddDir(folder.Path, []fs.DirEntry{})
+
+	svc := NewWorkflowRunnerService(jobRepo, folderRepo, repository.NewSnapshotRepository(database), workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, adapter, nil, auditSvc)
+	svc.RegisterExecutor(&auditOutputExecutor{nodeType: "classification-writer", outputs: map[string]TypedValue{}})
+
+	jobID, err := svc.StartJob(ctx, StartWorkflowJobInput{WorkflowDefID: def.ID})
+	if err != nil {
+		t.Fatalf("StartJob() error = %v", err)
+	}
+
+	job := waitJobDone(t, jobRepo, jobID)
+	if job.Status != "succeeded" {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+
+	var folderIDs []string
+	if err := json.Unmarshal([]byte(job.FolderIDs), &folderIDs); err != nil {
+		t.Fatalf("json.Unmarshal(job.FolderIDs) error = %v", err)
+	}
+	if len(folderIDs) != 1 || folderIDs[0] != folder.ID {
+		t.Fatalf("job folder_ids = %v, want [%q]", folderIDs, folder.ID)
+	}
+
+	run := waitWorkflowRunByJob(t, workflowRunRepo, jobID)
+	if run.FolderID != folder.ID {
+		t.Fatalf("workflow run folder_id = %q, want %q", run.FolderID, folder.ID)
+	}
+
+	summaries, err := folderRepo.ListWorkflowSummariesByFolderIDs(ctx, []string{folder.ID})
+	if err != nil {
+		t.Fatalf("folderRepo.ListWorkflowSummariesByFolderIDs() error = %v", err)
+	}
+	summary := summaries[folder.ID]
+	if summary.Classification.Status != "succeeded" {
+		t.Fatalf("classification status = %q, want succeeded", summary.Classification.Status)
+	}
+	if summary.Classification.WorkflowRunID != run.ID {
+		t.Fatalf("classification workflow_run_id = %q, want %q", summary.Classification.WorkflowRunID, run.ID)
+	}
+
+	logs, _, err := auditRepo.List(ctx, repository.AuditListFilter{
+		WorkflowRunID: run.ID,
+		Action:        "workflow.run.complete",
+		Page:          1,
+		Limit:         20,
+	})
+	if err != nil {
+		t.Fatalf("auditRepo.List() error = %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatalf("audit logs len = 0, want at least 1")
+	}
+	if logs[0].FolderID != folder.ID {
+		t.Fatalf("audit folder_id = %q, want %q", logs[0].FolderID, folder.ID)
+	}
+	if logs[0].FolderPath != folder.Path {
+		t.Fatalf("audit folder_path = %q, want %q", logs[0].FolderPath, folder.Path)
+	}
+}
+
 func TestWorkflowRunnerServiceLazyRequiredInputFailureSemantics(t *testing.T) {
 	t.Parallel()
 
