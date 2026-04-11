@@ -125,7 +125,7 @@ func (e *thumbnailNodeExecutor) Execute(ctx context.Context, input NodeExecution
 			ensuredDirs[outputDir] = struct{}{}
 		}
 
-		outputName := phase4MoveItemName(item)
+		outputName := processingItemArtifactName(item)
 		if strings.TrimSpace(outputName) == "" {
 			outputName = thumbnailNodeOutputBaseName(item)
 		}

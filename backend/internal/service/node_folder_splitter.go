@@ -56,8 +56,9 @@ func (e *folderSplitterNodeExecutor) Execute(_ context.Context, input NodeExecut
 
 	rootPath := normalizeWorkflowPath(entry.Path)
 	items := []ProcessingItem{folderSplitterBuildSelfItem(entry, rootPath)}
+	entryCategory := folderSplitterResolveEntryCategory(entry)
 	shouldSplit := (splitWithSubdirs && len(entry.Subtree) > 0) ||
-		(strings.EqualFold(entry.Category, "mixed") && splitMixed && splitDepth > 0)
+		(strings.EqualFold(entryCategory, "mixed") && splitMixed && splitDepth > 0)
 	if shouldSplit {
 		splitItems := folderSplitterBuildRecursiveItems(entry, rootPath, splitDepth, splitWithSubdirs)
 		if len(splitItems) > 0 {
@@ -112,7 +113,7 @@ func folderSplitterBuildSelfItem(entry ClassifiedEntry, rootPath string) Process
 		FolderID:           entry.FolderID,
 		FolderName:         entry.Name,
 		TargetName:         entry.Name,
-		Category:           entry.Category,
+		Category:           folderSplitterResolveItemCategory(entry),
 		Files:              append([]FileEntry(nil), entry.Files...),
 		ParentPath:         normalizeWorkflowPath(filepath.Dir(normalizedPath)),
 		RootPath:           normalizedRoot,
@@ -145,7 +146,7 @@ func folderSplitterCollectItems(entry ClassifiedEntry, rootPath string, depth in
 		return
 	}
 
-	isMixedRoot := strings.EqualFold(strings.TrimSpace(entry.Category), "mixed")
+	isMixedRoot := strings.EqualFold(folderSplitterResolveEntryCategory(entry), "mixed")
 	keepMixedRoot := isMixedRoot && folderSplitterHasRecognizedMediaFiles(entry.Files)
 	if keepMixedRoot {
 		*out = append(*out, folderSplitterBuildSelfItem(entry, rootPath))
@@ -213,7 +214,7 @@ var folderSplitterPromoKeywords = []string{
 }
 
 func folderSplitterShouldAbsorbPromoChild(parent ClassifiedEntry, child ClassifiedEntry) bool {
-	if !strings.EqualFold(strings.TrimSpace(parent.Category), "mixed") {
+	if !strings.EqualFold(folderSplitterResolveEntryCategory(parent), "mixed") {
 		return false
 	}
 	if folderSplitterContainsBusinessMedia(child) {
@@ -307,4 +308,80 @@ func folderSplitterHasOnlyInternalStagingSubdirs(entry ClassifiedEntry) bool {
 		hasInternal = true
 	}
 	return hasInternal
+}
+
+func folderSplitterResolveEntryCategory(entry ClassifiedEntry) string {
+	category := strings.ToLower(strings.TrimSpace(entry.Category))
+	if folderSplitterShouldTreatAsMixedDirectory(entry) {
+		return "mixed"
+	}
+	if len(entry.Subtree) == 0 {
+		switch category {
+		case "", "other", "mixed":
+			if inferred := folderSplitterInferLeafCategory(entry.Files); inferred != "" {
+				return inferred
+			}
+		}
+	}
+	if category == "" {
+		return "other"
+	}
+	return category
+}
+
+func folderSplitterResolveItemCategory(entry ClassifiedEntry) string {
+	return folderSplitterResolveEntryCategory(entry)
+}
+
+func folderSplitterInferLeafCategory(files []FileEntry) string {
+	hasVideo := false
+	hasImage := false
+	hasManga := false
+
+	for _, file := range files {
+		ext := strings.ToLower(strings.TrimSpace(file.Ext))
+		if ext == "" {
+			ext = strings.ToLower(strings.TrimSpace(filepath.Ext(file.Name)))
+		}
+
+		switch {
+		case mangaExts[ext]:
+			hasManga = true
+		case videoExtsSet[ext]:
+			hasVideo = true
+		case imageExtsSet[ext]:
+			hasImage = true
+		}
+	}
+
+	switch {
+	case hasManga:
+		return "manga"
+	case hasVideo && !hasImage:
+		return "video"
+	case hasImage && !hasVideo:
+		return "photo"
+	case hasVideo && hasImage:
+		return "mixed"
+	default:
+		return ""
+	}
+}
+
+func folderSplitterShouldTreatAsMixedDirectory(entry ClassifiedEntry) bool {
+	if len(entry.Subtree) == 0 || !folderSplitterHasRecognizedMediaFiles(entry.Files) {
+		return false
+	}
+
+	for _, child := range entry.Subtree {
+		if !folderSplitterIsDirectChild(entry, child) {
+			continue
+		}
+		if mixedLeafRouterIsInternalStagingDir(strings.TrimSpace(child.Name)) {
+			continue
+		}
+		return true
+	}
+
+	return false
 }

@@ -219,24 +219,13 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 				Enabled: true,
 			},
 			{
-				ID:   "p-thumbnail",
-				Type: "thumbnail-node",
-				Config: map[string]any{
-					"path_ref_type": workflowPathRefTypeOutput,
-					"path_ref_key":  "video",
-					"path_suffix":   ".thumbnails",
-				},
-				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-router", SourcePort: "video"}}},
-				Enabled: true,
-			},
-			{
 				ID:   "p-rename",
 				Type: "rename-node",
 				Config: map[string]any{
 					"strategy": "template",
 					"template": "{name}",
 				},
-				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-thumbnail", SourcePort: "items"}}},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-router", SourcePort: "video"}}},
 				Enabled: true,
 			},
 			{
@@ -265,14 +254,21 @@ func SeedDefaultProcessingWorkflow(ctx context.Context, repo repository.Workflow
 				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-compress", SourcePort: "items"}}},
 				Enabled: true,
 			},
+			{
+				ID:      "p-thumbnail",
+				Type:    "thumbnail-node",
+				Config:  map[string]any{},
+				Inputs:  map[string]repository.NodeInputSpec{"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-move", SourcePort: "items"}}},
+				Enabled: true,
+			},
 		},
 		Edges: []repository.WorkflowGraphEdge{
 			{ID: "e-reader-split", Source: "p-reader", SourcePort: "entry", Target: "p-split", TargetPort: "entry"},
 			{ID: "e-split-router", Source: "p-split", SourcePort: "items", Target: "p-router", TargetPort: "items"},
-			{ID: "e-router-thumbnail", Source: "p-router", SourcePort: "video", Target: "p-thumbnail", TargetPort: "items"},
-			{ID: "e-thumbnail-rename", Source: "p-thumbnail", SourcePort: "items", Target: "p-rename", TargetPort: "items"},
+			{ID: "e-router-rename", Source: "p-router", SourcePort: "video", Target: "p-rename", TargetPort: "items"},
 			{ID: "e-rename-compress", Source: "p-rename", SourcePort: "items", Target: "p-compress", TargetPort: "items"},
 			{ID: "e-compress-move", Source: "p-compress", SourcePort: "items", Target: "p-move", TargetPort: "items"},
+			{ID: "e-move-thumbnail", Source: "p-move", SourcePort: "items", Target: "p-thumbnail", TargetPort: "items"},
 		},
 	}
 

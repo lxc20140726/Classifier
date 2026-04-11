@@ -115,7 +115,7 @@ func (e *compressNodeExecutor) Execute(ctx context.Context, input NodeExecutionI
 			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: source path %q is not a folder", e.Type(), sourcePath)
 		}
 
-		archiveName := phase4MoveItemName(item)
+		archiveName := processingItemArtifactName(item)
 		if archiveName == "" {
 			archiveName = info.Name
 		}

@@ -118,6 +118,7 @@ func main() {
 		{
 			folders.GET("", folderHandler.List)
 			folders.GET("/:id", folderHandler.Get)
+			folders.GET("/:id/classification-tree", folderHandler.GetClassificationTree)
 			folders.POST("/:id/restore", folderHandler.Restore)
 			folders.PATCH("/:id/category", folderHandler.UpdateCategory)
 			folders.PATCH("/:id/status", folderHandler.UpdateStatus)

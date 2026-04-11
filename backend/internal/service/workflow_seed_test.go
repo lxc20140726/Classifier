@@ -137,10 +137,10 @@ func TestSeedDefaultProcessingWorkflow_CreatesExpectedGraphAndIsIdempotent(t *te
 		"classification-reader",
 		"folder-splitter",
 		"category-router",
-		"thumbnail-node",
 		"rename-node",
 		"compress-node",
 		"move-node",
+		"thumbnail-node",
 	}
 	if len(gotTypes) != len(wantTypes) {
 		t.Fatalf("node count = %d, want %d; got %v", len(gotTypes), len(wantTypes), gotTypes)
@@ -149,6 +149,21 @@ func TestSeedDefaultProcessingWorkflow_CreatesExpectedGraphAndIsIdempotent(t *te
 		if gotTypes[i] != want {
 			t.Fatalf("node[%d].Type = %q, want %q; full=%v", i, gotTypes[i], want, gotTypes)
 		}
+	}
+	nodeByID := map[string]repository.WorkflowGraphNode{}
+	for _, node := range graph.Nodes {
+		nodeByID[node.ID] = node
+	}
+	thumbnailNode, ok := nodeByID["p-thumbnail"]
+	if !ok {
+		t.Fatalf("graph missing node p-thumbnail")
+	}
+	if len(thumbnailNode.Config) != 0 {
+		t.Fatalf("p-thumbnail config = %#v, want empty config for default same-directory output", thumbnailNode.Config)
+	}
+	thumbnailInput := thumbnailNode.Inputs["items"]
+	if thumbnailInput.LinkSource == nil || thumbnailInput.LinkSource.SourceNodeID != "p-move" || thumbnailInput.LinkSource.SourcePort != "items" {
+		t.Fatalf("p-thumbnail items input = %#v, want link from p-move.items", thumbnailInput.LinkSource)
 	}
 
 	if len(graph.Edges) == 0 {

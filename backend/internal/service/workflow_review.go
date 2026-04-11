@@ -615,7 +615,7 @@ func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs 
 		out := make([]ProcessingStepResult, 0, len(items))
 		for _, item := range items {
 			sourcePath := processingItemCurrentPath(item)
-			name := phase4MoveItemName(item)
+			name := processingItemArtifactName(item)
 			if name == "" {
 				name = strings.TrimSpace(filepath.Base(sourcePath))
 			}
@@ -644,7 +644,7 @@ func processingStepResultsFromNodeRun(nodeRun *repository.NodeRun, typedOutputs 
 			if outputDir == "" {
 				outputDir = normalizeWorkflowPath(thumbnailNodeDefaultOutputDir(item))
 			}
-			outputName := phase4MoveItemName(item)
+			outputName := processingItemArtifactName(item)
 			if outputName == "" {
 				outputName = thumbnailNodeOutputBaseName(item)
 			}

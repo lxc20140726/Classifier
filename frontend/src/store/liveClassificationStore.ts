@@ -1,9 +1,10 @@
 import { create } from 'zustand'
 
-import { listFolders } from '@/api/folders'
+import { getFolderClassificationTree, listFolders } from '@/api/folders'
 import type {
   Folder,
   FolderClassificationLiveEvent,
+  FolderClassificationTreeEntry,
   LiveClassificationItem,
   LiveClassificationStatus,
   ScanProgressEvent,
@@ -54,19 +55,39 @@ function mapRunStatusToLiveStatus(status: WorkflowRunUpdatedEvent['status']): Li
   }
 }
 
-function upsertAndTrim(itemsById: Record<string, LiveClassificationItem>): { itemsById: Record<string, LiveClassificationItem>; orderedIds: string[] } {
-  const ordered = Object.values(itemsById)
+function upsertAndTrim(itemsByID: Record<string, LiveClassificationItem>): { itemsById: Record<string, LiveClassificationItem>; orderedIds: string[] } {
+  const ordered = Object.values(itemsByID)
     .sort((a, b) => toMillis(b.last_event_at) - toMillis(a.last_event_at))
     .slice(0, LIVE_WINDOW_SIZE)
 
   const nextItemsById: Record<string, LiveClassificationItem> = {}
-  const orderedIds: string[] = []
+  const orderedIDs: string[] = []
   for (const item of ordered) {
     nextItemsById[item.folder_id] = item
-    orderedIds.push(item.folder_id)
+    orderedIDs.push(item.folder_id)
   }
 
-  return { itemsById: nextItemsById, orderedIds }
+  return { itemsById: nextItemsById, orderedIds: orderedIDs }
+}
+
+function createItemFromFolder(folder: Folder): LiveClassificationItem {
+  return {
+    folder_id: folder.id,
+    job_id: folder.workflow_summary.classification.job_id ?? '',
+    workflow_run_id: folder.workflow_summary.classification.workflow_run_id ?? '',
+    folder_name: folder.name,
+    folder_path: folder.path,
+    source_dir: folder.source_dir,
+    relative_path: folder.relative_path,
+    category: folder.category,
+    category_source: folder.category_source,
+    classification_status: mapWorkflowStageToLiveStatus(folder.workflow_summary.classification.status),
+    node_id: '',
+    node_type: '',
+    error: '',
+    entered_at: folder.scanned_at || folder.updated_at || new Date().toISOString(),
+    last_event_at: folder.updated_at || folder.scanned_at || new Date().toISOString(),
+  }
 }
 
 interface LiveClassificationStore {
@@ -74,9 +95,15 @@ interface LiveClassificationStore {
   orderedIds: string[]
   runToFolderId: Record<string, string>
   currentScanJobId: string
+  selectedFolderId: string
+  treeByFolderId: Record<string, FolderClassificationTreeEntry>
+  treeLoadingFolderId: string
+  treeError: string | null
   isLoading: boolean
   error: string | null
   loadInitial: () => Promise<void>
+  selectFolder: (folderId: string) => Promise<void>
+  loadTree: (folderId: string, force?: boolean) => Promise<void>
   handleScanStarted: (payload: { job_id: string }) => void
   handleScanDone: () => void
   handleScanProgress: (payload: ScanProgressEvent) => void
@@ -91,6 +118,10 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
   orderedIds: [],
   runToFolderId: {},
   currentScanJobId: '',
+  selectedFolderId: '',
+  treeByFolderId: {},
+  treeLoadingFolderId: '',
+  treeError: null,
   isLoading: false,
   error: null,
 
@@ -100,23 +131,7 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
       const response = await listFolders({ page: 1, limit: LIVE_WINDOW_SIZE, top_level_only: true })
       const itemsById: Record<string, LiveClassificationItem> = {}
       for (const folder of response.data) {
-        itemsById[folder.id] = {
-          folder_id: folder.id,
-          job_id: folder.workflow_summary.classification.job_id ?? '',
-          workflow_run_id: folder.workflow_summary.classification.workflow_run_id ?? '',
-          folder_name: folder.name,
-          folder_path: folder.path,
-          source_dir: folder.source_dir,
-          relative_path: folder.relative_path,
-          category: folder.category,
-          category_source: folder.category_source,
-          classification_status: mapWorkflowStageToLiveStatus(folder.workflow_summary.classification.status),
-          node_id: '',
-          node_type: '',
-          error: '',
-          entered_at: folder.scanned_at || folder.updated_at || new Date().toISOString(),
-          last_event_at: folder.updated_at || folder.scanned_at || new Date().toISOString(),
-        }
+        itemsById[folder.id] = createItemFromFolder(folder)
       }
 
       const next = upsertAndTrim(itemsById)
@@ -126,12 +141,52 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
           runToFolderId[item.workflow_run_id] = item.folder_id
         }
       }
-      set({ ...next, runToFolderId, isLoading: false })
+
+      const defaultFolderID = get().selectedFolderId || next.orderedIds[0] || ''
+      set({
+        ...next,
+        runToFolderId,
+        selectedFolderId: defaultFolderID,
+        isLoading: false,
+      })
+      if (defaultFolderID) {
+        void get().loadTree(defaultFolderID)
+      }
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : '加载实时分类失败',
+        error: error instanceof Error ? error.message : '加载实时分类目录失败',
       })
+    }
+  },
+
+  async selectFolder(folderId) {
+    const nextID = folderId.trim()
+    set({ selectedFolderId: nextID })
+    if (!nextID) return
+    await get().loadTree(nextID)
+  },
+
+  async loadTree(folderId, force = false) {
+    const targetID = folderId.trim()
+    if (!targetID) return
+    if (!force && get().treeByFolderId[targetID]) return
+
+    set({ treeLoadingFolderId: targetID, treeError: null })
+    try {
+      const response = await getFolderClassificationTree(targetID)
+      set((state) => ({
+        treeByFolderId: {
+          ...state.treeByFolderId,
+          [targetID]: response.data,
+        },
+        treeLoadingFolderId: state.treeLoadingFolderId === targetID ? '' : state.treeLoadingFolderId,
+      }))
+    } catch (error) {
+      set((state) => ({
+        treeError: error instanceof Error ? error.message : '加载目录分类树失败',
+        treeLoadingFolderId: state.treeLoadingFolderId === targetID ? '' : state.treeLoadingFolderId,
+      }))
     }
   },
 
@@ -148,7 +203,6 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
     const folderID = payload.folder_id
     set((state) => {
       const now = new Date().toISOString()
-      const eventTime = now
       const existing = state.itemsById[folderID]
       const nextItem: LiveClassificationItem = {
         folder_id: folderID,
@@ -164,12 +218,13 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
         node_id: existing?.node_id ?? '',
         node_type: existing?.node_type ?? '',
         error: '',
-        entered_at: existing?.entered_at ?? eventTime,
-        last_event_at: eventTime,
+        entered_at: existing?.entered_at ?? now,
+        last_event_at: now,
       }
-
       const merged = { ...state.itemsById, [folderID]: nextItem }
-      return upsertAndTrim(merged)
+      const next = upsertAndTrim(merged)
+      const selectedFolderID = state.selectedFolderId || next.orderedIds[0] || ''
+      return { ...next, selectedFolderId: selectedFolderID }
     })
   },
 
@@ -198,7 +253,9 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
         last_event_at: now,
       }
       const merged = { ...state.itemsById, [folderID]: nextItem }
-      return upsertAndTrim(merged)
+      const next = upsertAndTrim(merged)
+      const selectedFolderID = state.selectedFolderId || next.orderedIds[0] || ''
+      return { ...next, selectedFolderId: selectedFolderID }
     })
   },
 
@@ -225,7 +282,6 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
         entered_at: existing?.entered_at ?? now,
         last_event_at: now,
       }
-
       const merged = { ...state.itemsById, [folderID]: nextItem }
       const next = upsertAndTrim(merged)
       const runToFolderId = { ...state.runToFolderId }
@@ -234,11 +290,16 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
       }
       return { ...next, runToFolderId }
     })
+
+    if (get().selectedFolderId === folderID) {
+      void get().loadTree(folderID, true)
+    }
   },
 
   handleWorkflowRunUpdated(payload) {
     const folderID = get().runToFolderId[payload.workflow_run_id]
     if (!folderID) return
+
     set((state) => {
       const existing = state.itemsById[folderID]
       if (!existing) return state
@@ -253,10 +314,15 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
       const merged = { ...state.itemsById, [folderID]: nextItem }
       return upsertAndTrim(merged)
     })
+
+    if (get().selectedFolderId === folderID) {
+      void get().loadTree(folderID, true)
+    }
   },
 
   handleFolderClassificationUpdated(payload) {
     if (!payload.folder_id) return
+
     set((state) => {
       const existing = state.itemsById[payload.folder_id]
       const eventTime = payload.updated_at || new Date().toISOString()
@@ -288,7 +354,13 @@ export const useLiveClassificationStore = create<LiveClassificationStore>((set, 
       if (payload.workflow_run_id) {
         runToFolderId[payload.workflow_run_id] = payload.folder_id
       }
-      return { ...next, runToFolderId }
+      const selectedFolderID = state.selectedFolderId || next.orderedIds[0] || ''
+      return { ...next, runToFolderId, selectedFolderId: selectedFolderID }
     })
+
+    if (get().selectedFolderId === payload.folder_id) {
+      void get().loadTree(payload.folder_id, true)
+    }
   },
 }))
+

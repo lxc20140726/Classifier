@@ -4,6 +4,7 @@ import type {
   Folder,
   FolderStatus,
   FolderWorkflowSummary,
+  FolderClassificationTreeEntry,
   PaginatedResponse,
   ScanStartResponse,
   WorkflowStageStatus,
@@ -146,6 +147,10 @@ export async function listFolders(params: FolderQueryParams = {}): Promise<Pagin
 export async function getFolder(id: string): Promise<{ data: Folder }> {
   const response = await request<{ data: RawFolder }>(`/folders/${id}`)
   return { data: parseFolder(response.data) }
+}
+
+export async function getFolderClassificationTree(id: string): Promise<{ data: FolderClassificationTreeEntry }> {
+  return request<{ data: FolderClassificationTreeEntry }>(`/folders/${id}/classification-tree`)
 }
 
 export function scanFolders() {

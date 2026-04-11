@@ -64,6 +64,7 @@ func setupRouter(folderRepo repository.FolderRepository, configRepo repository.C
 
 	g.GET("/folders", h.List)
 	g.GET("/folders/:id", h.Get)
+	g.GET("/folders/:id/classification-tree", h.GetClassificationTree)
 	g.POST("/folders/scan", h.Scan)
 	g.POST("/folders/:id/restore", h.Restore)
 	g.PATCH("/folders/:id/category", h.UpdateCategory)
@@ -228,6 +229,87 @@ func TestFolderHandler(t *testing.T) {
 		}
 		if payload.Data.WorkflowSummary.Processing.Status != "not_run" {
 			t.Fatalf("processing status = %q, want not_run", payload.Data.WorkflowSummary.Processing.Status)
+		}
+	})
+
+	t.Run("get folder classification tree", func(t *testing.T) {
+		seedFolder(t, repo, &repository.Folder{
+			ID:             "f1-child",
+			Path:           "/media/f1/sub-a",
+			SourceDir:      "/media",
+			RelativePath:   "f1/sub-a",
+			Name:           "sub-a",
+			Category:       "video",
+			CategorySource: "workflow",
+			Status:         "pending",
+		})
+		fsAdapter.AddDir("/media/f1", []fs.DirEntry{
+			{Name: "cover.jpg", IsDir: false, Size: 12},
+			{Name: "sub-a", IsDir: true},
+		})
+		fsAdapter.AddDir("/media/f1/sub-a", []fs.DirEntry{
+			{Name: "clip.mp4", IsDir: false, Size: 34},
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/folders/f1/classification-tree", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+		}
+
+		var payload struct {
+			Data struct {
+				FolderID string `json:"folder_id"`
+				Path     string `json:"path"`
+				Category string `json:"category"`
+				Files    []struct {
+					Name string `json:"name"`
+					Kind string `json:"kind"`
+				} `json:"files"`
+				Subtree []struct {
+					FolderID string `json:"folder_id"`
+					Path     string `json:"path"`
+					Category string `json:"category"`
+					Files    []struct {
+						Name string `json:"name"`
+						Kind string `json:"kind"`
+					} `json:"files"`
+				} `json:"subtree"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+
+		if payload.Data.FolderID != "f1" {
+			t.Fatalf("root folder_id = %q, want f1", payload.Data.FolderID)
+		}
+		if payload.Data.Path != "/media/f1" {
+			t.Fatalf("root path = %q, want /media/f1", payload.Data.Path)
+		}
+		if payload.Data.Category != "photo" {
+			t.Fatalf("root category = %q, want photo", payload.Data.Category)
+		}
+		if len(payload.Data.Files) != 1 || payload.Data.Files[0].Name != "cover.jpg" || payload.Data.Files[0].Kind != "photo" {
+			t.Fatalf("root files = %#v, want cover.jpg/photo", payload.Data.Files)
+		}
+		if len(payload.Data.Subtree) != 1 {
+			t.Fatalf("len(subtree) = %d, want 1", len(payload.Data.Subtree))
+		}
+		child := payload.Data.Subtree[0]
+		if child.FolderID != "f1-child" {
+			t.Fatalf("child folder_id = %q, want f1-child", child.FolderID)
+		}
+		if child.Path != "/media/f1/sub-a" {
+			t.Fatalf("child path = %q, want /media/f1/sub-a", child.Path)
+		}
+		if child.Category != "video" {
+			t.Fatalf("child category = %q, want video", child.Category)
+		}
+		if len(child.Files) != 1 || child.Files[0].Name != "clip.mp4" || child.Files[0].Kind != "video" {
+			t.Fatalf("child files = %#v, want clip.mp4/video", child.Files)
 		}
 	})
 

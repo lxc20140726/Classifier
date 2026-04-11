@@ -353,6 +353,31 @@ export interface LiveClassificationItem {
   last_event_at: string
 }
 
+export type ClassificationFileKind = 'photo' | 'video' | 'manga' | 'other'
+
+export interface FolderClassificationTreeFile {
+  name: string
+  ext: string
+  kind: ClassificationFileKind
+  size_bytes: number
+}
+
+export interface FolderClassificationTreeEntry {
+  folder_id: string
+  path: string
+  name: string
+  category: Category
+  category_source: CategorySource
+  status: FolderStatus
+  has_other_files: boolean
+  total_files: number
+  image_count: number
+  video_count: number
+  other_file_count: number
+  files: FolderClassificationTreeFile[]
+  subtree: FolderClassificationTreeEntry[]
+}
+
 export interface NodeUIPosition {
   x: number
   y: number

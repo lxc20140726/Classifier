@@ -30,7 +30,7 @@ func NormalizeWorkflowDefinitionGraphs(ctx context.Context, repo repository.Work
 			if item == nil || strings.TrimSpace(item.GraphJSON) == "" {
 				continue
 			}
-			normalized, changed, err := normalizeWorkflowGraphJSON(item.GraphJSON)
+			normalized, changed, err := normalizeWorkflowGraphJSON(item)
 			if err != nil {
 				return fmt.Errorf("normalizeWorkflowDefinitionGraphs normalize %q: %w", item.ID, err)
 			}
@@ -50,7 +50,16 @@ func NormalizeWorkflowDefinitionGraphs(ctx context.Context, repo repository.Work
 	}
 }
 
-func normalizeWorkflowGraphJSON(raw string) (string, bool, error) {
+func normalizeWorkflowGraphJSON(def *repository.WorkflowDefinition) (string, bool, error) {
+	if def == nil {
+		return "", false, fmt.Errorf("workflow definition is nil")
+	}
+
+	raw := strings.TrimSpace(def.GraphJSON)
+	if raw == "" {
+		return "", false, nil
+	}
+
 	graph := repository.WorkflowGraph{}
 	if err := json.Unmarshal([]byte(raw), &graph); err != nil {
 		return "", false, fmt.Errorf("unmarshal graph json: %w", err)
@@ -142,6 +151,10 @@ func normalizeWorkflowGraphJSON(raw string) (string, bool, error) {
 		node.Inputs = cleanInputs
 	}
 
+	if normalizeBuiltinDefaultProcessingGraph(def, &graph) {
+		changed = true
+	}
+
 	if !changed {
 		return raw, false, nil
 	}
@@ -151,6 +164,180 @@ func normalizeWorkflowGraphJSON(raw string) (string, bool, error) {
 		return "", false, fmt.Errorf("marshal normalized graph json: %w", err)
 	}
 	return string(data), true, nil
+}
+
+func normalizeBuiltinDefaultProcessingGraph(def *repository.WorkflowDefinition, graph *repository.WorkflowGraph) bool {
+	if def == nil || graph == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(def.Name), "default-processing") {
+		return false
+	}
+
+	nodeIndexByID := map[string]int{}
+	for index := range graph.Nodes {
+		nodeIndexByID[graph.Nodes[index].ID] = index
+	}
+
+	requiredNodeIDs := []string{"p-router", "p-rename", "p-compress", "p-move", "p-thumbnail"}
+	for _, nodeID := range requiredNodeIDs {
+		if _, ok := nodeIndexByID[nodeID]; !ok {
+			return false
+		}
+	}
+
+	changed := false
+	if setWorkflowNodeInputLink(&graph.Nodes[nodeIndexByID["p-rename"]], "items", "p-router", "video") {
+		changed = true
+	}
+	if setWorkflowNodeInputLink(&graph.Nodes[nodeIndexByID["p-compress"]], "items", "p-rename", "items") {
+		changed = true
+	}
+	if setWorkflowNodeInputLink(&graph.Nodes[nodeIndexByID["p-move"]], "items", "p-compress", "items") {
+		changed = true
+	}
+	if setWorkflowNodeInputLink(&graph.Nodes[nodeIndexByID["p-thumbnail"]], "items", "p-move", "items") {
+		changed = true
+	}
+
+	thumbnailNode := &graph.Nodes[nodeIndexByID["p-thumbnail"]]
+	if thumbnailNode.Config == nil {
+		thumbnailNode.Config = map[string]any{}
+	}
+	for _, key := range []string{
+		"path_ref_type",
+		"path_ref_key",
+		"path_suffix",
+		"target_dir",
+		"targetDir",
+		"output_dir",
+		"target_dir_source",
+		"output_dir_source",
+		"target_dir_option_id",
+		"output_dir_option_id",
+	} {
+		if _, ok := thumbnailNode.Config[key]; ok {
+			delete(thumbnailNode.Config, key)
+			changed = true
+		}
+	}
+
+	if ensureWorkflowGraphEdge(graph, "e-router-rename", "p-router", "video", "p-rename", "items") {
+		changed = true
+	}
+	if ensureWorkflowGraphEdge(graph, "e-rename-compress", "p-rename", "items", "p-compress", "items") {
+		changed = true
+	}
+	if ensureWorkflowGraphEdge(graph, "e-compress-move", "p-compress", "items", "p-move", "items") {
+		changed = true
+	}
+	if ensureWorkflowGraphEdge(graph, "e-move-thumbnail", "p-move", "items", "p-thumbnail", "items") {
+		changed = true
+	}
+	if removeWorkflowGraphEdge(graph, "p-router", "video", "p-thumbnail", "items") {
+		changed = true
+	}
+	if removeWorkflowGraphEdge(graph, "p-thumbnail", "items", "p-rename", "items") {
+		changed = true
+	}
+
+	return changed
+}
+
+func setWorkflowNodeInputLink(node *repository.WorkflowGraphNode, inputName, sourceNodeID, sourcePort string) bool {
+	if node == nil {
+		return false
+	}
+	if node.Inputs == nil {
+		node.Inputs = map[string]repository.NodeInputSpec{}
+	}
+	spec := node.Inputs[inputName]
+	if spec.LinkSource != nil &&
+		strings.TrimSpace(spec.LinkSource.SourceNodeID) == strings.TrimSpace(sourceNodeID) &&
+		strings.TrimSpace(spec.LinkSource.SourcePort) == strings.TrimSpace(sourcePort) {
+		return false
+	}
+
+	spec.LinkSource = &repository.NodeLinkSource{
+		SourceNodeID: strings.TrimSpace(sourceNodeID),
+		SourcePort:   strings.TrimSpace(sourcePort),
+	}
+	spec.ConstValue = nil
+	node.Inputs[inputName] = spec
+	return true
+}
+
+func ensureWorkflowGraphEdge(graph *repository.WorkflowGraph, edgeID, source, sourcePort, target, targetPort string) bool {
+	if graph == nil {
+		return false
+	}
+
+	normalizedEdgeID := strings.TrimSpace(edgeID)
+	normalizedSource := strings.TrimSpace(source)
+	normalizedSourcePort := strings.TrimSpace(sourcePort)
+	normalizedTarget := strings.TrimSpace(target)
+	normalizedTargetPort := strings.TrimSpace(targetPort)
+
+	for index := range graph.Edges {
+		edge := &graph.Edges[index]
+		if strings.TrimSpace(edge.Source) != normalizedSource ||
+			strings.TrimSpace(edge.SourcePort) != normalizedSourcePort ||
+			strings.TrimSpace(edge.Target) != normalizedTarget ||
+			strings.TrimSpace(edge.TargetPort) != normalizedTargetPort {
+			continue
+		}
+		changed := false
+		if strings.TrimSpace(edge.ID) == "" && normalizedEdgeID != "" {
+			edge.ID = normalizedEdgeID
+			changed = true
+		}
+		if edge.SourcePortIndex != 0 {
+			edge.SourcePortIndex = 0
+			changed = true
+		}
+		if edge.TargetPortIndex != 0 {
+			edge.TargetPortIndex = 0
+			changed = true
+		}
+		return changed
+	}
+
+	graph.Edges = append(graph.Edges, repository.WorkflowGraphEdge{
+		ID:         normalizedEdgeID,
+		Source:     normalizedSource,
+		SourcePort: normalizedSourcePort,
+		Target:     normalizedTarget,
+		TargetPort: normalizedTargetPort,
+	})
+	return true
+}
+
+func removeWorkflowGraphEdge(graph *repository.WorkflowGraph, source, sourcePort, target, targetPort string) bool {
+	if graph == nil || len(graph.Edges) == 0 {
+		return false
+	}
+
+	normalizedSource := strings.TrimSpace(source)
+	normalizedSourcePort := strings.TrimSpace(sourcePort)
+	normalizedTarget := strings.TrimSpace(target)
+	normalizedTargetPort := strings.TrimSpace(targetPort)
+
+	filtered := make([]repository.WorkflowGraphEdge, 0, len(graph.Edges))
+	removed := false
+	for _, edge := range graph.Edges {
+		if strings.TrimSpace(edge.Source) == normalizedSource &&
+			strings.TrimSpace(edge.SourcePort) == normalizedSourcePort &&
+			strings.TrimSpace(edge.Target) == normalizedTarget &&
+			strings.TrimSpace(edge.TargetPort) == normalizedTargetPort {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, edge)
+	}
+	if removed {
+		graph.Edges = filtered
+	}
+	return removed
 }
 
 func isStepResultsPort(name string) bool {

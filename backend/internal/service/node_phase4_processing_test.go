@@ -153,6 +153,157 @@ func TestFolderSplitterExecutorMixedSkipsPromoSubdirs(t *testing.T) {
 	}
 }
 
+func TestProcessingChainRoutesNonLeafVideoWithPromoSubdirsToMixedLeaf(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	mixedRoot := filepath.Join(root, "5kporn.e20.melody.marks.5k")
+	promoDir := filepath.Join(mixedRoot, "2048")
+	publicityDir := filepath.Join(mixedRoot, "promo-files")
+	internalPhotoDir := filepath.Join(promoDir, "__photo")
+	internalUnsupportedDir := filepath.Join(promoDir, "__unsupported")
+	internalVideoDir := filepath.Join(promoDir, "__video")
+
+	mustMkdirAll(t, internalPhotoDir)
+	mustMkdirAll(t, internalUnsupportedDir)
+	mustMkdirAll(t, internalVideoDir)
+	mustMkdirAll(t, publicityDir)
+
+	writeTestFile(t, filepath.Join(mixedRoot, "5kporn.e20.melody.marks.5k.mp4"))
+	writeTestFile(t, filepath.Join(internalPhotoDir, "promo.jpg"))
+	writeTestFile(t, filepath.Join(internalUnsupportedDir, "promo.url"))
+	writeTestFile(t, filepath.Join(publicityDir, "banner.gif"))
+	writeTestFile(t, filepath.Join(publicityDir, "release.mht"))
+
+	splitter := newFolderSplitterExecutor()
+	splitOut, err := splitter.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{
+			Config: map[string]any{"split_mixed": true, "split_depth": 1},
+		},
+		Inputs: testInputs(map[string]any{
+			"entry": ClassifiedEntry{
+				FolderID: "folder-root",
+				Path:     normalizeWorkflowPath(mixedRoot),
+				Name:     "5kporn.e20.melody.marks.5k",
+				Category: "video",
+				Files: []FileEntry{
+					{Name: "5kporn.e20.melody.marks.5k.mp4", Ext: ".mp4"},
+				},
+				Subtree: []ClassifiedEntry{
+					{
+						FolderID: "folder-promo",
+						Path:     normalizeWorkflowPath(promoDir),
+						Name:     "2048",
+						Category: "mixed",
+						Subtree: []ClassifiedEntry{
+							{
+								FolderID: "folder-promo-photo",
+								Path:     normalizeWorkflowPath(internalPhotoDir),
+								Name:     "__photo",
+								Category: "photo",
+								Files: []FileEntry{
+									{Name: "promo.jpg", Ext: ".jpg"},
+								},
+							},
+							{
+								FolderID: "folder-promo-unsupported",
+								Path:     normalizeWorkflowPath(internalUnsupportedDir),
+								Name:     "__unsupported",
+								Category: "other",
+								Files: []FileEntry{
+									{Name: "promo.url", Ext: ".url"},
+								},
+							},
+							{
+								FolderID: "folder-promo-video",
+								Path:     normalizeWorkflowPath(internalVideoDir),
+								Name:     "__video",
+								Category: "video",
+							},
+						},
+					},
+					{
+						FolderID: "folder-publicity",
+						Path:     normalizeWorkflowPath(publicityDir),
+						Name:     "promo-files",
+						Category: "other",
+						Files: []FileEntry{
+							{Name: "banner.gif", Ext: ".gif"},
+							{Name: "release.mht", Ext: ".mht"},
+						},
+					},
+				},
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("splitter Execute() error = %v", err)
+	}
+
+	splitItems, ok := splitOut.Outputs["items"].Value.([]ProcessingItem)
+	if !ok {
+		t.Fatalf("split output type = %T, want []ProcessingItem", splitOut.Outputs["items"].Value)
+	}
+	rootMixedFound := false
+	for _, item := range splitItems {
+		if item.SourcePath != normalizeWorkflowPath(mixedRoot) {
+			continue
+		}
+		rootMixedFound = true
+		if item.Category != "mixed" {
+			t.Fatalf("root split item category = %q, want mixed", item.Category)
+		}
+	}
+	if !rootMixedFound {
+		t.Fatalf("split items missing root mixed path %q", normalizeWorkflowPath(mixedRoot))
+	}
+
+	router := newCategoryRouterExecutor()
+	routeOut, err := router.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{"items": splitItems}),
+	})
+	if err != nil {
+		t.Fatalf("category router Execute() error = %v", err)
+	}
+
+	mixedItems := routeOut.Outputs["mixed_leaf"].Value.([]ProcessingItem)
+	rootMixedRouted := false
+	for _, item := range mixedItems {
+		if item.SourcePath == normalizeWorkflowPath(mixedRoot) {
+			rootMixedRouted = true
+			break
+		}
+	}
+	if !rootMixedRouted {
+		t.Fatalf("mixed_leaf output missing root path %q", normalizeWorkflowPath(mixedRoot))
+	}
+
+	mixedRouter := newMixedLeafRouterExecutor(fs.NewOSAdapter())
+	mixedOut, err := mixedRouter.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{"items": []ProcessingItem{
+			{
+				SourcePath:  normalizeWorkflowPath(mixedRoot),
+				CurrentPath: normalizeWorkflowPath(mixedRoot),
+				FolderName:  "5kporn.e20.melody.marks.5k",
+				TargetName:  "5kporn.e20.melody.marks.5k",
+				Category:    "mixed",
+				SourceKind:  ProcessingItemSourceKindDirectory,
+			},
+		}}),
+	})
+	if err != nil {
+		t.Fatalf("mixed router Execute() error = %v", err)
+	}
+
+	assertPortCount(t, mixedOut.Outputs, mixedLeafRouterVideoPort, 1)
+	assertPortCount(t, mixedOut.Outputs, mixedLeafRouterPhotoPort, 1)
+	assertPortCount(t, mixedOut.Outputs, mixedLeafRouterUnsupportedPort, 1)
+
+	assertDirFilesEqual(t, filepath.Join(mixedRoot, "__video"), []string{"5kporn.e20.melody.marks.5k.mp4"})
+	assertDirFilesEqual(t, filepath.Join(mixedRoot, "__photo"), []string{"2048____photo__promo.jpg", "promo-files__banner.gif"})
+	assertDirFilesEqual(t, filepath.Join(mixedRoot, "__unsupported"), []string{"2048____unsupported__promo.url", "promo-files__release.mht"})
+}
+
 func TestProcessingChainMixedRootWithPromoSubdir(t *testing.T) {
 	t.Parallel()
 
@@ -710,6 +861,62 @@ func TestMoveNodeExecutorMergeValidationAndArchiveFlatten(t *testing.T) {
 			t.Fatalf("flattened archive targets should exist: %q, %q", targetA, targetB)
 		}
 	})
+
+	t.Run("same_root_path_items_merge_into_single_target_root", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		rootPath := filepath.Join(root, "source", "5k porn")
+		sourcePathA := filepath.Join(rootPath, "video-a")
+		sourcePathB := filepath.Join(rootPath, "video-b")
+		targetDir := filepath.Join(root, "target")
+		mustMkdirAll(t, sourcePathA)
+		mustMkdirAll(t, sourcePathB)
+		if err := os.WriteFile(filepath.Join(sourcePathA, "a.mp4"), []byte("a"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source A) error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(sourcePathB, "b.mp4"), []byte("b"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source B) error = %v", err)
+		}
+
+		executor := newPhase4MoveNodeExecutor(fs.NewOSAdapter(), nil)
+		_, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{Config: map[string]any{
+				"target_dir": targetDir,
+			}},
+			Inputs: testInputs(map[string]any{"items": []ProcessingItem{
+				{
+					SourcePath:   sourcePathA,
+					RootPath:     rootPath,
+					RelativePath: "video-a",
+					SourceKind:   ProcessingItemSourceKindDirectory,
+					TargetName:   "5kporn.e20.melody.marks.5k",
+				},
+				{
+					SourcePath:   sourcePathB,
+					RootPath:     rootPath,
+					RelativePath: "video-b",
+					SourceKind:   ProcessingItemSourceKindDirectory,
+					FolderName:   "5kporn.e20.melody.marks.5k",
+				},
+			}}),
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+
+		targetRoot := filepath.Join(targetDir, "5k porn")
+		if !pathExists(t, filepath.Join(targetRoot, "a.mp4")) {
+			t.Fatalf("merged output missing %q", filepath.Join(targetRoot, "a.mp4"))
+		}
+		if !pathExists(t, filepath.Join(targetRoot, "b.mp4")) {
+			t.Fatalf("merged output missing %q", filepath.Join(targetRoot, "b.mp4"))
+		}
+		unexpectedRoot := filepath.Join(targetDir, "5kporn.e20.melody.marks.5k")
+		if pathExists(t, unexpectedRoot) {
+			t.Fatalf("unexpected split target root should not exist: %q", unexpectedRoot)
+		}
+	})
 }
 
 func TestCompressNodeExecutorUnsupportedAndArchiveNaming(t *testing.T) {
@@ -747,6 +954,48 @@ func TestCompressNodeExecutorUnsupportedAndArchiveNaming(t *testing.T) {
 		want := filepath.Join(archiveDir, "album (1).cbz")
 		if path != want {
 			t.Fatalf("archive path = %q, want %q", path, want)
+		}
+	})
+
+	t.Run("archive_name_prefers_root_path_name", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		sourcePath := filepath.Join(root, "source", "5kporn.e20", "__photo")
+		archiveDir := filepath.Join(root, "archives")
+		mustMkdirAll(t, sourcePath)
+		if err := os.WriteFile(filepath.Join(sourcePath, "001.jpg"), []byte("img"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(source) error = %v", err)
+		}
+
+		executor := newCompressNodeExecutor(fs.NewOSAdapter())
+		out, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Node: repository.WorkflowGraphNode{
+				Config: map[string]any{
+					"target_dir": archiveDir,
+					"format":     "cbz",
+				},
+			},
+			Inputs: testInputs(map[string]any{
+				"items": []ProcessingItem{{
+					SourcePath: sourcePath,
+					RootPath:   filepath.Join(root, "source", "5k porn"),
+					TargetName: "5kporn.e20",
+					SourceKind: ProcessingItemSourceKindDirectory,
+				}},
+			}),
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+
+		stepResults := out.Outputs["step_results"].Value.([]ProcessingStepResult)
+		if len(stepResults) != 1 {
+			t.Fatalf("len(step_results) = %d, want 1", len(stepResults))
+		}
+		wantPath := normalizeWorkflowPath(filepath.Join(archiveDir, "5k porn.cbz"))
+		if got := normalizeWorkflowPath(stepResults[0].TargetPath); got != wantPath {
+			t.Fatalf("archive target path = %q, want %q", got, wantPath)
 		}
 	})
 }
@@ -1144,6 +1393,41 @@ func TestThumbnailNodeExecutorUsesCurrentPathAndBusinessErrors(t *testing.T) {
 		}
 		if results[0].TargetPath != "/moved/album/album.jpg" {
 			t.Fatalf("step_results[0].TargetPath = %q, want /moved/album/album.jpg", results[0].TargetPath)
+		}
+	})
+
+	t.Run("output_name_prefers_root_path_name", func(t *testing.T) {
+		t.Parallel()
+
+		adapter := fs.NewMockAdapter()
+		adapter.AddDir("/moved/5kporn.e20", []fs.DirEntry{{Name: "movie.mkv", Size: 100}})
+
+		executor := newThumbnailNodeExecutor(adapter, nil)
+		executor.lookPath = func(string) (string, error) {
+			return "/usr/bin/ffmpeg", nil
+		}
+		executor.runFFmpeg = func(context.Context, string, ...string) ([]byte, error) {
+			return nil, nil
+		}
+
+		out, err := executor.Execute(context.Background(), NodeExecutionInput{
+			Inputs: testInputs(map[string]any{"item": ProcessingItem{
+				SourcePath:  "/source/5kporn.e20",
+				CurrentPath: "/moved/5kporn.e20",
+				RootPath:    "/source/5k porn",
+				TargetName:  "5kporn.e20",
+				SourceKind:  ProcessingItemSourceKindDirectory,
+			}}),
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		results := out.Outputs["step_results"].Value.([]ProcessingStepResult)
+		if len(results) != 1 {
+			t.Fatalf("len(step_results) = %d, want 1", len(results))
+		}
+		if results[0].TargetPath != "/moved/5kporn.e20/5k porn.jpg" {
+			t.Fatalf("step_results[0].TargetPath = %q, want /moved/5kporn.e20/5k porn.jpg", results[0].TargetPath)
 		}
 	})
 

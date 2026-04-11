@@ -141,3 +141,144 @@ func TestNormalizeWorkflowDefinitionGraphs_IsIdempotent(t *testing.T) {
 		t.Fatalf("graph json changed after second normalization")
 	}
 }
+
+func TestNormalizeWorkflowDefinitionGraphs_NormalizesBuiltinDefaultProcessingFlow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	repo := repository.NewWorkflowDefinitionRepository(database)
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "p-router", Type: "category-router", Enabled: true},
+			{ID: "p-rename", Type: "rename-node", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-thumbnail", SourcePort: "items"}},
+			}},
+			{ID: "p-compress", Type: "compress-node", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-rename", SourcePort: "items"}},
+			}},
+			{ID: "p-move", Type: "move-node", Enabled: true, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-compress", SourcePort: "items"}},
+			}},
+			{ID: "p-thumbnail", Type: "thumbnail-node", Enabled: true, Config: map[string]any{
+				"path_ref_type": "output",
+				"path_ref_key":  "video",
+				"path_suffix":   ".thumbnails",
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-router", SourcePort: "video"}},
+			}},
+		},
+		Edges: []repository.WorkflowGraphEdge{
+			{ID: "e-router-thumbnail", Source: "p-router", SourcePort: "video", Target: "p-thumbnail", TargetPort: "items"},
+			{ID: "e-thumbnail-rename", Source: "p-thumbnail", SourcePort: "items", Target: "p-rename", TargetPort: "items"},
+			{ID: "e-rename-compress", Source: "p-rename", SourcePort: "items", Target: "p-compress", TargetPort: "items"},
+			{ID: "e-compress-move", Source: "p-compress", SourcePort: "items", Target: "p-move", TargetPort: "items"},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+
+	def := &repository.WorkflowDefinition{
+		ID:        "wf-default-processing-migration",
+		Name:      "default-processing",
+		GraphJSON: string(graphJSON),
+		IsActive:  true,
+		Version:   1,
+	}
+	if err := repo.Create(ctx, def); err != nil {
+		t.Fatalf("repo.Create() error = %v", err)
+	}
+
+	if err := NormalizeWorkflowDefinitionGraphs(ctx, repo); err != nil {
+		t.Fatalf("NormalizeWorkflowDefinitionGraphs() error = %v", err)
+	}
+
+	updated, err := repo.GetByID(ctx, def.ID)
+	if err != nil {
+		t.Fatalf("repo.GetByID() error = %v", err)
+	}
+	var normalized repository.WorkflowGraph
+	if err := json.Unmarshal([]byte(updated.GraphJSON), &normalized); err != nil {
+		t.Fatalf("json.Unmarshal(updated.GraphJSON) error = %v", err)
+	}
+
+	nodeByID := map[string]repository.WorkflowGraphNode{}
+	for _, node := range normalized.Nodes {
+		nodeByID[node.ID] = node
+	}
+	thumbnailNode := nodeByID["p-thumbnail"]
+	if len(thumbnailNode.Config) != 0 {
+		t.Fatalf("thumbnail config = %#v, want empty for built-in default flow", thumbnailNode.Config)
+	}
+	if link := thumbnailNode.Inputs["items"].LinkSource; link == nil || link.SourceNodeID != "p-move" || link.SourcePort != "items" {
+		t.Fatalf("thumbnail items link = %#v, want p-move.items", link)
+	}
+	if link := nodeByID["p-rename"].Inputs["items"].LinkSource; link == nil || link.SourceNodeID != "p-router" || link.SourcePort != "video" {
+		t.Fatalf("rename items link = %#v, want p-router.video", link)
+	}
+}
+
+func TestNormalizeWorkflowDefinitionGraphs_DoesNotForceBuiltinRulesOnCustomWorkflow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newServiceTestDB(t)
+	repo := repository.NewWorkflowDefinitionRepository(database)
+
+	graph := repository.WorkflowGraph{
+		Nodes: []repository.WorkflowGraphNode{
+			{ID: "p-router", Type: "category-router", Enabled: true},
+			{ID: "p-thumbnail", Type: "thumbnail-node", Enabled: true, Config: map[string]any{
+				"output_dir": "/custom/thumbs",
+			}, Inputs: map[string]repository.NodeInputSpec{
+				"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "p-router", SourcePort: "video"}},
+			}},
+		},
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("json.Marshal(graph) error = %v", err)
+	}
+
+	def := &repository.WorkflowDefinition{
+		ID:        "wf-custom-thumb-path",
+		Name:      "custom-processing",
+		GraphJSON: string(graphJSON),
+		IsActive:  true,
+		Version:   1,
+	}
+	if err := repo.Create(ctx, def); err != nil {
+		t.Fatalf("repo.Create() error = %v", err)
+	}
+
+	if err := NormalizeWorkflowDefinitionGraphs(ctx, repo); err != nil {
+		t.Fatalf("NormalizeWorkflowDefinitionGraphs() error = %v", err)
+	}
+
+	updated, err := repo.GetByID(ctx, def.ID)
+	if err != nil {
+		t.Fatalf("repo.GetByID() error = %v", err)
+	}
+	var normalized repository.WorkflowGraph
+	if err := json.Unmarshal([]byte(updated.GraphJSON), &normalized); err != nil {
+		t.Fatalf("json.Unmarshal(updated.GraphJSON) error = %v", err)
+	}
+
+	nodeByID := map[string]repository.WorkflowGraphNode{}
+	for _, node := range normalized.Nodes {
+		nodeByID[node.ID] = node
+	}
+	thumbnailNode := nodeByID["p-thumbnail"]
+	if link := thumbnailNode.Inputs["items"].LinkSource; link == nil || link.SourceNodeID != "p-router" || link.SourcePort != "video" {
+		t.Fatalf("thumbnail items link = %#v, want unchanged p-router.video", link)
+	}
+	if got := strings.TrimSpace(stringConfig(thumbnailNode.Config, "path_ref_type")); got != workflowPathRefTypeCustom {
+		t.Fatalf("thumbnail path_ref_type = %q, want %q", got, workflowPathRefTypeCustom)
+	}
+	if got := normalizeWorkflowPath(stringConfig(thumbnailNode.Config, "path_ref_key")); got != "/custom/thumbs" {
+		t.Fatalf("thumbnail path_ref_key = %q, want %q", got, "/custom/thumbs")
+	}
+}

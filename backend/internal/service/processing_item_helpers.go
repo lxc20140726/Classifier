@@ -48,3 +48,23 @@ func processingItemMediaPath(item ProcessingItem) string {
 	}
 	return normalized.SourcePath
 }
+
+func processingItemRootName(item ProcessingItem) string {
+	normalized := processingItemNormalize(item)
+	rootPath := strings.TrimSpace(normalized.RootPath)
+	if rootPath == "" {
+		return ""
+	}
+	rootName := strings.TrimSpace(filepath.Base(rootPath))
+	if rootName == "" || rootName == "." || rootName == string(filepath.Separator) {
+		return ""
+	}
+	return rootName
+}
+
+func processingItemArtifactName(item ProcessingItem) string {
+	if rootName := processingItemRootName(item); rootName != "" {
+		return rootName
+	}
+	return phase4MoveItemName(item)
+}
