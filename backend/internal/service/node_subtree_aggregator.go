@@ -220,7 +220,7 @@ func summarizeEntriesCategory(entries []ClassifiedEntry) string {
 		summary = mergeMediaSummary(summary, summarizeClassifiedEntryMedia(entry))
 	}
 
-	category, _, _ := aggregateTreeCategory(ClassificationSignal{}, summary)
+	category, _, _ := aggregateTreeCategory(ClassificationSignal{}, summary, mediaSummary{})
 	return category
 }
 
@@ -241,7 +241,8 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 
 	bestSignal := pickBestSignalByPath(tree.Path, signalsBySource)
 	summary := summarizeFolderTreeMedia(tree)
-	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, summary)
+	directSummary := summarizeCurrentFolderMedia(tree)
+	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, summary, directSummary)
 	if finalCategory == "" {
 		finalCategory = folder.Category
 	}
@@ -305,9 +306,15 @@ func (e *subtreeAggregatorNodeExecutor) aggregateTree(ctx context.Context, input
 	return entry, nil
 }
 
-func aggregateTreeCategory(bestSignal ClassificationSignal, summary mediaSummary) (string, float64, string) {
+func aggregateTreeCategory(bestSignal ClassificationSignal, summary mediaSummary, directSummary mediaSummary) (string, float64, string) {
 	if !bestSignal.IsEmpty && strings.TrimSpace(bestSignal.Category) == "manga" {
 		return "manga", bestSignal.Confidence, bestSignal.Reason
+	}
+	if directSummary.hasManga {
+		return "manga", 1, "direct:manga-only"
+	}
+	if directSummary.hasVideo && !directSummary.hasImage && !directSummary.hasManga {
+		return "video", 1, "direct:video-only"
 	}
 	if summary.hasManga {
 		return "manga", 1, "subtree:manga"

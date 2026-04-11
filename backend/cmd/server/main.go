@@ -67,7 +67,7 @@ func main() {
 	}
 	snapshotSvc := service.NewSnapshotService(fsAdapter, snapshotRepo, folderRepo)
 	scannerSvc := service.NewScannerService(fsAdapter, folderRepo, jobRepo, snapshotSvc, auditSvc, broker)
-	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, scannerSvc)
+	scanJobStarterSvc := service.NewScanJobStarterService(jobRepo, configRepo, scannerSvc)
 	workflowRunnerSvc := service.NewWorkflowRunnerService(jobRepo, folderRepo, snapshotRepo, workflowDefRepo, workflowRunRepo, nodeRunRepo, nodeSnapshotRepo, fsAdapter, broker, auditSvc)
 	workflowRunnerSvc.SetProcessingReviewRepository(processingReviewRepo)
 	workflowRunnerSvc.SetConfigRepository(configRepo)

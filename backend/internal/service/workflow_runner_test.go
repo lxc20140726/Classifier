@@ -15,6 +15,47 @@ import (
 	"github.com/liqiye/classifier/internal/repository"
 )
 
+func TestExtRatioClassifierClassifiesNestedVideoTree(t *testing.T) {
+	t.Parallel()
+
+	executor := &extRatioClassifierNodeExecutor{}
+	tree := FolderTree{
+		Path: "/source/compilation",
+		Name: "compilation",
+		Subdirs: []FolderTree{{
+			Path: "/source/compilation/5k porn",
+			Name: "5k porn",
+			Files: []FileEntry{{
+				Name: "5kporn.20.02.19.skye.blue.5k.mp4",
+				Ext:  ".mp4",
+			}},
+		}},
+	}
+
+	output, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{
+			"trees": []FolderTree{tree},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	signals, ok := output.Outputs["signal"].Value.([]ClassificationSignal)
+	if !ok {
+		t.Fatalf("signals type = %T, want []ClassificationSignal", output.Outputs["signal"].Value)
+	}
+	if len(signals) != 1 {
+		t.Fatalf("len(signals) = %d, want 1", len(signals))
+	}
+	if signals[0].Category != "video" {
+		t.Fatalf("signal category = %q, want video", signals[0].Category)
+	}
+	if signals[0].Confidence != 0.85 {
+		t.Fatalf("signal confidence = %v, want 0.85", signals[0].Confidence)
+	}
+}
+
 type stubCustomExecutor struct{}
 
 func (e *stubCustomExecutor) Type() string {
@@ -836,6 +877,9 @@ func TestWorkflowRunnerServiceWritesAuditForMutatingNodes(t *testing.T) {
 			}
 			if logs[0].Result != tc.result {
 				t.Fatalf("audit result = %q, want %q", logs[0].Result, tc.result)
+			}
+			if logs[0].FolderID != folder.ID {
+				t.Fatalf("audit folder_id = %q, want %q", logs[0].FolderID, folder.ID)
 			}
 			if logs[0].FolderPath != tc.folderPath {
 				t.Fatalf("audit folder_path = %q, want %q", logs[0].FolderPath, tc.folderPath)

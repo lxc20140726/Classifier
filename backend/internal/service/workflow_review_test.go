@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -446,5 +447,43 @@ func TestWorkflowRunnerPrepareProcessingReviews_AutoAggregateWithoutStepResultEd
 		if _, ok := typeSet[nodeType]; !ok {
 			t.Fatalf("missing step result for node type %q", nodeType)
 		}
+	}
+}
+
+func TestBuildProcessingReviewAfterPrefersFolderOverArtifactFile(t *testing.T) {
+	t.Parallel()
+
+	folderPath := filepath.Join("/library", "A")
+	agg := &processingFolderAggregate{
+		BeforePath: folderPath,
+		LastPath:   folderPath,
+		AfterPath:  filepath.Join("/output", "A.cbz"),
+		SourcePaths: map[string]struct{}{
+			folderPath: {},
+		},
+		StepResults: []ProcessingStepResult{
+			{
+				SourcePath: folderPath,
+				TargetPath: filepath.Join("/output", "A.cbz"),
+				NodeType:   compressNodeExecutorType,
+				Status:     "succeeded",
+			},
+		},
+	}
+
+	after := buildProcessingReviewAfter(nil, agg)
+	if got := after["path"]; got != folderPath {
+		t.Fatalf("after[path] = %v, want %q", got, folderPath)
+	}
+	if got := after["name"]; got != "A" {
+		t.Fatalf("after[name] = %v, want %q", got, "A")
+	}
+
+	artifacts, ok := after["artifact_paths"].([]string)
+	if !ok {
+		t.Fatalf("after[artifact_paths] type = %T, want []string", after["artifact_paths"])
+	}
+	if len(artifacts) != 1 || artifacts[0] != filepath.Join("/output", "A.cbz") {
+		t.Fatalf("after[artifact_paths] = %#v, want [%q]", artifacts, filepath.Join("/output", "A.cbz"))
 	}
 }

@@ -200,9 +200,51 @@ func TestFolderRepositoryListWorkflowSummariesByFolderIDs(t *testing.T) {
 	mustCreateNodeRun(&NodeRun{ID: "nr-classify-writer", WorkflowRunID: "wr-classify", NodeID: "writer", NodeType: "classification-writer", Sequence: 1, Status: "succeeded"})
 	mustSetWorkflowRunUpdatedAt("wr-classify", "2026-01-01 00:00:01")
 
+	if _, err := database.ExecContext(ctx, `INSERT INTO snapshots (
+id, job_id, folder_id, operation_type, before_state, after_state, detail, status, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"snap-classify-derived",
+		"job-classify-derived",
+		"f-classify",
+		"classify",
+		`{"category":"other"}`,
+		`{"category":"photo"}`,
+		`{"node_type":"classification-writer"}`,
+		"committed",
+		"2026-01-01 00:00:07",
+	); err != nil {
+		t.Fatalf("insert classify snapshot error = %v", err)
+	}
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-classify-derived", JobID: "job-classify-derived", WorkflowDefID: "def", Status: "succeeded"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-classify-derived-writer", WorkflowRunID: "wr-classify-derived", NodeID: "writer", NodeType: "classification-writer", Sequence: 1, Status: "succeeded"})
+	mustSetWorkflowRunUpdatedAt("wr-classify-derived", "2026-01-01 00:00:07")
+
 	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-process", JobID: "job-process", FolderID: "f-process", WorkflowDefID: "def", Status: "succeeded"})
 	mustCreateNodeRun(&NodeRun{ID: "nr-process-move", WorkflowRunID: "wr-process", NodeID: "move", NodeType: "move-node", Sequence: 1, Status: "succeeded"})
 	mustSetWorkflowRunUpdatedAt("wr-process", "2026-01-01 00:00:02")
+
+	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-process-derived", JobID: "job-process-derived", WorkflowDefID: "def", Status: "succeeded"})
+	mustCreateNodeRun(&NodeRun{ID: "nr-process-derived-move", WorkflowRunID: "wr-process-derived", NodeID: "move", NodeType: "move-node", Sequence: 1, Status: "succeeded"})
+	if _, err := database.ExecContext(ctx, `INSERT INTO processing_review_items (
+id, workflow_run_id, job_id, folder_id, status, before_json, after_json, step_results_json, diff_json, error, created_at, updated_at, reviewed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"review-process-derived",
+		"wr-process-derived",
+		"job-process-derived",
+		"f-process",
+		"approved",
+		`{"path":"/media/process"}`,
+		`{"path":"/media/process"}`,
+		`[]`,
+		`{}`,
+		"",
+		"2026-01-01 00:00:08",
+		"2026-01-01 00:00:08",
+		"2026-01-01 00:00:08",
+	); err != nil {
+		t.Fatalf("insert processing review error = %v", err)
+	}
+	mustSetWorkflowRunUpdatedAt("wr-process-derived", "2026-01-01 00:00:08")
 
 	mustCreateWorkflowRun(&WorkflowRun{ID: "wr-failed-old", JobID: "job-failed-old", FolderID: "f-failed", WorkflowDefID: "def", Status: "succeeded"})
 	mustCreateNodeRun(&NodeRun{ID: "nr-failed-old-move", WorkflowRunID: "wr-failed-old", NodeID: "move", NodeType: "move-node", Sequence: 1, Status: "succeeded"})
@@ -243,12 +285,18 @@ func TestFolderRepositoryListWorkflowSummariesByFolderIDs(t *testing.T) {
 	if got := summaries["f-classify"].Classification.Status; got != "succeeded" {
 		t.Fatalf("f-classify classification = %q, want succeeded", got)
 	}
+	if got := summaries["f-classify"].Classification.WorkflowRunID; got != "wr-classify-derived" {
+		t.Fatalf("f-classify classification workflow_run_id = %q, want wr-classify-derived", got)
+	}
 	if got := summaries["f-classify"].Processing.Status; got != "not_run" {
 		t.Fatalf("f-classify processing = %q, want not_run", got)
 	}
 
 	if got := summaries["f-process"].Processing.Status; got != "succeeded" {
 		t.Fatalf("f-process processing = %q, want succeeded", got)
+	}
+	if got := summaries["f-process"].Processing.WorkflowRunID; got != "wr-process-derived" {
+		t.Fatalf("f-process processing workflow_run_id = %q, want wr-process-derived", got)
 	}
 	if got := summaries["f-process"].Classification.Status; got != "not_run" {
 		t.Fatalf("f-process classification = %q, want not_run", got)
@@ -403,6 +451,62 @@ func TestFolderRepositoryPathObservationsAndHistory(t *testing.T) {
 
 	if _, err := repo.GetCurrentByPath(ctx, "/media/original"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetCurrentByPath(old) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFolderRepositoryUpdatePathReassignsCurrentSourceRelativeObservation(t *testing.T) {
+	t.Parallel()
+
+	database := newTestDB(t)
+	repo := NewFolderRepository(database)
+	ctx := context.Background()
+
+	first := &Folder{
+		ID:             "folder-first",
+		Path:           "/library/first",
+		SourceDir:      "/library",
+		RelativePath:   "first",
+		Name:           "first",
+		Category:       "photo",
+		CategorySource: "auto",
+		Status:         "pending",
+	}
+	if err := repo.Upsert(ctx, first); err != nil {
+		t.Fatalf("Upsert(first) error = %v", err)
+	}
+
+	second := &Folder{
+		ID:             "folder-second",
+		Path:           "/archive/second",
+		SourceDir:      "/archive",
+		RelativePath:   "second",
+		Name:           "second",
+		Category:       "photo",
+		CategorySource: "auto",
+		Status:         "pending",
+	}
+	if err := repo.Upsert(ctx, second); err != nil {
+		t.Fatalf("Upsert(second) error = %v", err)
+	}
+
+	if err := repo.UpdatePath(ctx, second.ID, "/media/other-name", "/library", "first"); err != nil {
+		t.Fatalf("UpdatePath() error = %v", err)
+	}
+
+	got, err := repo.GetCurrentBySourceAndRelativePath(ctx, "/library", "first")
+	if err != nil {
+		t.Fatalf("GetCurrentBySourceAndRelativePath() error = %v", err)
+	}
+	if got.ID != second.ID {
+		t.Fatalf("GetCurrentBySourceAndRelativePath().ID = %q, want %q", got.ID, second.ID)
+	}
+
+	resolved, matchType, err := repo.ResolveScanTarget(ctx, "/does-not-exist", "/library", "first")
+	if err != nil {
+		t.Fatalf("ResolveScanTarget() error = %v", err)
+	}
+	if resolved == nil || resolved.ID != second.ID || matchType != FolderScanMatchTypeSourceRelativeMatch {
+		t.Fatalf("ResolveScanTarget() = (%v, %q, %q), want (%q, %q)", resolved != nil, resolved.ID, matchType, second.ID, FolderScanMatchTypeSourceRelativeMatch)
 	}
 }
 

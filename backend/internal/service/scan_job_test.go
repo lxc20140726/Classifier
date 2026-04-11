@@ -28,7 +28,18 @@ func TestScanJobStarterServiceSkipsDuplicateScheduledRuns(t *testing.T) {
 		started: make(chan ScanInput, 2),
 		release: make(chan struct{}),
 	}
-	starter := NewScanJobStarterService(jobRepo, runner)
+	configRepo := repository.NewConfigRepository(database)
+	if err := configRepo.SaveAppConfig(context.Background(), &repository.AppConfig{
+		Version:       1,
+		ScanInputDirs: []string{"/source/a", "/source/b"},
+		OutputDirs: repository.AppConfigOutputDirs{
+			Mixed: []string{"/target/mixed"},
+			Photo: []string{"/target/photo"},
+		},
+	}); err != nil {
+		t.Fatalf("configRepo.SaveAppConfig() error = %v", err)
+	}
+	starter := NewScanJobStarterService(jobRepo, configRepo, runner)
 
 	jobID, started, err := starter.StartScheduledJob(context.Background(), []string{"/source/a", "/source/b"})
 	if err != nil {
@@ -49,7 +60,13 @@ func TestScanJobStarterServiceSkipsDuplicateScheduledRuns(t *testing.T) {
 	}
 
 	select {
-	case <-runner.started:
+	case input := <-runner.started:
+		if len(input.ExcludeDirs) != 2 {
+			t.Fatalf("first scheduled scan exclude dirs len = %d, want 2", len(input.ExcludeDirs))
+		}
+		if input.ExcludeDirs[0] != "/target/mixed" || input.ExcludeDirs[1] != "/target/photo" {
+			t.Fatalf("first scheduled scan exclude dirs = %#v, want [/target/mixed /target/photo]", input.ExcludeDirs)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timeout waiting for first scheduled scan")
 	}

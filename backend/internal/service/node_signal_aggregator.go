@@ -79,7 +79,8 @@ func buildClassifiedEntryFromTree(tree FolderTree, signalsBySource map[string]ma
 
 	bestSignal := pickBestSignalByPath(tree.Path, signalsBySource)
 	summary := summarizeFolderTreeMedia(tree)
-	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, summary)
+	directSummary := summarizeCurrentFolderMedia(tree)
+	finalCategory, confidence, reason := aggregateTreeCategory(bestSignal, summary, directSummary)
 	if strings.TrimSpace(finalCategory) == "" {
 		finalCategory = "other"
 	}

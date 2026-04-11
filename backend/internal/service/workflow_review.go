@@ -696,13 +696,7 @@ func resolveFolderIDByStep(step ProcessingStepResult, folderPathMap map[string]s
 }
 
 func buildProcessingReviewBefore(folder *repository.Folder, agg *processingFolderAggregate) map[string]any {
-	path := strings.TrimSpace(agg.BeforePath)
-	if path == "" {
-		path = strings.TrimSpace(agg.LastPath)
-	}
-	if path == "" && folder != nil {
-		path = strings.TrimSpace(folder.Path)
-	}
+	path := processingReviewDisplayPath(folder, agg, false)
 	name := filepath.Base(path)
 	if strings.TrimSpace(name) == "." && folder != nil {
 		name = strings.TrimSpace(folder.Name)
@@ -717,13 +711,7 @@ func buildProcessingReviewBefore(folder *repository.Folder, agg *processingFolde
 }
 
 func buildProcessingReviewAfter(folder *repository.Folder, agg *processingFolderAggregate) map[string]any {
-	path := strings.TrimSpace(agg.AfterPath)
-	if folder != nil && strings.TrimSpace(folder.Path) != "" {
-		path = strings.TrimSpace(folder.Path)
-	}
-	if path == "" {
-		path = strings.TrimSpace(agg.LastPath)
-	}
+	path := processingReviewDisplayPath(folder, agg, true)
 	name := filepath.Base(path)
 	if strings.TrimSpace(name) == "." && folder != nil {
 		name = strings.TrimSpace(folder.Name)
@@ -736,6 +724,47 @@ func buildProcessingReviewAfter(folder *repository.Folder, agg *processingFolder
 		"status":         folderStatus(folder, "pending"),
 		"artifact_paths": artifacts,
 	}
+}
+
+func processingReviewDisplayPath(folder *repository.Folder, agg *processingFolderAggregate, preferAfter bool) string {
+	if folder != nil && strings.TrimSpace(folder.Path) != "" {
+		if preferAfter {
+			return strings.TrimSpace(folder.Path)
+		}
+	}
+
+	sourcePathCount := 0
+	if agg != nil {
+		sourcePathCount = len(agg.SourcePaths)
+	}
+	candidates := make([]string, 0, 4+sourcePathCount)
+	if agg != nil {
+		if !preferAfter {
+			candidates = append(candidates, strings.TrimSpace(agg.BeforePath))
+		}
+		candidates = append(candidates, strings.TrimSpace(agg.LastPath))
+		if !preferAfter {
+			candidates = append(candidates, strings.TrimSpace(agg.AfterPath))
+		}
+		for path := range agg.SourcePaths {
+			candidates = append(candidates, strings.TrimSpace(path))
+		}
+	}
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		return candidate
+	}
+
+	if folder != nil {
+		return strings.TrimSpace(folder.Path)
+	}
+	if agg != nil {
+		return strings.TrimSpace(agg.AfterPath)
+	}
+	return ""
 }
 
 func buildProcessingReviewDiff(before map[string]any, after map[string]any, stepResults []ProcessingStepResult) map[string]any {

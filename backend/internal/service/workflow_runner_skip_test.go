@@ -110,3 +110,33 @@ func TestClassifyNodeInputsEmptyListFailsWithoutSkipOnEmpty(t *testing.T) {
 		t.Fatalf("reason = %q, want empty string", reason)
 	}
 }
+
+func TestClassifyNodeInputsMixedLeafRouterSkipsEmptyList(t *testing.T) {
+	t.Parallel()
+
+	node := repository.WorkflowGraphNode{
+		ID:   "mixed-router",
+		Type: mixedLeafRouterExecutorType,
+		Inputs: map[string]repository.NodeInputSpec{
+			"items": {LinkSource: &repository.NodeLinkSource{SourceNodeID: "router", SourcePort: "mixed_leaf"}},
+		},
+	}
+	schema := newMixedLeafRouterExecutor(nil).Schema()
+	inputs := map[string]*TypedValue{
+		"items": {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
+	}
+	sources := map[string]InputValueSource{
+		"items": InputValueSourceEmptyOutput,
+	}
+
+	skip, fail, _, _, reason := classifyNodeInputs(node, inputs, sources, schema)
+	if !skip {
+		t.Fatalf("skip = false, want true")
+	}
+	if fail {
+		t.Fatalf("fail = true, want false")
+	}
+	if reason != "empty_input" {
+		t.Fatalf("reason = %q, want empty_input", reason)
+	}
+}

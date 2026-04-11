@@ -23,11 +23,17 @@ func TestMixedLeafRouterExecutorSchema(t *testing.T) {
 	if len(schema.Inputs) != 1 || schema.Inputs[0].Name != "items" || !schema.Inputs[0].Required {
 		t.Fatalf("schema.Inputs = %#v, want required items input", schema.Inputs)
 	}
-	if len(schema.Outputs) != 3 {
-		t.Fatalf("len(schema.Outputs) = %d, want 3", len(schema.Outputs))
+	if !schema.Inputs[0].SkipOnEmpty {
+		t.Fatalf("schema.Inputs[0].SkipOnEmpty = false, want true")
 	}
-	gotOutputs := []string{schema.Outputs[0].Name, schema.Outputs[1].Name, schema.Outputs[2].Name}
-	wantOutputs := []string{mixedLeafRouterVideoPort, mixedLeafRouterPhotoPort, mixedLeafRouterUnsupportedPort}
+	if !schema.Inputs[0].AcceptDefault {
+		t.Fatalf("schema.Inputs[0].AcceptDefault = false, want true")
+	}
+	if len(schema.Outputs) != 4 {
+		t.Fatalf("len(schema.Outputs) = %d, want 4", len(schema.Outputs))
+	}
+	gotOutputs := []string{schema.Outputs[0].Name, schema.Outputs[1].Name, schema.Outputs[2].Name, schema.Outputs[3].Name}
+	wantOutputs := []string{mixedLeafRouterVideoPort, mixedLeafRouterPhotoPort, mixedLeafRouterUnsupportedPort, "step_results"}
 	for i, want := range wantOutputs {
 		if gotOutputs[i] != want {
 			t.Fatalf("schema.Outputs[%d].Name = %q, want %q", i, gotOutputs[i], want)
@@ -158,7 +164,7 @@ func TestMixedLeafRouterExecutorValidationAndRerun(t *testing.T) {
 		}
 	})
 
-	t.Run("reject_business_subdirectory", func(t *testing.T) {
+	t.Run("ignore_business_subdirectory_and_route_root_files", func(t *testing.T) {
 		t.Parallel()
 
 		mixedRoot := filepath.Join(t.TempDir(), "mixed")
@@ -166,7 +172,7 @@ func TestMixedLeafRouterExecutorValidationAndRerun(t *testing.T) {
 		writeTestFile(t, filepath.Join(mixedRoot, "a.mp4"))
 
 		executor := newMixedLeafRouterExecutor(fs.NewOSAdapter())
-		_, err := executor.Execute(context.Background(), NodeExecutionInput{
+		out, err := executor.Execute(context.Background(), NodeExecutionInput{
 			Inputs: testInputs(map[string]any{
 				"items": []ProcessingItem{{
 					SourcePath:  mixedRoot,
@@ -175,8 +181,17 @@ func TestMixedLeafRouterExecutorValidationAndRerun(t *testing.T) {
 				}},
 			}),
 		})
-		if err == nil {
-			t.Fatalf("Execute() error = nil, want non-nil")
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		assertPortCount(t, out.Outputs, mixedLeafRouterVideoPort, 1)
+		assertPortCount(t, out.Outputs, mixedLeafRouterPhotoPort, 0)
+		assertPortCount(t, out.Outputs, mixedLeafRouterUnsupportedPort, 0)
+
+		assertDirFilesEqual(t, filepath.Join(mixedRoot, "__video"), []string{"a.mp4"})
+		assertDirFilesEqual(t, mixedRoot, []string{"__video", "child"})
+		if !pathExists(t, filepath.Join(mixedRoot, "child")) {
+			t.Fatalf("child directory should remain in place")
 		}
 	})
 
@@ -195,6 +210,36 @@ func TestMixedLeafRouterExecutorValidationAndRerun(t *testing.T) {
 		second := executeMixedLeafRouter(t, mixedRoot)
 		assertPortCount(t, second.Outputs, mixedLeafRouterVideoPort, 1)
 		assertDirFilesEqual(t, filepath.Join(mixedRoot, "__video"), []string{"a.mp4", "b.mp4"})
+	})
+
+	t.Run("absorb_promo_subdir_but_keep_business_subdir", func(t *testing.T) {
+		t.Parallel()
+
+		mixedRoot := filepath.Join(t.TempDir(), "mixed")
+		promoDir := filepath.Join(mixedRoot, "2048")
+		businessDir := filepath.Join(mixedRoot, "series")
+		nestedPromoDir := filepath.Join(promoDir, "__photo")
+		mustMkdirAll(t, nestedPromoDir)
+		mustMkdirAll(t, businessDir)
+		writeTestFile(t, filepath.Join(mixedRoot, "main.mp4"))
+		writeTestFile(t, filepath.Join(promoDir, "poster.jpg"))
+		writeTestFile(t, filepath.Join(promoDir, "note.txt"))
+		writeTestFile(t, filepath.Join(nestedPromoDir, "nested.png"))
+		writeTestFile(t, filepath.Join(businessDir, "ep01.mp4"))
+
+		out := executeMixedLeafRouter(t, mixedRoot)
+		assertPortCount(t, out.Outputs, mixedLeafRouterVideoPort, 1)
+		assertPortCount(t, out.Outputs, mixedLeafRouterPhotoPort, 1)
+		assertPortCount(t, out.Outputs, mixedLeafRouterUnsupportedPort, 1)
+		stepResults := out.Outputs["step_results"].Value.([]ProcessingStepResult)
+		if len(stepResults) != 4 {
+			t.Fatalf("len(step_results) = %d, want 4", len(stepResults))
+		}
+
+		assertDirFilesEqual(t, filepath.Join(mixedRoot, "__video"), []string{"main.mp4"})
+		assertDirFilesEqual(t, filepath.Join(mixedRoot, "__photo"), []string{"2048__poster.jpg", "2048____photo__nested.png"})
+		assertDirFilesEqual(t, filepath.Join(mixedRoot, "__unsupported"), []string{"2048__note.txt"})
+		assertDirFilesEqual(t, businessDir, []string{"ep01.mp4"})
 	})
 }
 
@@ -244,6 +289,49 @@ func TestMixedLeafRouterExecutorRollback(t *testing.T) {
 	if pathExists(t, filepath.Join(mixedRoot, "__unsupported")) {
 		t.Fatalf("__unsupported should be removed after rollback")
 	}
+}
+
+func TestMixedLeafRouterExecutorRollbackRestoresAbsorbedPromoSubdir(t *testing.T) {
+	t.Parallel()
+
+	mixedRoot := filepath.Join(t.TempDir(), "mixed")
+	promoDir := filepath.Join(mixedRoot, "2048")
+	internalPromoDir := filepath.Join(promoDir, "__photo")
+	mustMkdirAll(t, internalPromoDir)
+	writeTestFile(t, filepath.Join(mixedRoot, "main.mp4"))
+	writeTestFile(t, filepath.Join(promoDir, "poster.jpg"))
+	writeTestFile(t, filepath.Join(promoDir, "note.txt"))
+	writeTestFile(t, filepath.Join(internalPromoDir, "nested.png"))
+
+	executor := newMixedLeafRouterExecutor(fs.NewOSAdapter())
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{
+			"items": []ProcessingItem{{
+				SourcePath:  mixedRoot,
+				CurrentPath: mixedRoot,
+				Category:    "mixed",
+			}},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if err := executor.Rollback(context.Background(), NodeRollbackInput{
+		Snapshots: []*repository.NodeSnapshot{
+			{
+				ID:         "mixed-router-rollback-promo",
+				Kind:       "post",
+				OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, out.Outputs)),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	assertDirFilesEqual(t, mixedRoot, []string{"2048", "main.mp4"})
+	assertDirFilesEqual(t, promoDir, []string{"__photo", "note.txt", "poster.jpg"})
+	assertDirFilesEqual(t, internalPromoDir, []string{"nested.png"})
 }
 
 func executeMixedLeafRouter(t *testing.T, mixedRoot string) NodeExecutionOutput {

@@ -19,15 +19,17 @@ type ScanRunner interface {
 
 type ScanJobStarterService struct {
 	jobs    repository.JobRepository
+	config  repository.ConfigRepository
 	scanner ScanRunner
 
 	mu      sync.Mutex
 	running map[string]struct{}
 }
 
-func NewScanJobStarterService(jobRepo repository.JobRepository, scanner ScanRunner) *ScanJobStarterService {
+func NewScanJobStarterService(jobRepo repository.JobRepository, configRepo repository.ConfigRepository, scanner ScanRunner) *ScanJobStarterService {
 	return &ScanJobStarterService{
 		jobs:    jobRepo,
+		config:  configRepo,
 		scanner: scanner,
 		running: make(map[string]struct{}),
 	}
@@ -87,16 +89,25 @@ func (s *ScanJobStarterService) start(ctx context.Context, sourceDirs []string, 
 		}
 	}
 
+	excludeDirs, err := s.resolveExcludeDirs(ctx)
+	if err != nil {
+		if dedupe {
+			s.finish(key)
+		}
+		return "", false, fmt.Errorf("scanJobStarter.start resolve exclude dirs: %w", err)
+	}
+
 	if s.scanner != nil {
-		go func(jobID string, dirs []string, runningKey string, tracked bool) {
+		go func(jobID string, dirs []string, excluded []string, runningKey string, tracked bool) {
 			if tracked {
 				defer s.finish(runningKey)
 			}
 			_, _ = s.scanner.Scan(context.Background(), ScanInput{
-				JobID:      jobID,
-				SourceDirs: dirs,
+				JobID:       jobID,
+				SourceDirs:  dirs,
+				ExcludeDirs: excluded,
 			})
-		}(jobID, append([]string(nil), normalized...), key, dedupe)
+		}(jobID, append([]string(nil), normalized...), append([]string(nil), excludeDirs...), key, dedupe)
 	}
 
 	return jobID, true, nil
@@ -129,4 +140,30 @@ func normalizeScanSourceDirs(sourceDirs []string) []string {
 
 func scanSourceDirsKey(sourceDirs []string) string {
 	return strings.Join(sourceDirs, "\n")
+}
+
+func (s *ScanJobStarterService) resolveExcludeDirs(ctx context.Context) ([]string, error) {
+	if s.config == nil {
+		return nil, nil
+	}
+
+	cfg, err := s.config.GetAppConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, nil
+	}
+
+	return normalizeScanSourceDirs(flattenOutputDirs(cfg.OutputDirs)), nil
+}
+
+func flattenOutputDirs(outputDirs repository.AppConfigOutputDirs) []string {
+	out := make([]string, 0, len(outputDirs.Video)+len(outputDirs.Manga)+len(outputDirs.Photo)+len(outputDirs.Other)+len(outputDirs.Mixed))
+	out = append(out, outputDirs.Video...)
+	out = append(out, outputDirs.Manga...)
+	out = append(out, outputDirs.Photo...)
+	out = append(out, outputDirs.Other...)
+	out = append(out, outputDirs.Mixed...)
+	return out
 }

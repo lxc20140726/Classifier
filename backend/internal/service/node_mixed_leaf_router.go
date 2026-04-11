@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/liqiye/classifier/internal/fs"
@@ -29,6 +30,14 @@ var mixedLeafRouterStagingDirs = map[string]string{
 	mixedLeafRouterUnsupportedPort: "__unsupported",
 }
 
+var mixedLeafRouterPromoKeywords = []string{
+	"promo",
+	"sample",
+	"ad",
+	"2048",
+	"\u5ba3\u4f20",
+}
+
 type mixedLeafRouterNodeExecutor struct {
 	fs fs.FSAdapter
 }
@@ -48,15 +57,23 @@ func (e *mixedLeafRouterNodeExecutor) Type() string {
 func (e *mixedLeafRouterNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "混合叶子分流器",
-		Description: "消费 mixed_leaf 目录并原地拆分为 video/photo/unsupported 三路目录处理项",
+		Label:       "\u6df7\u5408\u53f6\u5b50\u5206\u6d41\u5668",
+		Description: "\u6d88\u8d39 mixed_leaf \u76ee\u5f55\u5e76\u539f\u5730\u62c6\u5206\u4e3a video/photo/unsupported \u4e09\u8def\u76ee\u5f55\u5904\u7406\u9879\u3002",
 		Inputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, Description: "mixed 叶子目录处理项列表", Required: true},
+			{
+				Name:          "items",
+				Type:          PortTypeProcessingItemList,
+				Description:   "mixed \u53f6\u5b50\u76ee\u5f55\u5904\u7406\u9879\u5217\u8868",
+				Required:      true,
+				SkipOnEmpty:   true,
+				AcceptDefault: true,
+			},
 		},
 		Outputs: []PortDef{
-			{Name: mixedLeafRouterVideoPort, Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "视频目录处理项"},
-			{Name: mixedLeafRouterPhotoPort, Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "图片目录处理项"},
-			{Name: mixedLeafRouterUnsupportedPort, Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "不支持文件目录处理项"},
+			{Name: mixedLeafRouterVideoPort, Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "\u89c6\u9891\u76ee\u5f55\u5904\u7406\u9879"},
+			{Name: mixedLeafRouterPhotoPort, Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "\u56fe\u7247\u76ee\u5f55\u5904\u7406\u9879"},
+			{Name: mixedLeafRouterUnsupportedPort, Type: PortTypeProcessingItemList, AllowEmpty: true, Description: "\u4e0d\u652f\u6301\u6587\u4ef6\u76ee\u5f55\u5904\u7406\u9879"},
+			{Name: "step_results", Type: PortTypeProcessingStepResultList, AllowEmpty: true, Description: "\u6df7\u5408\u53f6\u5b50\u62c6\u5206\u8fc1\u79fb\u8be6\u60c5"},
 		},
 	}
 }
@@ -68,7 +85,9 @@ func (e *mixedLeafRouterNodeExecutor) Execute(ctx context.Context, input NodeExe
 	}
 
 	outputs := mixedLeafRouterEmptyOutputs()
+	stepResults := make([]ProcessingStepResult, 0)
 	if len(items) == 0 {
+		outputs["step_results"] = TypedValue{Type: PortTypeProcessingStepResultList, Value: stepResults}
 		return NodeExecutionOutput{Outputs: outputs, Status: ExecutionSuccess}, nil
 	}
 
@@ -97,30 +116,33 @@ func (e *mixedLeafRouterNodeExecutor) Execute(ctx context.Context, input NodeExe
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir {
-				continue
-			}
-			if mixedLeafRouterIsInternalStagingDir(entry.Name) {
-				continue
-			}
-			return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: mixed root %q contains business subdirectory %q", e.Type(), mixedRoot, entry.Name)
-		}
-
-		for _, entry := range entries {
-			if entry.IsDir {
+			if entry.IsDir || mixedLeafRouterIsInternalStagingDir(strings.TrimSpace(entry.Name)) {
 				continue
 			}
 
 			portName := mixedLeafRouterClassifyPort(entry.Name)
-			stagePath := mixedLeafRouterStagePath(mixedRoot, portName)
-			if err := e.fs.MkdirAll(ctx, stagePath, 0o755); err != nil {
-				return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: create staging dir %q: %w", e.Type(), stagePath, err)
-			}
-
 			sourcePath := joinWorkflowPath(mixedRoot, entry.Name)
-			targetPath := joinWorkflowPath(stagePath, entry.Name)
-			if err := e.fs.MoveFile(ctx, sourcePath, targetPath); err != nil {
-				return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: move file %q to %q: %w", e.Type(), sourcePath, targetPath, err)
+			if err := e.mixedLeafRouterMoveToStage(ctx, mixedRoot, sourcePath, portName, entry.Name, &stepResults); err != nil {
+				return NodeExecutionOutput{}, err
+			}
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir {
+				continue
+			}
+			if mixedLeafRouterIsInternalStagingDir(strings.TrimSpace(entry.Name)) {
+				continue
+			}
+			shouldAbsorb, err := e.mixedLeafRouterShouldAbsorbSubdir(ctx, mixedRoot, entry)
+			if err != nil {
+				return NodeExecutionOutput{}, fmt.Errorf("%s.Execute: inspect subdir %q: %w", e.Type(), joinWorkflowPath(mixedRoot, entry.Name), err)
+			}
+			if !shouldAbsorb {
+				continue
+			}
+			if err := e.mixedLeafRouterAbsorbSubdir(ctx, mixedRoot, entry.Name, &stepResults); err != nil {
+				return NodeExecutionOutput{}, err
 			}
 		}
 
@@ -155,6 +177,7 @@ func (e *mixedLeafRouterNodeExecutor) Execute(ctx context.Context, input NodeExe
 			}
 		}
 	}
+	outputs["step_results"] = TypedValue{Type: PortTypeProcessingStepResultList, Value: stepResults}
 
 	return NodeExecutionOutput{Outputs: outputs, Status: ExecutionSuccess}, nil
 }
@@ -164,6 +187,32 @@ func (e *mixedLeafRouterNodeExecutor) Resume(_ context.Context, _ NodeExecutionI
 }
 
 func (e *mixedLeafRouterNodeExecutor) Rollback(ctx context.Context, input NodeRollbackInput) error {
+	stepResults, err := mixedLeafRouterCollectRollbackStepResults(input)
+	if err != nil {
+		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
+	}
+	for i := len(stepResults) - 1; i >= 0; i-- {
+		step := stepResults[i]
+		from := strings.TrimSpace(step.TargetPath)
+		to := strings.TrimSpace(step.SourcePath)
+		if from == "" || to == "" {
+			continue
+		}
+		exists, err := e.fs.Exists(ctx, from)
+		if err != nil {
+			return fmt.Errorf("check rollback source %q: %w", from, err)
+		}
+		if !exists {
+			continue
+		}
+		if err := e.fs.MkdirAll(ctx, filepath.Dir(to), 0o755); err != nil {
+			return fmt.Errorf("mkdir rollback target parent %q: %w", filepath.Dir(to), err)
+		}
+		if err := e.fs.MoveFile(ctx, from, to); err != nil {
+			return fmt.Errorf("move file back %q to %q: %w", from, to, err)
+		}
+	}
+
 	roots, err := mixedLeafRouterCollectRollbackRoots(input)
 	if err != nil {
 		return fmt.Errorf("%s.Rollback: %w", e.Type(), err)
@@ -209,6 +258,7 @@ func mixedLeafRouterEmptyOutputs() map[string]TypedValue {
 		mixedLeafRouterVideoPort:       {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
 		mixedLeafRouterPhotoPort:       {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
 		mixedLeafRouterUnsupportedPort: {Type: PortTypeProcessingItemList, Value: []ProcessingItem{}},
+		"step_results":                 {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{}},
 	}
 }
 
@@ -318,4 +368,184 @@ func mixedLeafRouterCollectRollbackRoots(input NodeRollbackInput) ([]string, err
 		ordered = append(ordered, root)
 	}
 	return ordered, nil
+}
+
+func mixedLeafRouterCollectRollbackStepResults(input NodeRollbackInput) ([]ProcessingStepResult, error) {
+	steps := make([]ProcessingStepResult, 0)
+	collect := func(raw string, source string) error {
+		if strings.TrimSpace(raw) == "" {
+			return nil
+		}
+		typedOutputs, typed, err := parseTypedNodeOutputs(raw)
+		if err != nil {
+			return fmt.Errorf("parse %s output json: %w", source, err)
+		}
+		if !typed {
+			return nil
+		}
+		stepValue, ok := typedOutputs["step_results"]
+		if !ok {
+			return nil
+		}
+		steps = append(steps, processingStepResultsFromAny(stepValue.Value)...)
+		return nil
+	}
+
+	if input.NodeRun != nil {
+		if err := collect(input.NodeRun.OutputJSON, "node run"); err != nil {
+			return nil, err
+		}
+	}
+	for _, snapshot := range input.Snapshots {
+		if snapshot == nil || snapshot.Kind != "post" {
+			continue
+		}
+		if err := collect(snapshot.OutputJSON, fmt.Sprintf("snapshot %q", snapshot.ID)); err != nil {
+			return nil, err
+		}
+	}
+	return steps, nil
+}
+
+func (e *mixedLeafRouterNodeExecutor) mixedLeafRouterMoveToStage(ctx context.Context, mixedRoot, sourcePath, portName, preferredName string, stepResults *[]ProcessingStepResult) error {
+	stagePath := mixedLeafRouterStagePath(mixedRoot, portName)
+	if err := e.fs.MkdirAll(ctx, stagePath, 0o755); err != nil {
+		return fmt.Errorf("%s.Execute: create staging dir %q: %w", e.Type(), stagePath, err)
+	}
+	targetPath, err := e.mixedLeafRouterResolveUniqueTargetPath(ctx, stagePath, preferredName)
+	if err != nil {
+		return fmt.Errorf("%s.Execute: resolve stage target under %q: %w", e.Type(), stagePath, err)
+	}
+	if err := e.fs.MoveFile(ctx, sourcePath, targetPath); err != nil {
+		return fmt.Errorf("%s.Execute: move file %q to %q: %w", e.Type(), sourcePath, targetPath, err)
+	}
+	*stepResults = append(*stepResults, ProcessingStepResult{
+		SourcePath: sourcePath,
+		TargetPath: targetPath,
+		NodeType:   e.Type(),
+		Status:     "moved",
+	})
+	return nil
+}
+
+func (e *mixedLeafRouterNodeExecutor) mixedLeafRouterResolveUniqueTargetPath(ctx context.Context, stagePath, preferredName string) (string, error) {
+	baseName := strings.TrimSpace(preferredName)
+	if baseName == "" {
+		baseName = "unknown.bin"
+	}
+	ext := filepath.Ext(baseName)
+	stem := strings.TrimSuffix(baseName, ext)
+	candidate := joinWorkflowPath(stagePath, baseName)
+	exists, err := e.fs.Exists(ctx, candidate)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return candidate, nil
+	}
+	for index := 1; index < 10_000; index++ {
+		nextName := fmt.Sprintf("%s-%d%s", stem, index, ext)
+		candidate = joinWorkflowPath(stagePath, nextName)
+		exists, err = e.fs.Exists(ctx, candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("cannot resolve unique target for %q", baseName)
+}
+
+func (e *mixedLeafRouterNodeExecutor) mixedLeafRouterShouldAbsorbSubdir(ctx context.Context, mixedRoot string, entry fs.DirEntry) (bool, error) {
+	subdirName := strings.TrimSpace(entry.Name)
+	subdirPath := joinWorkflowPath(mixedRoot, subdirName)
+	flatFiles, hasBusinessSubdir, hasInternalStagingSubdir, err := e.mixedLeafRouterClassifySubdir(ctx, subdirPath)
+	if err != nil {
+		return false, err
+	}
+	if hasBusinessSubdir || len(flatFiles) == 0 {
+		return false, nil
+	}
+
+	hasUnsupported := false
+	for _, filePath := range flatFiles {
+		portName := mixedLeafRouterClassifyPort(filepath.Base(filePath))
+		if portName == mixedLeafRouterVideoPort {
+			return false, nil
+		}
+		if portName == mixedLeafRouterUnsupportedPort {
+			hasUnsupported = true
+		}
+	}
+
+	lowerName := strings.ToLower(subdirName)
+	for _, keyword := range mixedLeafRouterPromoKeywords {
+		if strings.Contains(lowerName, keyword) {
+			return true, nil
+		}
+	}
+
+	return hasUnsupported || hasInternalStagingSubdir, nil
+}
+
+func (e *mixedLeafRouterNodeExecutor) mixedLeafRouterClassifySubdir(ctx context.Context, subdirPath string) ([]string, bool, bool, error) {
+	entries, err := e.fs.ReadDir(ctx, subdirPath)
+	if err != nil {
+		return nil, false, false, err
+	}
+
+	files := make([]string, 0)
+	hasBusinessSubdir := false
+	hasInternalStagingSubdir := false
+	for _, entry := range entries {
+		fullPath := joinWorkflowPath(subdirPath, entry.Name)
+		if !entry.IsDir {
+			files = append(files, fullPath)
+			continue
+		}
+		if !mixedLeafRouterIsInternalStagingDir(strings.TrimSpace(entry.Name)) {
+			hasBusinessSubdir = true
+			continue
+		}
+		hasInternalStagingSubdir = true
+		nestedFiles, _, nestedInternal, err := e.mixedLeafRouterClassifySubdir(ctx, fullPath)
+		if err != nil {
+			return nil, false, false, err
+		}
+		files = append(files, nestedFiles...)
+		if nestedInternal {
+			hasInternalStagingSubdir = true
+		}
+	}
+
+	sort.Strings(files)
+	return files, hasBusinessSubdir, hasInternalStagingSubdir, nil
+}
+
+func (e *mixedLeafRouterNodeExecutor) mixedLeafRouterAbsorbSubdir(ctx context.Context, mixedRoot, subdirName string, stepResults *[]ProcessingStepResult) error {
+	subdirPath := joinWorkflowPath(mixedRoot, subdirName)
+	paths, hasBusinessSubdir, _, err := e.mixedLeafRouterClassifySubdir(ctx, subdirPath)
+	if err != nil {
+		return fmt.Errorf("%s.Execute: scan absorbable subdir %q: %w", e.Type(), subdirPath, err)
+	}
+	if hasBusinessSubdir {
+		return nil
+	}
+	for _, sourcePath := range paths {
+		rel, err := filepath.Rel(subdirPath, sourcePath)
+		if err != nil {
+			return fmt.Errorf("%s.Execute: build absorb relative path %q -> %q: %w", e.Type(), subdirPath, sourcePath, err)
+		}
+		rel = normalizeWorkflowPath(rel)
+		if strings.HasPrefix(rel, "..") {
+			continue
+		}
+		portName := mixedLeafRouterClassifyPort(filepath.Base(sourcePath))
+		preferredName := fmt.Sprintf("%s__%s", subdirName, strings.ReplaceAll(rel, "/", "__"))
+		if err := e.mixedLeafRouterMoveToStage(ctx, mixedRoot, sourcePath, portName, preferredName, stepResults); err != nil {
+			return err
+		}
+	}
+	return nil
 }

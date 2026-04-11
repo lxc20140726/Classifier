@@ -27,6 +27,9 @@ func TestFolderSplitterExecutorMixedSplitFirstLevel(t *testing.T) {
 				Path:     "/root/mixed",
 				Name:     "mixed",
 				Category: "mixed",
+				Files: []FileEntry{
+					{Name: "movie.mp4", Ext: ".mp4", SizeBytes: 10},
+				},
 				Subtree: []ClassifiedEntry{
 					{
 						FolderID: "folder-a",
@@ -64,21 +67,196 @@ func TestFolderSplitterExecutorMixedSplitFirstLevel(t *testing.T) {
 	if !ok {
 		t.Fatalf("output type = %T, want []ProcessingItem", out.Outputs["items"].Value)
 	}
+	if len(items) != 3 {
+		t.Fatalf("len(items) = %d, want 3", len(items))
+	}
+	if items[0].SourcePath != "/root/mixed" || items[0].CurrentPath != "/root/mixed" || items[0].Category != "mixed" {
+		t.Fatalf("items[0] = %#v, want root mixed", items[0])
+	}
+	if items[0].RootPath != "/root/mixed" || items[0].RelativePath != "" || items[0].SourceKind != ProcessingItemSourceKindDirectory {
+		t.Fatalf("items[0] root/relative/source_kind = %q/%q/%q, want /root/mixed/empty/directory", items[0].RootPath, items[0].RelativePath, items[0].SourceKind)
+	}
+	if len(items[0].Files) != 1 || items[0].Files[0].Name != "movie.mp4" {
+		t.Fatalf("items[0].Files = %#v, want root file movie.mp4", items[0].Files)
+	}
+	if items[1].SourcePath != "/root/mixed/child-a" || items[1].CurrentPath != "/root/mixed/child-a" || items[1].Category != "video" {
+		t.Fatalf("items[1] = %#v, want child-a video", items[1])
+	}
+	if items[1].RootPath != "/root/mixed" || items[1].RelativePath != "child-a" || items[1].SourceKind != ProcessingItemSourceKindDirectory {
+		t.Fatalf("items[1] root/relative/source_kind = %q/%q/%q, want /root/mixed/child-a/directory", items[1].RootPath, items[1].RelativePath, items[1].SourceKind)
+	}
+	if items[2].SourcePath != "/root/mixed/child-b" || items[2].CurrentPath != "/root/mixed/child-b" || items[2].Category != "photo" {
+		t.Fatalf("items[2] = %#v, want child-b photo", items[2])
+	}
+	if items[2].RootPath != "/root/mixed" || items[2].RelativePath != "child-b" || items[2].SourceKind != ProcessingItemSourceKindDirectory {
+		t.Fatalf("items[2] root/relative/source_kind = %q/%q/%q, want /root/mixed/child-b/directory", items[2].RootPath, items[2].RelativePath, items[2].SourceKind)
+	}
+}
+
+func TestFolderSplitterExecutorMixedSkipsPromoSubdirs(t *testing.T) {
+	t.Parallel()
+
+	executor := newFolderSplitterExecutor()
+	out, err := executor.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{
+			Config: map[string]any{"split_mixed": true, "split_depth": 1},
+		},
+		Inputs: testInputs(map[string]any{
+			"entry": ClassifiedEntry{
+				FolderID: "folder-root",
+				Path:     "/root/mixed",
+				Name:     "mixed",
+				Category: "mixed",
+				Files: []FileEntry{
+					{Name: "movie.mp4", Ext: ".mp4", SizeBytes: 10},
+				},
+				Subtree: []ClassifiedEntry{
+					{
+						FolderID: "folder-business",
+						Path:     "/root/mixed/business",
+						Name:     "business",
+						Category: "video",
+						Files: []FileEntry{
+							{Name: "episode.mp4", Ext: ".mp4"},
+						},
+					},
+					{
+						FolderID: "folder-promo",
+						Path:     "/root/mixed/2048",
+						Name:     "2048",
+						Category: "other",
+						Files: []FileEntry{
+							{Name: "poster.jpg", Ext: ".jpg"},
+							{Name: "readme.txt", Ext: ".txt"},
+						},
+					},
+				},
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	items, ok := out.Outputs["items"].Value.([]ProcessingItem)
+	if !ok {
+		t.Fatalf("output type = %T, want []ProcessingItem", out.Outputs["items"].Value)
+	}
 	if len(items) != 2 {
 		t.Fatalf("len(items) = %d, want 2", len(items))
 	}
-	if items[0].SourcePath != "/root/mixed/child-a" || items[0].CurrentPath != "/root/mixed/child-a" || items[0].Category != "video" {
-		t.Fatalf("items[0] = %#v, want child-a video", items[0])
+	if items[0].SourcePath != "/root/mixed" || items[0].Category != "mixed" {
+		t.Fatalf("items[0] = %#v, want root mixed", items[0])
 	}
-	if items[0].RootPath != "/root/mixed" || items[0].RelativePath != "child-a" || items[0].SourceKind != ProcessingItemSourceKindDirectory {
-		t.Fatalf("items[0] root/relative/source_kind = %q/%q/%q, want /root/mixed/child-a/directory", items[0].RootPath, items[0].RelativePath, items[0].SourceKind)
+	if items[1].SourcePath != "/root/mixed/business" || items[1].Category != "video" {
+		t.Fatalf("items[1] = %#v, want business video", items[1])
 	}
-	if items[1].SourcePath != "/root/mixed/child-b" || items[1].CurrentPath != "/root/mixed/child-b" || items[1].Category != "photo" {
-		t.Fatalf("items[1] = %#v, want child-b photo", items[1])
+}
+
+func TestProcessingChainMixedRootWithPromoSubdir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	mixedRoot := filepath.Join(root, "mixed")
+	promoDir := filepath.Join(mixedRoot, "2048")
+	businessDir := filepath.Join(mixedRoot, "series")
+	internalPromoDir := filepath.Join(promoDir, "__photo")
+	mustMkdirAll(t, mixedRoot)
+	mustMkdirAll(t, promoDir)
+	mustMkdirAll(t, businessDir)
+	mustMkdirAll(t, internalPromoDir)
+
+	writeTestFile(t, filepath.Join(mixedRoot, "main.mp4"))
+	writeTestFile(t, filepath.Join(promoDir, "poster.jpg"))
+	writeTestFile(t, filepath.Join(promoDir, "ad.txt"))
+	writeTestFile(t, filepath.Join(internalPromoDir, "nested.png"))
+	writeTestFile(t, filepath.Join(businessDir, "ep01.mp4"))
+
+	entry := ClassifiedEntry{
+		Path:     normalizeWorkflowPath(mixedRoot),
+		Name:     "mixed",
+		Category: "mixed",
+		Files: []FileEntry{
+			{Name: "main.mp4", Ext: ".mp4"},
+		},
+		Subtree: []ClassifiedEntry{
+			{
+				Path:     normalizeWorkflowPath(promoDir),
+				Name:     "2048",
+				Category: "mixed",
+				Files: []FileEntry{
+					{Name: "poster.jpg", Ext: ".jpg"},
+					{Name: "ad.txt", Ext: ".txt"},
+				},
+				Subtree: []ClassifiedEntry{
+					{
+						Path:     normalizeWorkflowPath(internalPromoDir),
+						Name:     "__photo",
+						Category: "photo",
+						Files: []FileEntry{
+							{Name: "nested.png", Ext: ".png"},
+						},
+					},
+				},
+			},
+			{
+				Path:     normalizeWorkflowPath(businessDir),
+				Name:     "series",
+				Category: "video",
+				Files: []FileEntry{
+					{Name: "ep01.mp4", Ext: ".mp4"},
+				},
+			},
+		},
 	}
-	if items[1].RootPath != "/root/mixed" || items[1].RelativePath != "child-b" || items[1].SourceKind != ProcessingItemSourceKindDirectory {
-		t.Fatalf("items[1] root/relative/source_kind = %q/%q/%q, want /root/mixed/child-b/directory", items[1].RootPath, items[1].RelativePath, items[1].SourceKind)
+
+	splitter := newFolderSplitterExecutor()
+	splitOut, err := splitter.Execute(context.Background(), NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{
+			Config: map[string]any{"split_mixed": true, "split_depth": 1},
+		},
+		Inputs: testInputs(map[string]any{"entry": entry}),
+	})
+	if err != nil {
+		t.Fatalf("splitter Execute() error = %v", err)
 	}
+
+	splitItems, ok := splitOut.Outputs["items"].Value.([]ProcessingItem)
+	if !ok {
+		t.Fatalf("split output type = %T, want []ProcessingItem", splitOut.Outputs["items"].Value)
+	}
+	if len(splitItems) != 2 {
+		t.Fatalf("len(split items) = %d, want 2", len(splitItems))
+	}
+
+	router := newCategoryRouterExecutor()
+	routeOut, err := router.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{"items": splitItems}),
+	})
+	if err != nil {
+		t.Fatalf("category router Execute() error = %v", err)
+	}
+	mixedItems := routeOut.Outputs["mixed_leaf"].Value.([]ProcessingItem)
+	if len(mixedItems) != 1 {
+		t.Fatalf("mixed_leaf len = %d, want 1", len(mixedItems))
+	}
+
+	mixedRouter := newMixedLeafRouterExecutor(fs.NewOSAdapter())
+	mixedOut, err := mixedRouter.Execute(context.Background(), NodeExecutionInput{
+		Inputs: testInputs(map[string]any{"items": mixedItems}),
+	})
+	if err != nil {
+		t.Fatalf("mixed router Execute() error = %v", err)
+	}
+
+	assertPortCount(t, mixedOut.Outputs, mixedLeafRouterVideoPort, 1)
+	assertPortCount(t, mixedOut.Outputs, mixedLeafRouterPhotoPort, 1)
+	assertPortCount(t, mixedOut.Outputs, mixedLeafRouterUnsupportedPort, 1)
+
+	assertDirFilesEqual(t, filepath.Join(mixedRoot, "__video"), []string{"main.mp4"})
+	assertDirFilesEqual(t, filepath.Join(mixedRoot, "__photo"), []string{"2048__poster.jpg", "2048____photo__nested.png"})
+	assertDirFilesEqual(t, filepath.Join(mixedRoot, "__unsupported"), []string{"2048__ad.txt"})
+	assertDirFilesEqual(t, businessDir, []string{"ep01.mp4"})
 }
 
 func TestCategoryRouterExecutorPortPlacement(t *testing.T) {
@@ -1054,12 +1232,12 @@ func TestThumbnailNodeExecutorPersistsCoverImagePath(t *testing.T) {
 		return nil, nil
 	}
 
-		_, err := executor.Execute(ctx, NodeExecutionInput{
-			Node: repository.WorkflowGraphNode{Config: map[string]any{"output_dir": "/out"}},
-			Inputs: testInputs(map[string]any{
-				"item": ProcessingItem{FolderID: folder.ID, SourcePath: "/source/album", CurrentPath: "/source/album", FolderName: "album", Category: "video", SourceKind: ProcessingItemSourceKindDirectory},
-			}),
-		})
+	_, err := executor.Execute(ctx, NodeExecutionInput{
+		Node: repository.WorkflowGraphNode{Config: map[string]any{"output_dir": "/out"}},
+		Inputs: testInputs(map[string]any{
+			"item": ProcessingItem{FolderID: folder.ID, SourcePath: "/source/album", CurrentPath: "/source/album", FolderName: "album", Category: "video", SourceKind: ProcessingItemSourceKindDirectory},
+		}),
+	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -1107,9 +1285,9 @@ func TestThumbnailNodeExecutorRollbackRemovesFilesAndClearsCover(t *testing.T) {
 			ID:   "snapshot-thumbnail-rb-1",
 			Kind: "post",
 			OutputJSON: mustJSONMarshal(t, mustTypedOutputsMap(t, map[string]TypedValue{
-		"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
-		"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: thumbPath, NodeType: "thumbnail-node", Status: "succeeded"}}},
-	})),
+				"items":        {Type: PortTypeProcessingItemList, Value: []ProcessingItem{{FolderID: folder.ID, SourcePath: "/source/album"}}},
+				"step_results": {Type: PortTypeProcessingStepResultList, Value: []ProcessingStepResult{{SourcePath: "/source/album", TargetPath: thumbPath, NodeType: "thumbnail-node", Status: "succeeded"}}},
+			})),
 		}},
 	})
 	if err != nil {
@@ -1224,6 +1402,69 @@ func TestEngineV2_AC_ROLL3_CompressNodeRollbackTypedFormat(t *testing.T) {
 
 	if pathExists(t, archivePath) {
 		t.Fatalf("archive %q should be deleted after typed-format rollback", archivePath)
+	}
+}
+
+func TestEngineV2_AC_COMPAT2_ThumbnailNodeRollbackWrappedRawOutputs(t *testing.T) {
+	t.Parallel()
+
+	database := newServiceTestDB(t)
+	folderRepo := repository.NewFolderRepository(database)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	thumbPath := filepath.Join(root, "thumbnails", "album.jpg")
+	mustMkdirAll(t, filepath.Dir(thumbPath))
+	if err := os.WriteFile(thumbPath, []byte("thumb-raw"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", thumbPath, err)
+	}
+
+	folder := &repository.Folder{
+		ID: "folder-thumbnail-rb-wrapped-raw", Path: "/source/album", Name: "album",
+		Category: "video", CategorySource: "auto", Status: "pending", CoverImagePath: thumbPath,
+	}
+	if err := folderRepo.Upsert(ctx, folder); err != nil {
+		t.Fatalf("folderRepo.Upsert() error = %v", err)
+	}
+
+	executor := newThumbnailNodeExecutor(fs.NewOSAdapter(), folderRepo)
+	err := executor.Rollback(ctx, NodeRollbackInput{
+		NodeRun: &repository.NodeRun{ID: "node-run-thumbnail-rb-wrapped-raw"},
+		Folder:  folder,
+		Snapshots: []*repository.NodeSnapshot{{
+			ID:   "snap-thumbnail-rb-wrapped-raw",
+			Kind: "post",
+			OutputJSON: mustJSONMarshal(t, map[string]any{
+				"outputs": map[string]any{
+					"items": []ProcessingItem{{
+						FolderID:    folder.ID,
+						SourcePath:  "/source/album",
+						CurrentPath: "/source/album",
+					}},
+					"step_results": []ProcessingStepResult{{
+						SourcePath: "/source/album",
+						TargetPath: thumbPath,
+						NodeType:   "thumbnail-node",
+						Status:     "succeeded",
+					}},
+				},
+			}),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	if pathExists(t, thumbPath) {
+		t.Fatalf("thumbnail %q should be deleted after wrapped-raw rollback", thumbPath)
+	}
+
+	updated, err := folderRepo.GetByID(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("folderRepo.GetByID() error = %v", err)
+	}
+	if updated.CoverImagePath != "" {
+		t.Fatalf("cover_image_path = %q, want empty after rollback", updated.CoverImagePath)
 	}
 }
 

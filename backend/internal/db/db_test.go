@@ -122,6 +122,41 @@ func TestOpenAddsAuditReferenceColumns(t *testing.T) {
 	}
 }
 
+func TestOpenRemainsIdempotentWhenFoldersContainDuplicatePaths(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "classifier_duplicate_paths.db")
+	database, err := Open(dsn)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	_, err = database.Exec(`
+INSERT INTO folders (
+	id, path, name, category, category_source, status,
+	image_count, video_count, total_files, total_size, marked_for_move,
+	scanned_at, updated_at, deleted_at, delete_staging_path,
+	source_dir, relative_path, cover_image_path, other_file_count, has_other_files
+) VALUES
+	('folder-1', '/same/path', 'folder-1', 'other', 'auto', 'pending', 0, 0, 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, '', '', '', 0, 0),
+	('folder-2', '/same/path', 'folder-2', 'other', 'auto', 'pending', 0, 0, 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, '', '', '', 0, 0)
+`)
+	if err != nil {
+		database.Close()
+		t.Fatalf("insert duplicate folders error = %v", err)
+	}
+
+	if err := database.Close(); err != nil {
+		t.Fatalf("database.Close() error = %v", err)
+	}
+
+	database, err = Open(dsn)
+	if err != nil {
+		t.Fatalf("Open() on migrated db with duplicate folder paths error = %v", err)
+	}
+	defer database.Close()
+}
+
 func sqliteObjectExists(t *testing.T, db *sql.DB, objectType, name string) bool {
 	t.Helper()
 

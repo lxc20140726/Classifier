@@ -1183,13 +1183,21 @@ func (s *WorkflowRunnerService) writeNodeExecutionAudit(
 		return fmt.Errorf("workflowRunner.writeNodeExecutionAudit marshal detail: %w", err)
 	}
 
+	inferredFolderID, inferredFolderPath := inferFolderRefFromAuditOutputs(input.Inputs, outputs)
+	if strings.TrimSpace(inferredFolderID) == "" {
+		inferredFolderID = folderIDForAudit(input.Folder, currentFolder)
+	}
+	if strings.TrimSpace(inferredFolderPath) != "" && strings.TrimSpace(folderPath) == "" {
+		folderPath = inferredFolderPath
+	}
+
 	auditLog := &repository.AuditLog{
 		JobID:         workflowJobIDFromInput(input.WorkflowRun),
 		WorkflowRunID: workflowRunIDFromInput(input.WorkflowRun),
 		NodeRunID:     nodeRunIDFromInput(input.NodeRun),
 		NodeID:        strings.TrimSpace(input.Node.ID),
 		NodeType:      strings.TrimSpace(input.Node.Type),
-		FolderID:      folderIDForAudit(input.Folder, currentFolder),
+		FolderID:      inferredFolderID,
 		FolderPath:    folderPath,
 		Action:        action,
 		Result:        result,
@@ -1216,6 +1224,9 @@ func (s *WorkflowRunnerService) writeNodeRollbackAudit(ctx context.Context, run 
 		return nil
 	}
 
+	folderID := folderIDForAudit(folder, nil)
+	folderPath := folderPathForAudit(folder, nil)
+
 	detailJSON, err := json.Marshal(map[string]any{
 		"workflow_run_id": workflowRunIDFromInput(run),
 		"node_run_id":     nodeRun.ID,
@@ -1233,8 +1244,8 @@ func (s *WorkflowRunnerService) writeNodeRollbackAudit(ctx context.Context, run 
 		NodeRunID:     nodeRun.ID,
 		NodeID:        strings.TrimSpace(nodeRun.NodeID),
 		NodeType:      strings.TrimSpace(nodeRun.NodeType),
-		FolderID:      folderIDForAudit(folder, nil),
-		FolderPath:    folderPathForAudit(folder, nil),
+		FolderID:      folderID,
+		FolderPath:    folderPath,
 		Action:        "workflow." + nodeRun.NodeType + ".rollback",
 		Result:        "success",
 		Detail:        detailJSON,
@@ -1314,6 +1325,102 @@ func folderPathForAudit(primary *repository.Folder, fallback *repository.Folder)
 	}
 	if fallback != nil {
 		return strings.TrimSpace(fallback.Path)
+	}
+
+	return ""
+}
+
+func inferFolderRefFromAuditOutputs(inputs map[string]*TypedValue, outputs map[string]TypedValue) (string, string) {
+	folderID, folderPath := inferFolderRefFromTypedValueMap(outputs)
+	if strings.TrimSpace(folderID) != "" || strings.TrimSpace(folderPath) != "" {
+		return folderID, folderPath
+	}
+
+	return inferFolderRefFromTypedValuePointerMap(inputs)
+}
+
+func inferFolderRefFromTypedValuePointerMap(values map[string]*TypedValue) (string, string) {
+	if len(values) == 0 {
+		return "", ""
+	}
+
+	converted := make(map[string]TypedValue, len(values))
+	for key, value := range values {
+		if value == nil {
+			continue
+		}
+		converted[key] = *value
+	}
+
+	return inferFolderRefFromTypedValueMap(converted)
+}
+
+func inferFolderRefFromTypedValueMap(values map[string]TypedValue) (string, string) {
+	if len(values) == 0 {
+		return "", ""
+	}
+
+	for _, value := range values {
+		if entries, err := parseClassifiedEntryList(value.Value); err == nil && len(entries) > 0 {
+			if folderID, folderPath := inferFolderRefFromClassifiedEntries(entries); folderID != "" || folderPath != "" {
+				return folderID, folderPath
+			}
+		}
+
+		if items, ok := categoryRouterToItems(value.Value); ok && len(items) > 0 {
+			if folderID, folderPath := inferFolderRefFromProcessingItems(items); folderID != "" || folderPath != "" {
+				return folderID, folderPath
+			}
+		}
+
+		if results := processingStepResultsFromAny(value.Value); len(results) > 0 {
+			if folderPath := inferFolderPathFromStepResults(results); folderPath != "" {
+				return "", folderPath
+			}
+		}
+	}
+
+	return "", ""
+}
+
+func inferFolderRefFromClassifiedEntries(entries []ClassifiedEntry) (string, string) {
+	for _, entry := range entries {
+		folderID := strings.TrimSpace(entry.FolderID)
+		folderPath := strings.TrimSpace(entry.Path)
+		if folderID != "" || folderPath != "" {
+			return folderID, folderPath
+		}
+		if childID, childPath := inferFolderRefFromClassifiedEntries(entry.Subtree); childID != "" || childPath != "" {
+			return childID, childPath
+		}
+	}
+
+	return "", ""
+}
+
+func inferFolderRefFromProcessingItems(items []ProcessingItem) (string, string) {
+	for _, item := range items {
+		folderID := strings.TrimSpace(item.FolderID)
+		folderPath := processingItemCurrentPath(item)
+		if folderPath == "" {
+			folderPath = strings.TrimSpace(item.SourcePath)
+		}
+		if folderID != "" || folderPath != "" {
+			return folderID, folderPath
+		}
+	}
+
+	return "", ""
+}
+
+func inferFolderPathFromStepResults(results []ProcessingStepResult) string {
+	for _, result := range results {
+		if sourcePath := strings.TrimSpace(result.SourcePath); sourcePath != "" {
+			return sourcePath
+		}
+		if targetPath := strings.TrimSpace(result.TargetPath); targetPath != "" {
+			return targetPath
+		}
 	}
 
 	return ""
@@ -2060,6 +2167,75 @@ func typedValueMapFromJSON(values map[string]TypedValueJSON, registry *TypeRegis
 	return out, nil
 }
 
+func inferTypedValueFromRaw(key string, raw json.RawMessage, registry *TypeRegistry) (TypedValue, bool, error) {
+	typeCandidates := inferPortTypesForOutputKey(key)
+	if len(typeCandidates) == 0 {
+		typeCandidates = []PortType{
+			PortTypeProcessingItemList,
+			PortTypeProcessingStepResultList,
+			PortTypeClassifiedEntryList,
+			PortTypeFolderTreeList,
+			PortTypeClassificationSignalList,
+			PortTypeStringList,
+			PortTypeString,
+			PortTypeBoolean,
+			PortTypePath,
+			PortTypeJSON,
+		}
+	}
+
+	for _, portType := range typeCandidates {
+		decoded, err := registry.Unmarshal(TypedValueJSON{Type: portType, Value: raw})
+		if err == nil {
+			return decoded, true, nil
+		}
+	}
+
+	return TypedValue{}, false, nil
+}
+
+func inferPortTypesForOutputKey(key string) []PortType {
+	switch key {
+	case "items", "archive_items", "video", "photo", "manga", "mixed", "other", "mixed_leaf", "unsupported":
+		return []PortType{PortTypeProcessingItemList}
+	case "step_results":
+		return []PortType{PortTypeProcessingStepResultList}
+	case "entry":
+		return []PortType{PortTypeJSON, PortTypeClassifiedEntryList}
+	default:
+		return nil
+	}
+}
+
+func parseTypedValueMapWithInference(values map[string]json.RawMessage, registry *TypeRegistry) (map[string]TypedValue, bool, error) {
+	out := make(map[string]TypedValue, len(values))
+	inferredAny := false
+
+	for key, raw := range values {
+		var encoded TypedValueJSON
+		if err := json.Unmarshal(raw, &encoded); err == nil && encoded.Type != "" {
+			decoded, decodeErr := registry.Unmarshal(encoded)
+			if decodeErr != nil {
+				return nil, false, fmt.Errorf("decode output %q: %w", key, decodeErr)
+			}
+			out[key] = decoded
+			continue
+		}
+
+		decoded, inferred, inferErr := inferTypedValueFromRaw(key, raw, registry)
+		if inferErr != nil {
+			return nil, false, fmt.Errorf("infer output %q: %w", key, inferErr)
+		}
+		if !inferred {
+			return nil, false, fmt.Errorf("decode output %q: unsupported legacy output shape", key)
+		}
+		out[key] = decoded
+		inferredAny = true
+	}
+
+	return out, inferredAny, nil
+}
+
 func (s *WorkflowRunnerService) marshalTypedValuesJSON(values map[string]TypedValue) (string, error) {
 	encoded, err := typedValueMapToJSON(values, s.typeRegistry)
 	if err != nil {
@@ -2089,14 +2265,15 @@ func (s *WorkflowRunnerService) parseNodeOutputsForSchema(rawOutput string, _ No
 
 func parseTypedNodeOutputs(rawOutput string) (map[string]TypedValue, bool, error) {
 	registry := NewTypeRegistry()
+	var lastDecodeErr error
 
 	var direct map[string]TypedValueJSON
 	if err := json.Unmarshal([]byte(rawOutput), &direct); err == nil && len(direct) > 0 {
 		decoded, decodeErr := typedValueMapFromJSON(direct, registry)
-		if decodeErr != nil {
-			return nil, false, decodeErr
+		if decodeErr == nil {
+			return decoded, true, nil
 		}
-		return decoded, true, nil
+		lastDecodeErr = decodeErr
 	}
 
 	var wrapped struct {
@@ -2104,10 +2281,40 @@ func parseTypedNodeOutputs(rawOutput string) (map[string]TypedValue, bool, error
 	}
 	if err := json.Unmarshal([]byte(rawOutput), &wrapped); err == nil && len(wrapped.Outputs) > 0 {
 		decoded, decodeErr := typedValueMapFromJSON(wrapped.Outputs, registry)
-		if decodeErr != nil {
+		if decodeErr == nil {
+			return decoded, true, nil
+		}
+		lastDecodeErr = decodeErr
+	}
+
+	var wrappedRaw struct {
+		Outputs map[string]json.RawMessage `json:"outputs"`
+	}
+	if err := json.Unmarshal([]byte(rawOutput), &wrappedRaw); err == nil && len(wrappedRaw.Outputs) > 0 {
+		decoded, inferred, decodeErr := parseTypedValueMapWithInference(wrappedRaw.Outputs, registry)
+		if decodeErr == nil {
+			return decoded, true, nil
+		}
+		if !inferred {
 			return nil, false, decodeErr
 		}
-		return decoded, true, nil
+	}
+
+	var directRaw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rawOutput), &directRaw); err == nil && len(directRaw) > 0 {
+		if _, hasWrappedOutputs := directRaw["outputs"]; !hasWrappedOutputs {
+			decoded, inferred, decodeErr := parseTypedValueMapWithInference(directRaw, registry)
+			if decodeErr == nil {
+				return decoded, true, nil
+			}
+			if !inferred {
+				return nil, false, decodeErr
+			}
+		}
+	}
+
+	if lastDecodeErr != nil {
+		return nil, false, lastDecodeErr
 	}
 
 	return nil, false, nil
@@ -2308,10 +2515,7 @@ func (e *extRatioClassifierNodeExecutor) Execute(_ context.Context, input NodeEx
 
 	signals := make([]ClassificationSignal, 0, len(trees))
 	for _, tree := range trees {
-		fileNames := make([]string, 0, len(tree.Files))
-		for _, file := range tree.Files {
-			fileNames = append(fileNames, file.Name)
-		}
+		fileNames := collectTreeFileNames(tree)
 
 		category := Classify(tree.Name, fileNames)
 		confidence := 0.85
@@ -2337,6 +2541,19 @@ func (e *extRatioClassifierNodeExecutor) Resume(_ context.Context, _ NodeExecuti
 
 func (e *extRatioClassifierNodeExecutor) Rollback(_ context.Context, _ NodeRollbackInput) error {
 	return nil
+}
+
+func collectTreeFileNames(tree FolderTree) []string {
+	fileNames := make([]string, 0, len(tree.Files))
+	for _, file := range tree.Files {
+		fileNames = append(fileNames, file.Name)
+	}
+
+	for _, subdir := range tree.Subdirs {
+		fileNames = append(fileNames, collectTreeFileNames(subdir)...)
+	}
+
+	return fileNames
 }
 
 func firstPresentTyped(inputs map[string]*TypedValue, keys ...string) (any, bool) {

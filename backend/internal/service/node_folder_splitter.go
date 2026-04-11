@@ -29,13 +29,13 @@ func (e *folderSplitterNodeExecutor) Type() string {
 func (e *folderSplitterNodeExecutor) Schema() NodeSchema {
 	return NodeSchema{
 		Type:        e.Type(),
-		Label:       "文件夹拆分器",
-		Description: "将分类条目转为处理项列表；支持递归拆分到叶子目录，确保后续处理流聚焦单个目录",
+		Label:       "\u6587\u4ef6\u5939\u62c6\u5206\u5668",
+		Description: "\u5c06\u5206\u7c7b\u6761\u76ee\u8f6c\u4e3a\u5904\u7406\u9879\u5217\u8868\u3002",
 		Inputs: []PortDef{
-			{Name: "entry", Type: PortTypeJSON, Description: "已分类条目", Required: true},
+			{Name: "entry", Type: PortTypeJSON, Description: "\u5df2\u5206\u7c7b\u6761\u76ee", Required: true},
 		},
 		Outputs: []PortDef{
-			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "拆分后的处理项列表"},
+			{Name: "items", Type: PortTypeProcessingItemList, RequiredOutput: true, Description: "\u62c6\u5206\u540e\u7684\u5904\u7406\u9879\u5217\u8868"},
 		},
 	}
 }
@@ -145,8 +145,17 @@ func folderSplitterCollectItems(entry ClassifiedEntry, rootPath string, depth in
 		return
 	}
 
+	isMixedRoot := strings.EqualFold(strings.TrimSpace(entry.Category), "mixed")
+	keepMixedRoot := isMixedRoot && folderSplitterHasRecognizedMediaFiles(entry.Files)
+	if keepMixedRoot {
+		*out = append(*out, folderSplitterBuildSelfItem(entry, rootPath))
+	}
+
 	for _, child := range entry.Subtree {
 		if !folderSplitterIsDirectChild(entry, child) {
+			continue
+		}
+		if keepMixedRoot && folderSplitterShouldAbsorbPromoChild(entry, child) {
 			continue
 		}
 		if splitWithSubdirs && len(child.Subtree) > 0 {
@@ -183,4 +192,119 @@ func folderSplitterIsDirectChild(entry ClassifiedEntry, child ClassifiedEntry) b
 	}
 
 	return false
+}
+
+func folderSplitterHasRecognizedMediaFiles(files []FileEntry) bool {
+	for _, file := range files {
+		ext := strings.ToLower(strings.TrimSpace(file.Ext))
+		if videoExtsSet[ext] || imageExtsSet[ext] {
+			return true
+		}
+	}
+	return false
+}
+
+var folderSplitterPromoKeywords = []string{
+	"promo",
+	"sample",
+	"ad",
+	"2048",
+	"\u5ba3\u4f20",
+}
+
+func folderSplitterShouldAbsorbPromoChild(parent ClassifiedEntry, child ClassifiedEntry) bool {
+	if !strings.EqualFold(strings.TrimSpace(parent.Category), "mixed") {
+		return false
+	}
+	if folderSplitterContainsBusinessMedia(child) {
+		return false
+	}
+
+	name := strings.ToLower(strings.TrimSpace(child.Name))
+	for _, keyword := range folderSplitterPromoKeywords {
+		if strings.Contains(name, keyword) {
+			return true
+		}
+	}
+
+	containsRealBusinessSubdir := false
+	for _, sub := range child.Subtree {
+		if !folderSplitterIsDirectChild(child, sub) {
+			continue
+		}
+		if mixedLeafRouterIsInternalStagingDir(strings.TrimSpace(sub.Name)) {
+			continue
+		}
+		containsRealBusinessSubdir = true
+		break
+	}
+	if containsRealBusinessSubdir {
+		return false
+	}
+
+	if folderSplitterHasUnsupportedFiles(child.Files) && !folderSplitterHasVideoFiles(child.Files) {
+		return true
+	}
+	if folderSplitterHasOnlyInternalStagingSubdirs(child) {
+		return true
+	}
+	childCategory := strings.ToLower(strings.TrimSpace(child.Category))
+	if (childCategory == "mixed" || childCategory == "other") && len(child.Files) > 0 && !folderSplitterHasVideoFiles(child.Files) && len(child.Subtree) == 0 {
+		return true
+	}
+
+	return false
+}
+
+func folderSplitterContainsBusinessMedia(entry ClassifiedEntry) bool {
+	category := strings.ToLower(strings.TrimSpace(entry.Category))
+	if category == "video" || category == "manga" {
+		return true
+	}
+	if folderSplitterHasVideoFiles(entry.Files) {
+		return true
+	}
+	for _, sub := range entry.Subtree {
+		if folderSplitterContainsBusinessMedia(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func folderSplitterHasVideoFiles(files []FileEntry) bool {
+	for _, file := range files {
+		ext := strings.ToLower(strings.TrimSpace(file.Ext))
+		if videoExtsSet[ext] {
+			return true
+		}
+	}
+	return false
+}
+
+func folderSplitterHasUnsupportedFiles(files []FileEntry) bool {
+	for _, file := range files {
+		ext := strings.ToLower(strings.TrimSpace(file.Ext))
+		if !videoExtsSet[ext] && !imageExtsSet[ext] {
+			return true
+		}
+	}
+	return false
+}
+
+func folderSplitterHasOnlyInternalStagingSubdirs(entry ClassifiedEntry) bool {
+	if len(entry.Subtree) == 0 {
+		return false
+	}
+	hasInternal := false
+	for _, sub := range entry.Subtree {
+		if !folderSplitterIsDirectChild(entry, sub) {
+			continue
+		}
+		if !mixedLeafRouterIsInternalStagingDir(strings.TrimSpace(sub.Name)) {
+			return false
+		}
+		hasInternal = true
+	}
+	return hasInternal
 }

@@ -15,23 +15,48 @@ CREATE TABLE IF NOT EXISTS folder_path_observations (
 INSERT INTO folder_path_observations (
     id, folder_id, path, source_dir, relative_path, is_current, first_seen_at, last_seen_at
 )
+WITH ranked_folders AS (
+    SELECT
+        id,
+        path,
+        source_dir,
+        relative_path,
+        scanned_at,
+        updated_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY path
+            ORDER BY COALESCE(updated_at, scanned_at, CURRENT_TIMESTAMP) DESC, id
+        ) AS path_rank,
+        CASE
+            WHEN TRIM(COALESCE(source_dir, '')) <> '' AND TRIM(COALESCE(relative_path, '')) <> '' THEN
+                ROW_NUMBER() OVER (
+                    PARTITION BY source_dir, relative_path
+                    ORDER BY COALESCE(updated_at, scanned_at, CURRENT_TIMESTAMP) DESC, id
+                )
+            ELSE 1
+        END AS source_relative_rank
+    FROM folders
+)
 SELECT
     'obs-' || id,
     id,
     path,
     source_dir,
     relative_path,
-    1,
+    CASE
+        WHEN path_rank = 1 AND source_relative_rank = 1 THEN 1
+        ELSE 0
+    END,
     COALESCE(scanned_at, CURRENT_TIMESTAMP),
     COALESCE(updated_at, scanned_at, CURRENT_TIMESTAMP)
-FROM folders
+FROM ranked_folders
 WHERE path IS NOT NULL
   AND TRIM(path) <> ''
   AND NOT EXISTS (
       SELECT 1
       FROM folder_path_observations o
-      WHERE o.folder_id = folders.id
-        AND o.path = folders.path
+      WHERE o.folder_id = ranked_folders.id
+        AND o.path = ranked_folders.path
   );
 
 CREATE INDEX IF NOT EXISTS idx_folder_path_observations_path ON folder_path_observations(path);

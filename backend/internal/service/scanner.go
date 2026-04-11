@@ -17,6 +17,7 @@ import (
 type ScanInput struct {
 	JobID      string
 	SourceDirs []string
+	ExcludeDirs []string
 }
 
 type ScanSnapshotRecorder interface {
@@ -74,8 +75,9 @@ func (s *ScannerService) Scan(ctx context.Context, input ScanInput) (int, error)
 	if len(sourceDirs) == 0 {
 		return 0, fmt.Errorf("scanner.Scan: source dirs are required")
 	}
+	excludeDirs := normalizeScanPaths(input.ExcludeDirs)
 
-	targets, err := s.discoverTargets(ctx, sourceDirs)
+	targets, err := s.discoverTargets(ctx, sourceDirs, excludeDirs)
 	if err != nil {
 		if input.JobID != "" && s.jobs != nil {
 			_ = s.jobs.UpdateStatus(ctx, input.JobID, "failed", err.Error())
@@ -106,7 +108,7 @@ func (s *ScannerService) Scan(ctx context.Context, input ScanInput) (int, error)
 	processed := 0
 	failed := 0
 	for index, target := range targets {
-		folder, scanErr := s.scanOne(ctx, input.JobID, target)
+		folder, scanErr := s.scanOne(ctx, input.JobID, target, excludeDirs)
 		if scanErr != nil {
 			failed++
 			if input.JobID != "" && s.jobs != nil {
@@ -169,7 +171,7 @@ func (s *ScannerService) Scan(ctx context.Context, input ScanInput) (int, error)
 	return processed, nil
 }
 
-func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []string) ([]scanTarget, error) {
+func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []string, excludeDirs []string) ([]scanTarget, error) {
 	targets := make([]scanTarget, 0)
 	for _, sourceDir := range sourceDirs {
 		entries, err := s.fs.ReadDir(ctx, sourceDir)
@@ -183,6 +185,9 @@ func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []strin
 			}
 
 			folderPath := filepath.Join(sourceDir, entry.Name)
+			if isExcludedScanPath(folderPath, excludeDirs) {
+				continue
+			}
 			isSuppressed, err := s.folders.IsSuppressedPath(ctx, folderPath)
 			if err != nil {
 				return nil, fmt.Errorf("scanner.discoverTargets check suppressed path %q: %w", folderPath, err)
@@ -203,8 +208,8 @@ func (s *ScannerService) discoverTargets(ctx context.Context, sourceDirs []strin
 	return targets, nil
 }
 
-func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanTarget) (*repository.Folder, error) {
-	metrics, err := s.collectFolderMetrics(ctx, target.folderPath)
+func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanTarget, excludeDirs []string) (*repository.Folder, error) {
+	metrics, err := s.collectFolderMetrics(ctx, target.folderPath, excludeDirs)
 	if err != nil {
 		s.writeScanAudit(ctx, jobID, "", target.folderPath, target.sourceDir, target.relativePath, "", "failed", "", err)
 		return nil, err
@@ -261,7 +266,7 @@ func (s *ScannerService) scanOne(ctx context.Context, jobID string, target scanT
 	return folder, nil
 }
 
-func (s *ScannerService) collectFolderMetrics(ctx context.Context, folderPath string) (scanMetrics, error) {
+func (s *ScannerService) collectFolderMetrics(ctx context.Context, folderPath string, excludeDirs []string) (scanMetrics, error) {
 	entries, err := s.fs.ReadDir(ctx, folderPath)
 	if err != nil {
 		return scanMetrics{}, fmt.Errorf("scanner.collectFolderMetrics read folder %q: %w", folderPath, err)
@@ -274,7 +279,10 @@ func (s *ScannerService) collectFolderMetrics(ctx context.Context, folderPath st
 	for _, entry := range entries {
 		childPath := filepath.Join(folderPath, entry.Name)
 		if entry.IsDir {
-			nested, nestedErr := s.collectFolderMetrics(ctx, childPath)
+			if isExcludedScanPath(childPath, excludeDirs) {
+				continue
+			}
+			nested, nestedErr := s.collectFolderMetrics(ctx, childPath, excludeDirs)
 			if nestedErr != nil {
 				return scanMetrics{}, nestedErr
 			}
@@ -399,10 +407,14 @@ func (s *ScannerService) publish(eventType string, payload any) {
 }
 
 func normalizeSourceDirs(sourceDirs []string) []string {
-	seen := make(map[string]struct{}, len(sourceDirs))
-	result := make([]string, 0, len(sourceDirs))
-	for _, item := range sourceDirs {
-		trimmed := strings.TrimSpace(item)
+	return normalizeScanPaths(sourceDirs)
+}
+
+func normalizeScanPaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, item := range paths {
+		trimmed := normalizeScanPath(item)
 		if trimmed == "" {
 			continue
 		}
@@ -413,4 +425,44 @@ func normalizeSourceDirs(sourceDirs []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
+}
+
+func normalizeScanPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+
+	return filepath.Clean(trimmed)
+}
+
+func isExcludedScanPath(path string, excludeDirs []string) bool {
+	normalizedPath := normalizePathForCompare(path)
+	if normalizedPath == "" {
+		return false
+	}
+
+	for _, excludedDir := range excludeDirs {
+		normalizedExcludedDir := normalizePathForCompare(excludedDir)
+		if normalizedExcludedDir == "" {
+			continue
+		}
+		if normalizedPath == normalizedExcludedDir {
+			return true
+		}
+		if strings.HasPrefix(normalizedPath, normalizedExcludedDir+string(filepath.Separator)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizePathForCompare(path string) string {
+	normalized := normalizeScanPath(path)
+	if normalized == "" {
+		return ""
+	}
+
+	return strings.ToLower(normalized)
 }

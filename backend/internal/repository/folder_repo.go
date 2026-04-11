@@ -336,20 +336,35 @@ func (r *SQLiteFolderRepository) ListWorkflowSummariesByFolderIDs(ctx context.Co
 		return summaries, nil
 	}
 
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(uniqueFolderIDs)), ",")
-	args := make([]any, 0, len(uniqueFolderIDs))
-	for _, folderID := range uniqueFolderIDs {
+	if err := r.populateClassificationWorkflowSummaries(ctx, summaries, uniqueFolderIDs); err != nil {
+		return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs classification: %w", err)
+	}
+	if err := r.populateProcessingWorkflowSummaries(ctx, summaries, uniqueFolderIDs); err != nil {
+		return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs processing: %w", err)
+	}
+
+	return summaries, nil
+}
+
+func (r *SQLiteFolderRepository) populateClassificationWorkflowSummaries(ctx context.Context, summaries map[string]FolderWorkflowSummary, folderIDs []string) error {
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(folderIDs)), ",")
+	args := make([]any, 0, len(folderIDs)*2)
+	for _, folderID := range folderIDs {
+		args = append(args, folderID)
+	}
+	for _, folderID := range folderIDs {
 		args = append(args, folderID)
 	}
 
 	rows, err := r.db.QueryContext(
 		ctx,
 		`SELECT
+	m.folder_id,
 	wr.id,
-	wr.folder_id,
 	wr.job_id,
 	wr.status,
 	wr.updated_at,
+	MAX(CASE WHEN m.source_kind = 'snapshot' THEN 1 ELSE 0 END) AS has_classify_snapshot,
 	MAX(CASE WHEN nr.node_type IN (
 		'ext-ratio-classifier',
 		'name-keyword-classifier',
@@ -362,77 +377,167 @@ func (r *SQLiteFolderRepository) ListWorkflowSummariesByFolderIDs(ctx context.Co
 		'classification-writer',
 		'category-router'
 	) THEN 1 ELSE 0 END) AS has_classification,
-	MAX(CASE WHEN nr.node_type = 'classification-writer' AND nr.status = 'succeeded' THEN 1 ELSE 0 END) AS classification_writer_succeeded,
-	MAX(CASE WHEN nr.node_type IN (
-		'rename-node',
-		'move-node',
-		'compress-node',
-		'thumbnail-node'
-	) THEN 1 ELSE 0 END) AS has_processing
-FROM workflow_runs wr
+	MAX(CASE WHEN nr.node_type = 'classification-writer' AND nr.status = 'succeeded' THEN 1 ELSE 0 END) AS classification_writer_succeeded
+FROM (
+	SELECT folder_id, id AS workflow_run_id, 'workflow_run' AS source_kind
+	FROM workflow_runs
+	WHERE folder_id IN (`+placeholders+`)
+	UNION
+	SELECT s.folder_id, wr.id AS workflow_run_id, 'snapshot' AS source_kind
+	FROM snapshots s
+	JOIN workflow_runs wr ON wr.job_id = s.job_id
+	WHERE s.operation_type = 'classify' AND s.folder_id IN (`+placeholders+`)
+) m
+JOIN workflow_runs wr ON wr.id = m.workflow_run_id
 LEFT JOIN node_runs nr ON nr.workflow_run_id = wr.id
-WHERE wr.folder_id IN (`+placeholders+`)
-GROUP BY wr.id, wr.folder_id, wr.job_id, wr.status, wr.updated_at, wr.created_at
+GROUP BY m.folder_id, wr.id, wr.job_id, wr.status, wr.updated_at, wr.created_at
+HAVING MAX(CASE WHEN m.source_kind = 'snapshot' THEN 1 ELSE 0 END) = 1
+	OR MAX(CASE WHEN nr.node_type IN (
+		'ext-ratio-classifier',
+		'name-keyword-classifier',
+		'file-tree-classifier',
+		'confidence-check',
+		'subtree-aggregator',
+		'classification-reader',
+		'db-subtree-reader',
+		'classification-db-result-preview',
+		'classification-writer',
+		'category-router'
+	) THEN 1 ELSE 0 END) = 1
 ORDER BY wr.updated_at DESC, wr.created_at DESC`,
 		args...,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs query: %w", err)
+		return err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var workflowRunID string
 		var folderID string
+		var workflowRunID string
 		var jobID string
 		var runStatus string
 		var updatedAtRaw any
+		var hasClassifySnapshot int
 		var hasClassification int
 		var classificationWriterSucceeded int
-		var hasProcessing int
 
 		if scanErr := rows.Scan(
-			&workflowRunID,
 			&folderID,
+			&workflowRunID,
 			&jobID,
 			&runStatus,
 			&updatedAtRaw,
+			&hasClassifySnapshot,
 			&hasClassification,
 			&classificationWriterSucceeded,
-			&hasProcessing,
 		); scanErr != nil {
-			return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs scan: %w", scanErr)
+			return scanErr
 		}
 
 		summary, ok := summaries[folderID]
-		if !ok {
+		if !ok || summary.Classification.Status != workflowStageStatusNotRun {
 			continue
 		}
 
 		updatedAt, parseErr := parseDBTime(updatedAtRaw)
 		if parseErr != nil {
-			return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs parse updated_at: %w", parseErr)
+			return fmt.Errorf("parse classification updated_at: %w", parseErr)
 		}
 
-		if hasClassification == 1 && summary.Classification.Status == workflowStageStatusNotRun {
-			classification := buildWorkflowStageSummary(workflowRunID, jobID, runStatus, updatedAt)
-			if classificationWriterSucceeded == 1 {
-				classification.Status = workflowStageStatusSucceeded
-			}
-			summary.Classification = classification
+		classification := buildWorkflowStageSummary(workflowRunID, jobID, runStatus, updatedAt)
+		if classificationWriterSucceeded == 1 || hasClassifySnapshot == 1 || hasClassification == 1 && strings.TrimSpace(runStatus) == "succeeded" {
+			classification.Status = workflowStageStatusSucceeded
 		}
-
-		if hasProcessing == 1 && summary.Processing.Status == workflowStageStatusNotRun {
-			summary.Processing = buildWorkflowStageSummary(workflowRunID, jobID, runStatus, updatedAt)
-		}
-
+		summary.Classification = classification
 		summaries[folderID] = summary
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("folderRepo.ListWorkflowSummariesByFolderIDs rows: %w", err)
+		return err
 	}
 
-	return summaries, nil
+	return nil
+}
+
+func (r *SQLiteFolderRepository) populateProcessingWorkflowSummaries(ctx context.Context, summaries map[string]FolderWorkflowSummary, folderIDs []string) error {
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(folderIDs)), ",")
+	args := make([]any, 0, len(folderIDs)*2)
+	for _, folderID := range folderIDs {
+		args = append(args, folderID)
+	}
+	for _, folderID := range folderIDs {
+		args = append(args, folderID)
+	}
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT
+	m.folder_id,
+	wr.id,
+	wr.job_id,
+	wr.status,
+	wr.updated_at
+FROM (
+	SELECT folder_id, id AS workflow_run_id
+	FROM workflow_runs
+	WHERE folder_id IN (`+placeholders+`)
+	UNION
+	SELECT folder_id, workflow_run_id
+	FROM processing_review_items
+	WHERE folder_id IN (`+placeholders+`)
+) m
+JOIN workflow_runs wr ON wr.id = m.workflow_run_id
+LEFT JOIN node_runs nr ON nr.workflow_run_id = wr.id
+GROUP BY m.folder_id, wr.id, wr.job_id, wr.status, wr.updated_at, wr.created_at
+HAVING MAX(CASE WHEN nr.node_type IN (
+	'rename-node',
+	'move-node',
+	'compress-node',
+	'thumbnail-node'
+) THEN 1 ELSE 0 END) = 1
+ORDER BY wr.updated_at DESC, wr.created_at DESC`,
+		args...,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var folderID string
+		var workflowRunID string
+		var jobID string
+		var runStatus string
+		var updatedAtRaw any
+
+		if scanErr := rows.Scan(
+			&folderID,
+			&workflowRunID,
+			&jobID,
+			&runStatus,
+			&updatedAtRaw,
+		); scanErr != nil {
+			return scanErr
+		}
+
+		summary, ok := summaries[folderID]
+		if !ok || summary.Processing.Status != workflowStageStatusNotRun {
+			continue
+		}
+
+		updatedAt, parseErr := parseDBTime(updatedAtRaw)
+		if parseErr != nil {
+			return fmt.Errorf("parse processing updated_at: %w", parseErr)
+		}
+
+		summary.Processing = buildWorkflowStageSummary(workflowRunID, jobID, runStatus, updatedAt)
+		summaries[folderID] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *SQLiteFolderRepository) ListByPathPrefix(ctx context.Context, prefix string) ([]*Folder, error) {
@@ -645,6 +750,8 @@ func (r *SQLiteFolderRepository) Delete(ctx context.Context, id string) error {
 func (r *SQLiteFolderRepository) recordObservationTx(ctx context.Context, tx *sql.Tx, folderID, path, sourceDir, relativePath string, observedAt time.Time) error {
 	trimmedFolderID := strings.TrimSpace(folderID)
 	trimmedPath := strings.TrimSpace(path)
+	trimmedSourceDir := strings.TrimSpace(sourceDir)
+	trimmedRelativePath := strings.TrimSpace(relativePath)
 	if trimmedFolderID == "" || trimmedPath == "" {
 		return nil
 	}
@@ -663,6 +770,27 @@ LIMIT 1
 	)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		"UPDATE folder_path_observations SET is_current = 0 WHERE path = ? AND folder_id <> ? AND is_current = 1",
+		trimmedPath,
+		trimmedFolderID,
+	); err != nil {
+		return fmt.Errorf("clear current observation by path: %w", err)
+	}
+
+	if trimmedSourceDir != "" && trimmedRelativePath != "" {
+		if _, err := tx.ExecContext(
+			ctx,
+			"UPDATE folder_path_observations SET is_current = 0 WHERE source_dir = ? AND relative_path = ? AND folder_id <> ? AND is_current = 1",
+			trimmedSourceDir,
+			trimmedRelativePath,
+			trimmedFolderID,
+		); err != nil {
+			return fmt.Errorf("clear current observation by source and relative path: %w", err)
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, "UPDATE folder_path_observations SET is_current = 0 WHERE folder_id = ? AND is_current = 1", trimmedFolderID); err != nil {
@@ -690,8 +818,8 @@ ON CONFLICT(id) DO UPDATE SET
 		observationID,
 		trimmedFolderID,
 		trimmedPath,
-		strings.TrimSpace(sourceDir),
-		strings.TrimSpace(relativePath),
+		trimmedSourceDir,
+		trimmedRelativePath,
 		firstSeenAt.Format("2006-01-02 15:04:05"),
 		observedAt.Format("2006-01-02 15:04:05"),
 	); err != nil {

@@ -19,4 +19,4 @@ ALTER TABLE folders ADD COLUMN delete_staging_path TEXT;
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
 CREATE INDEX IF NOT EXISTS idx_folders_deleted_at ON folders(deleted_at);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_folders_path_active ON folders(path) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_folders_path_active ON folders(path) WHERE deleted_at IS NULL;

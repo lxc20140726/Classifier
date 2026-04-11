@@ -14,32 +14,7 @@ type mediaSummary struct {
 }
 
 func summarizeFolderTreeMedia(tree FolderTree) mediaSummary {
-	summary := mediaSummary{}
-	if hasMangaKeyword(tree.Name) {
-		summary.hasManga = true
-	}
-
-	for _, file := range tree.Files {
-		summary.totalFiles++
-		ext := strings.ToLower(strings.TrimSpace(file.Ext))
-		if ext == "" {
-			ext = strings.ToLower(filepathExt(file.Name))
-		}
-
-		switch {
-		case mangaExts[ext]:
-			summary.hasManga = true
-		case imageExts[ext]:
-			summary.imageCount++
-			summary.hasImage = true
-		case videoExts[ext]:
-			summary.videoCount++
-			summary.hasVideo = true
-		default:
-			summary.otherFileCount++
-			summary.hasOtherFiles = true
-		}
-	}
+	summary := summarizeFolderFiles(tree.Name, tree.Files)
 
 	for _, child := range tree.Subdirs {
 		summary = mergeMediaSummary(summary, summarizeFolderTreeMedia(child))
@@ -48,29 +23,12 @@ func summarizeFolderTreeMedia(tree FolderTree) mediaSummary {
 	return summary
 }
 
-func summarizeClassifiedEntryMedia(entry ClassifiedEntry) mediaSummary {
-	summary := mediaSummary{}
-	for _, file := range entry.Files {
-		summary.totalFiles++
-		ext := strings.ToLower(strings.TrimSpace(file.Ext))
-		if ext == "" {
-			ext = strings.ToLower(filepathExt(file.Name))
-		}
+func summarizeCurrentFolderMedia(tree FolderTree) mediaSummary {
+	return summarizeFolderFiles(tree.Name, tree.Files)
+}
 
-		switch {
-		case mangaExts[ext]:
-			summary.hasManga = true
-		case imageExts[ext]:
-			summary.imageCount++
-			summary.hasImage = true
-		case videoExts[ext]:
-			summary.videoCount++
-			summary.hasVideo = true
-		default:
-			summary.otherFileCount++
-			summary.hasOtherFiles = true
-		}
-	}
+func summarizeClassifiedEntryMedia(entry ClassifiedEntry) mediaSummary {
+	summary := summarizeFolderFiles("", entry.Files)
 
 	for _, child := range entry.Subtree {
 		summary = mergeMediaSummary(summary, summarizeClassifiedEntryMedia(child))
@@ -92,6 +50,37 @@ func summarizeClassifiedEntryMedia(entry ClassifiedEntry) mediaSummary {
 			summary.hasVideo = true
 		case "manga":
 			summary.hasManga = true
+		}
+	}
+
+	return summary
+}
+
+func summarizeFolderFiles(name string, files []FileEntry) mediaSummary {
+	summary := mediaSummary{}
+	if hasMangaKeyword(name) {
+		summary.hasManga = true
+	}
+
+	for _, file := range files {
+		summary.totalFiles++
+		ext := strings.ToLower(strings.TrimSpace(file.Ext))
+		if ext == "" {
+			ext = strings.ToLower(filepathExt(file.Name))
+		}
+
+		switch {
+		case mangaExts[ext]:
+			summary.hasManga = true
+		case imageExts[ext]:
+			summary.imageCount++
+			summary.hasImage = true
+		case videoExts[ext]:
+			summary.videoCount++
+			summary.hasVideo = true
+		default:
+			summary.otherFileCount++
+			summary.hasOtherFiles = true
 		}
 	}
 

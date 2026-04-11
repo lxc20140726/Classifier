@@ -318,6 +318,20 @@ function WorkflowRunRow({
     try {
       await approveReview(run.id, reviewId)
       await fetchRunsForJob(run.job_id)
+      pushNotification({
+        level: 'success',
+        title: '确认已通过',
+        message: `确认项 ${reviewId.slice(0, 8)} 已标记为通过。`,
+        jobId: run.job_id,
+      })
+    } catch (approveError) {
+      const message = approveError instanceof Error ? approveError.message : '确认通过失败'
+      pushNotification({
+        level: 'error',
+        title: '确认通过失败',
+        message,
+        jobId: run.job_id,
+      })
     } finally {
       setIsActing(false)
     }
@@ -328,6 +342,20 @@ function WorkflowRunRow({
     try {
       await rollbackReview(run.id, reviewId)
       await fetchRunsForJob(run.job_id)
+      pushNotification({
+        level: 'success',
+        title: '已回退确认项',
+        message: `确认项 ${reviewId.slice(0, 8)} 已执行回退。`,
+        jobId: run.job_id,
+      })
+    } catch (rollbackError) {
+      const message = rollbackError instanceof Error ? rollbackError.message : '回退确认项失败'
+      pushNotification({
+        level: 'error',
+        title: '回退确认项失败',
+        message,
+        jobId: run.job_id,
+      })
     } finally {
       setIsActing(false)
     }
@@ -416,7 +444,10 @@ function WorkflowRunRow({
                               <button
                                 type="button"
                                 disabled={isActing}
-                                onClick={() => void handleApproveReview(review.id)}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void handleApproveReview(review.id)
+                                }}
                                 className="border-2 border-green-900 bg-green-200 px-2 py-1 text-xs font-bold text-green-900 hover:bg-green-900 hover:text-green-100 disabled:opacity-50"
                               >
                                 确认通过
@@ -424,7 +455,10 @@ function WorkflowRunRow({
                               <button
                                 type="button"
                                 disabled={isActing}
-                                onClick={() => void handleRollbackReview(review.id)}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void handleRollbackReview(review.id)
+                                }}
                                 className="border-2 border-red-900 bg-red-200 px-2 py-1 text-xs font-bold text-red-900 hover:bg-red-900 hover:text-red-100 disabled:opacity-50"
                               >
                                 不通过并回退

@@ -201,6 +201,36 @@ func TestScan(t *testing.T) {
 			},
 		},
 		{
+			name: "skips configured output directories during scan",
+			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
+				t.Helper()
+
+				albumPath := filepath.Join(sourceDir, "album")
+				outputPath := filepath.Join(sourceDir, "output")
+				adapter.AddDir(sourceDir, []fs.DirEntry{
+					{Name: "album", IsDir: true},
+					{Name: "output", IsDir: true},
+				})
+				adapter.AddDir(albumPath, []fs.DirEntry{{Name: "a.jpg", IsDir: false}})
+				adapter.AddDir(outputPath, []fs.DirEntry{{Name: "b.jpg", IsDir: false}})
+				adapter.AddFile(filepath.Join(albumPath, "a.jpg"), 120)
+				adapter.AddFile(filepath.Join(outputPath, "b.jpg"), 220)
+			},
+			wantCount: 1,
+			assert: func(t *testing.T, repo repository.FolderRepository, sourceDir string) {
+				t.Helper()
+
+				albumPath := filepath.Join(sourceDir, "album")
+				outputPath := filepath.Join(sourceDir, "output")
+				if _, err := repo.GetByPath(context.Background(), albumPath); err != nil {
+					t.Fatalf("expected album folder to be scanned: %v", err)
+				}
+				if _, err := repo.GetByPath(context.Background(), outputPath); err == nil {
+					t.Fatalf("expected output directory to be excluded from scan")
+				}
+			},
+		},
+		{
 			name: "parent directory becomes mixed from photo and video subtrees",
 			setup: func(t *testing.T, adapter *testFSAdapter, sourceDir string) {
 				t.Helper()
@@ -355,7 +385,11 @@ func TestScan(t *testing.T) {
 			auditSvc := NewAuditService(auditRepo)
 			snapshotSvc := NewSnapshotService(adapter, snapshotRepo, repo)
 			scanner := NewScannerService(adapter, repo, jobRepo, snapshotSvc, auditSvc, nil)
-			gotCount, err := scanner.Scan(context.Background(), ScanInput{SourceDirs: []string{sourceDir}})
+			scanInput := ScanInput{SourceDirs: []string{sourceDir}}
+			if tc.name == "skips configured output directories during scan" {
+				scanInput.ExcludeDirs = []string{filepath.Join(sourceDir, "output")}
+			}
+			gotCount, err := scanner.Scan(context.Background(), scanInput)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Scan() error = %v, wantErr %v", err, tc.wantErr)
 			}
